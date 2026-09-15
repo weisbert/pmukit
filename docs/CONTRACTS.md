@@ -8,39 +8,61 @@
  (输入)      (契约1)     (推导)      (契约3)     (契约2)            (契约4)
 ```
 
-## 0. 项目配置（输入，用户写）
+## 0. 项目配置：两层，用户只碰第一层
 
-用户唯一要写的文件。所有"按项目变"的东西都在这里，代码里一个数都不写死。
+用户是**用 LDO 的子模块设计师**，LDO 对他是黑箱。他知道的只有三件事：自己的台子、自己的模块吃多少电流、自己在乎到多高的频率。其余全部由程序从台子里读或自己决定。
+
+### 0a. 用户面对的三问（intake，大多预填只需确认）
 
 ```json
 {
   "project": "demo_pmu",
-  "dut": {"lib": "<lib>", "cell": "<cell>", "tb_lib": "<tb_lib>", "tb_cell": "<tb_cell>", "tb_inst": "PMU_TOP"},
-  "state_note": "表征时 TB 处于的状态（模式、寄存器），原样印进交付件溯源头",
-  "axes": {
-    "process": ["tt", "ss", "ff"],
-    "temp_c":  {"points": [-40, 25, 85, 125], "dc_sweep": [-40, 125, 5]},
-    "vset":    {"codes": [3], "note": "档位号→输出电压由 TB 决定"},
-    "supplies": {"AVDD1P0": {"net": "AVDD1P0", "dc": 1.0, "range": [0.9, 1.1]}}
+  "testbench": {
+    "_auto": "从打开的 ADE 会话读：台子、PMU 实例、连了哪些引脚、corner 设置、温度、设计变量/寄存器",
+    "tb": "<lib>/<cell>", "pmu_inst": "PMU_TOP",
+    "corners_seen": ["tt", "ss", "ff"], "temps_seen_c": [-40, 25, 125],
+    "registers_seen": {"VSET": 3}, "en_pin_toggled": false,
+    "confirm": true
   },
-  "rails": {
-    "pll": {"pin": "VDD0P8_PLL", "gnd": "VSS_PLL",
-            "loads_a":  [1e-4, 5e-4, 1e-3],
-            "load_en":  {"off_a": 2e-6, "on_a": 5e-4, "edge_s": 2e-9},
-            "hf_stop_hz": 2e10}
+  "my_load": {
+    "_note": "每条轨：你的模块开态/关态吃多少；或按“从我的台子量”自动探 PMU 引脚电流",
+    "VDD0P8_PLL": {"on_a": 5e-4, "off_a": 2e-6, "switches": true, "captured_from_tb": false}
   },
-  "biases": {
-    "iptat": {"pin": "IBP_PTAT_1P5U", "gnd": "AGND", "compliance_v": 0.667, "iv_sweep_v": [0, 1.8, 19]}
-  },
-  "en": {"pin": "EN", "characterize": true},
-  "backend": {"engine": "alps", "queue": "…", "cpu": 8}
+  "care_up_to_hz": {"_auto": "默认 = 你 HB 设置的 fund × maxharms", "value": 2e10}
 }
 ```
 
-规则：
-- 缺 `load_en` 的轨不表征负载 EN 事件，报告里写"未跑"，不猜默认值。
-- `axes.temp_c.points` 是 AC/noise/tran 的离散温度；`dc_sweep` 是 DC 量的连续温度扫描。
-- `hf_stop_hz` 是 Zout/PSRR 的扫频上限，应覆盖消费者 HB 的最高谐波；低于它模型静默外推是禁止的（见契约 4 包络）。
+- 没给 `my_load` 的轨：按台子里现有负载源的 DC 值当"开态"，不表征负载 EN 事件，报告写"未跑"。
+- `captured_from_tb=true` 时程序在用户台子上跑一次短 tran，探 PMU 引脚电流，自动得到开态/关态/边沿。
+
+### 0b. 程序推导的表征配置（internal，"高级"里可看可改，默认不展示）
+
+由 0a + 模型规格（契约 1）+ 站点配置推出，落成一份 JSON 存进 `$PMUKIT_DATA/<project>/derived.json`，进溯源。
+
+| 项 | 怎么定 |
+|---|---|
+| 工艺轴 | `corners_seen` 去重成 PDK 工艺 section 名 |
+| 离散温度点 | `temps_seen_c` ∪ 端点；DC 量另加连续扫温 |
+| VSET 档 | `registers_seen` |
+| 电源 | 从台子找供电源；默认只在标称点，`range` 是高级选项 |
+| 轨/偏置引脚、地 | 从台子连线解析 |
+| 负载表征网格 | `[off, 0.2·on, on, 2·on]` 裁到 PMU 的限流以内 |
+| 负载 EN 事件 | `off→on`、`on→off`，边沿取量得的或 1 ns |
+| 偏置顺从电压、I-V 扫描 | 台子 DC 工作点读脚电压；扫 0 到电源电压 |
+| 扫频范围、点密度 | 10 Hz 到 `care_up_to_hz`，每十倍频 20 点 |
+| 噪声频段 | 10 Hz 到 100 MHz |
+| tran 时长、步长 | 由拟合出的 Zout 峰频推恢复时间，取 8 倍 |
+| 分组合并 | AC 叠加，一次注入读全部端口 |
+| 站点配置 | 引擎、队列、CPU 数：安装时配一次，不在项目里 |
+
+### 0c. 输出也用用户的话说
+
+用户只问一句"这个模型在我的仿真里能不能信"。所以 `report.md` 第一段固定是：
+
+- 有效范围：负载 A 到 B、温度 −40 到 125、频率到 X GHz、角 tt/ss/ff、VSET=3。
+- 能用不签核：EN 上电过程。
+- 没跑：列出。
+- 每个角每条轨一行绿/黄/红，不出现内部分数。
 
 ## 1. 模型规格（每个端口类型有哪些块、每个参数需要什么）
 
