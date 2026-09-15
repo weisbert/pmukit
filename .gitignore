@@ -10,6 +10,9 @@ deliver/
 pmukit_data/
 *_data/
 .pmukit_scratch/
+# Machine-local probe state (a VM address, a desktop path). Useful locally, not in a
+# public tool repo.
+.vmprobe/
 .venv/
 __pycache__/
 *.pyc
