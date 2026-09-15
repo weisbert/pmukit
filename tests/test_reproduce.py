@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from pmukit import digest as dg
+from pmukit import spec
 from pmukit import reproduce as rp
 from pmukit.dataset import Dataset, cell_key
 from pmukit.errors import PmuError
@@ -28,7 +29,7 @@ def box_payload(*, big=False):
     payload = {
         "meta": {"project": "demo_pmu"},
         "provenance": {"config_sha": "abc123456789", "dataset_sha": "def123456789",
-                       "spec_sha": "959eb3dbdce8", "pmukit_version": "0.1.0"},
+                       "spec_sha": spec.SPEC_SHA, "pmukit_version": "0.1.0"},
         "ledger": [{"run_id": f"r{i:012d}", "status": "done", "cell": "tt, 25 C, VSET 3, load L2",
                     "analysis": "ac", "cpu_s": 3.0} for i in range(40)],
         "params": {"VDD0P8_A": {"zout": {"Ra": 0.0931234567890123, "Cout": 1.2345678e-9,

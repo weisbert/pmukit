@@ -419,6 +419,14 @@ SPEC: tuple[Block, ...] = (
                   "currents add."),
             Param("psrr_pole_hz", "ac_psrr", _PT,
                   "Pole that rolls the supply-to-current transfer off."),
+            Param("c_ft", "ac_psrr", _PT,
+                  "Supply-to-output feedthrough capacitance. The transfer does not only roll "
+                  "off: above the pole a real mirror's supply coupling RISES as j*w*c_ft "
+                  "through device overlap capacitance. Measured on the synthetic PMU: the PTAT "
+                  "reference's transfer is flat at 357 nS to ~10 kHz and then climbs 500x to "
+                  "173 uS at 1 GHz, which is 28 fF. Without this term the block is a falling "
+                  "form fitted to a rising curve, and it is exactly the band that makes VCO "
+                  "spurs."),
         ),
     ),
 
