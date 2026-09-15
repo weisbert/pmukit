@@ -94,6 +94,22 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
 .ctx .it .k{color:#8a867d;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11px}
 .ctx .sep{height:1px;background:#ebe8e1;margin:3px 6px}
 .rc{cursor:context-menu}
+.main{padding-bottom:46px}
+.cli{position:absolute;left:0;right:0;bottom:52px;height:30px;display:flex;align-items:center;gap:10px;padding:0 20px;background:#faf9f6;border-top:1px solid #ebe8e1;font-size:12px}
+.cli .d{color:#8a867d;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cli .c{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;color:#1c1b18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:900px}
+.help{position:absolute;z-index:41;right:20px;top:56px;width:460px;max-height:780px;background:#ffffff;border:1px solid #cfccc4;border-radius:4px;box-shadow:0 6px 20px rgba(28,27,24,.14);display:flex;flex-direction:column}
+.help .pb{display:flex;flex-direction:column;gap:12px}
+.keys{display:grid;grid-template-columns:110px 1fr;gap:5px 12px;font-size:12.5px}
+.keys .kb{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11.5px;background:#f3f1ec;border:1px solid #dedbd3;border-radius:3px;padding:1px 6px;display:inline-block}
+.err{border:1px solid #efc2bd;background:#fdeeec;border-radius:4px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+.err .t{font-weight:600;color:#b3362e;display:flex;gap:8px;align-items:center}
+.err .k{color:#5d5a53;width:64px;display:inline-block}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#5d5a53;padding:40px 20px;text-align:center}
+.empty .t{font-weight:600;color:#1c1b18}
+.skel{height:12px;border-radius:3px;background:linear-gradient(90deg,#ebe8e1,#f5f3ee,#ebe8e1);background-size:200% 100%;animation:sk 1.2s infinite}
+@keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.q{display:inline-flex;width:14px;height:14px;border-radius:50%;border:1px solid #cfccc4;color:#8a867d;font-size:10px;align-items:center;justify-content:center;margin-left:6px;cursor:help;font-family:'IBM Plex Sans',system-ui,sans-serif;vertical-align:middle}
 """
 
 ICONS = {
@@ -120,6 +136,13 @@ class CtxLogic extends DCLogic {
     this.setState({ _menu: { title, items, x: Math.max(0, x), y: Math.max(0, y) } });
   }
   closeMenu(e){ if (e && e.preventDefault) e.preventDefault(); this.setState({ _menu: null }); }
+  helpVals(title, lines, keys){
+    const h = !!this.state._help;
+    return { help: { on: h, title, lines, keys, open: () => this.setState({_help: true}), close: (e) => { if (e && e.preventDefault) e.preventDefault(); this.setState({_help: false}); } } };
+  }
+  cliVals(cmd){
+    return { cli: cmd, copyCliLabel: this.state._cliCopied ? 'Copied' : 'Copy', copyCli: () => { this.setState({_cliCopied: true}); setTimeout(() => this.setState({_cliCopied: false}), 1500); } };
+  }
   menuVals(){
     const m = this.state._menu;
     return { noNativeMenu: (e) => { if (e && e.preventDefault) e.preventDefault(); },
@@ -139,9 +162,10 @@ def nav(cur):
     for i, (n, name) in enumerate(STEPS, 1):
         cls = "step cur" if i == cur else ("step done" if i < cur else "step")
         parts.append(f'<div class="{cls}"><span class="n">{n}</span><span>{name}</span></div>')
-    return ('<div class="nav"><span class="brand">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span>'
+    return ('<div class="nav"><span class="brand" title="Home: all projects (key 0)">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span>'
             f'<div class="steps">{"".join(parts)}</div>'
-            '<div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span></div></div>')
+            '<div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span>'
+            '<button class="btn sm" onClick="{{ help.open }}" title="Help and keyboard shortcuts (?)">? Help</button></div></div>')
 
 
 def page(title, cur, body, script, props="{}"):
@@ -160,6 +184,18 @@ def page(title, cur, body, script, props="{}"):
 <div class="app" onContextMenu="{{{{ noNativeMenu }}}}">
 {nav(cur)}
 {body}
+<div class="cli"><span class="d">$</span><span class="c">{{{{ cli }}}}</span><button class="btn sm" style="height:22px" onClick="{{{{ copyCli }}}}">{{{{ copyCliLabel }}}}</button><span class="hint">every action on this screen has this command · paste it in a script or a cron job</span></div>
+<sc-if value="{{{{ help.on }}}}" hint-placeholder-val="{{{{ false }}}}">
+  <div class="ctx-veil" onClick="{{{{ help.close }}}}"></div>
+  <div class="help"><div class="ph"><span>{{{{ help.title }}}}</span><button class="btn sm" onClick="{{{{ help.close }}}}">Close · Esc</button></div>
+    <div class="pb">
+      <div><div class="lbl" style="margin-bottom:6px">This screen</div><sc-for list="{{{{ help.lines }}}}" as="l" hint-placeholder-count="3"><div style="font-size:12.5px;line-height:1.5;margin-bottom:4px">{{{{ l }}}}</div></sc-for></div>
+      <div><div class="lbl" style="margin-bottom:6px">Keys here</div><div class="keys"><sc-for list="{{{{ help.keys }}}}" as="k" hint-placeholder-count="4"><span><span class="kb">{{{{ k.k }}}}</span></span><span>{{{{ k.d }}}}</span></sc-for></div></div>
+      <div><div class="lbl" style="margin-bottom:6px">Everywhere</div><div class="keys"><span><span class="kb">?</span></span><span>this panel</span><span><span class="kb">Ctrl K</span></span><span>command palette: type any action or run id</span><span><span class="kb">0 … 5</span></span><span>go to Home, New, Plan, Run, Model, Deliver</span><span><span class="kb">Ctrl Enter</span></span><span>the screen's primary button</span><span><span class="kb">Ctrl Z</span></span><span>undo the last config change (not a submitted run)</span><span><span class="kb">Esc</span></span><span>close menu / panel</span><span><span class="kb">right-click</span></span><span>all verbs for any row, chip, cell, chart or file</span></div></div>
+      <div class="hint">Docs: <span class="mono">pmukit help &lt;screen&gt;</span> prints this text. Error messages always carry four parts: what happened · why · what to do · where to look.</div>
+    </div>
+  </div>
+</sc-if>
 <sc-if value="{{{{ menu.on }}}}" hint-placeholder-val="{{{{ false }}}}">
   <div class="ctx-veil" onClick="{{{{ menu.close }}}}" onContextMenu="{{{{ menu.close }}}}"></div>
   <div class="ctx" style="left:{{{{ menu.x }}}}px;top:{{{{ menu.y }}}}px">
@@ -222,7 +258,7 @@ NEW_BODY = f"""
     <div class="panel" style="flex:1">
       <div class="ph"><span>Three things only you know</span><span class="sub">everything else is derived</span></div>
       <div class="pb" style="display:flex;flex-direction:column;gap:18px">
-        <div class="field"><span class="lbl">1 · Corners and temperatures you simulate at</span>
+        <div class="field"><span class="lbl">1 · Corners and temperatures you simulate at<span class="q" title="pmukit rewrites the PDK include section= per corner and sets options temp= per temperature. Temperature is continuous inside the model; these points are where AC/noise are characterized.">?</span></span>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="hint" style="width:70px">corners</span>
             <sc-for list="{{{{ corners }}}}" as="c" hint-placeholder-count="3"><span class="chip rc {{{{ c.cls }}}}" onClick="{{{{ c.toggle }}}}" onContextMenu="{{{{ c.menu }}}}">{{{{ c.name }}}}</span></sc-for>
             <input class="inp mono" style="width:150px;height:24px" placeholder="MOSff_RCss">
@@ -233,7 +269,7 @@ NEW_BODY = f"""
           </div>
           <div style="display:flex;gap:6px;align-items:center"><span class="hint" style="width:70px">VSET codes</span><input class="inp mono" style="width:90px;height:24px" value="3"><span class="hint">from <span class="mono">parameters VSET=3</span></span></div>
         </div>
-        <div class="field"><span class="lbl">2 · What your block draws from each rail</span>
+        <div class="field"><span class="lbl">2 · What your block draws from each rail<span class="q" title="On/off currents set the characterization grid (off, 0.2×on, on, 2×on). Switches = your block turns on and off during simulation; that load step is the one large-signal event modeled.">?</span></span>
           <table class="t">
             <thead><tr><th>Rail</th><th>On</th><th>Off</th><th>Switches on/off</th><th></th></tr></thead>
             <tbody>
@@ -244,7 +280,7 @@ NEW_BODY = f"""
           </table>
           <span class="hint">On/Off defaults come from the IL_ source's dc. "Switches" adds the load-EN on/off transient, the one large-signal event that is modeled.</span>
         </div>
-        <div class="field"><span class="lbl">3 · Highest frequency you care about</span>
+        <div class="field"><span class="lbl">3 · Highest frequency you care about<span class="q" title="Zout and PSRR are characterized up to this frequency and never extrapolated past it. Default = the HB fundamental × harmonics found in your netlist.">?</span></span>
           <div style="display:flex;gap:8px;align-items:center"><input class="inp mono" style="width:120px" value="20 GHz"><span class="hint">default from the netlist's HB: fund 5.0 GHz × 4 harmonics. Zout/PSRR are characterized up to here and never extrapolated past it.</span></div>
         </div>
         <div class="field">
@@ -304,7 +340,10 @@ class Component extends CtxLogic {
         { label: s.sw[r.name] ? 'Static load only (no load-EN)' : 'Characterize load-EN on/off', action: () => { const o = Object.assign({}, s.sw); o[r.name] = !o[r.name]; this.setState({sw:o}); } },
         { label: 'Show the IL_ source line' } ]) }));
     const nc = s.corners.filter(c => s.cornersOn[c]).length, nt = s.temps.filter(t => s.tempsOn[t]).length;
+    const onC = s.corners.filter(c => s.cornersOn[c]).join(','), onT = s.temps.filter(t => s.tempsOn[t]).join(',');
     return { ...this.menuVals(),
+      ...this.helpVals('New project', ['Bring one Spectre netlist exported at the nominal corner. Sources named IL_ / VB_ / VS_ / VEN_ tell pmukit which pin is which; nothing else is needed.', 'Answer three things only you know. Everything under "derived settings" is decided by pmukit and can be overridden later.', 'Nothing runs yet. Build plan shows what would run and what it costs before anything is submitted.'], [{k:'Ctrl O', d:'choose a netlist file'}, {k:'Ctrl Enter', d:'Build plan'}, {k:'A', d:'show / hide derived settings'}]),
+      ...this.cliVals(s.loaded ? `pmukit new demo_pmu --netlist tb/input.scs --pmu PMU_TOP --corners ${onC} --temps ${onT} --vset 3 --load VDD0P8_A=500u/2u${s.sw.VDD0P8_A ? '/switch' : ''} --load VDD0P8_B=2m/20u${s.sw.VDD0P8_B ? '/switch' : ''} --fmax 20G` : 'pmukit new demo_pmu --netlist <input.scs>'),
       loaded: s.loaded, notLoaded: !s.loaded, adv: s.adv,
       advLabel: s.adv ? 'Hide derived settings' : 'Show derived settings (pmukit decided these)',
       load: () => this.setState({loaded:true}), toggleAdv: (e) => { if (e && e.preventDefault) e.preventDefault(); this.setState({adv: !s.adv}); },
@@ -486,7 +525,11 @@ class Component extends CtxLogic {
     const rl = runsOf(selG); const runSel = rl.find(r => r.id === s.runSel) || rl[0];
     const runList = rl.map(r => ({ ...r, cls: r.id === runSel.id ? 'sel' : '', pick: () => this.setState({runSel: r.id}),
       menu: (e) => this.openMenu(e, 'run ' + r.id, [ { label: 'Show recipe', action: () => this.setState({runSel: r.id}) }, { label: 'Copy recipe' }, { label: 'Copy dsub command' }, { label: 'Open input.scs' }, '-', { label: 'Run only this one' }, { label: 'Skip this run (mark NOT RUN)' }, '-', { label: 'Copy run id', key: r.id.slice(0,6) + '…' } ]) }));
-    return { ...this.menuVals(), groups, runs, cpuh: cpuh.toFixed(1), nGroups: onG.length + '/' + GROUPS.length,
+    const offIds = offList.map(g => g.id).join(',');
+    return { ...this.menuVals(),
+      ...this.helpVals('Plan', ['Every row is a group of runs that share one netlist edit. AC groups read every port from one injection (superposition), so nothing is simulated twice.', 'Click a row for why it exists. Untick it to see, in red, which model block would be reported NOT RUN.', 'Runs tab: the per-corner list and the exact recipe (netlist edits, analysis, submit command) for any single run.'], [{k:'Space', d:'tick / untick the selected group'}, {k:'W · R', d:'Why tab · Runs tab'}, {k:'Ctrl Enter', d:'Submit'}]),
+      ...this.cliVals('pmukit plan demo_pmu' + (offIds ? ' --skip ' + offIds : '') + ' && pmukit run demo_pmu --queue rf_short --cpu 8'),
+      groups, runs, cpuh: cpuh.toFixed(1), nGroups: onG.length + '/' + GROUPS.length,
       sel: selG, allOn: offList.length === 0, anyOff: offList.length > 0, offList,
       isWhy: s.tab === 'why', isRuns: s.tab === 'runs', tabWhyCls: s.tab === 'why' ? 'on' : '', tabRunsCls: s.tab === 'runs' ? 'on' : '',
       showWhy: () => this.setState({tab:'why'}), showRuns: () => this.setState({tab:'runs'}),
@@ -615,7 +658,10 @@ class Component extends CtxLogic {
       psf: selRow.status === 'done' || selRow.status === 'cached' ? '…/psf/' + selRow.id + '/' : '—' };
     const filters = ['All','Running','Failed','Queued'].map(n => ({ name:n, cls: s.filter === n ? 'on' : '', pick: () => this.setState({filter:n}) }));
     const cpuh = (c.done * 0.58).toFixed(1);
-    return { ...this.menuVals(), c: { ...c, cpuh, eta: c.queued > 0 ? Math.ceil(c.queued * 4.2 / 8) + ' min' : 'done' }, w: { done: pct('done'), running: pct('running'), failed: pct('failed'), cached: pct('cached') },
+    return { ...this.menuVals(),
+      ...this.helpVals('Run', ['The ledger: one line per simulation, written by the runner as it goes. Closing this page does not stop the queue.', 'A run that fails twice with the same message is not retried again; the fit proceeds and the report marks that block NOT RUN.', 'Right-click a row for retry, skip, kill, open log / PSF / netlist, or copy a failure bundle for the desk.'], [{k:'R', d:'retry the selected run'}, {k:'/', d:'filter the ledger'}, {k:'J · K', d:'next / previous row'}, {k:'Ctrl Enter', d:'Fit model (when the queue is done)'}]),
+      ...this.cliVals(selRow.status === 'failed' ? 'pmukit run demo_pmu --retry ' + selRow.id : 'pmukit status demo_pmu --watch' + (s.filter !== 'All' ? ' --only ' + s.filter.toLowerCase() : '')),
+      c: { ...c, cpuh, eta: c.queued > 0 ? Math.ceil(c.queued * 4.2 / 8) + ' min' : 'done' }, w: { done: pct('done'), running: pct('running'), failed: pct('failed'), cached: pct('cached') },
       rows, sel, filters, notDone: c.queued > 0 || c.running > 0,
       retryAll: () => { const rows = s.rows.map(x => x.status === 'failed' ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.queued += cc.failed; cc.failed = 0; this.setState({rows, counts: cc}); } };
   }
@@ -751,7 +797,10 @@ class Component extends CtxLogic {
     const gridV = [1e1,1e2,1e3,1e4,1e5,1e6,1e7,1e8,1e9,1e10].map(f => ({ x: xOf(f).toFixed(1), t: f>=1e9 ? (f/1e9)+'G' : f>=1e6 ? (f/1e6)+'M' : f>=1e3 ? (f/1e3)+'k' : f }));
     const gridH = (rail ? [0.1,1,10,100,1e3,1e4] : [1e-26,1e-24,1e-22,1e-20]).map(z => ({ y: yOf(z).toFixed(1), ty: (yOf(z)+3.5).toFixed(1), t: rail ? (z >= 1e3 ? (z/1e3)+'k' : String(z)) : '1e' + Math.round(Math.log10(z)) }));
     const tableRows = [1e2,1e4,1e5,1e6,1.78e6,1e7,1e8,1e9,1e10].map(f => { const gv = gtFn(f), mv = mFn(f); return { f: fmtF(f), g: fmtV(gv), m: fmtV(mv), d: ((rail ? 20 : 10)*Math.log10(mv/gv)).toFixed(2) }; });
-    return { ...this.menuVals(), chartMenu: (e) => this.openMenu(e, 'chart', [ { label: 'Copy data as CSV' }, { label: 'Export PNG' }, { label: s.view === 'chart' ? 'Show as table' : 'Show as chart', action: () => this.setState({view: s.view === 'chart' ? 'table' : 'chart'}) }, '-', { label: 'Overlay tt / 25 °C' }, { label: 'Show phase' } ]),
+    return { ...this.menuVals(),
+      ...this.helpVals('Model', ['Top row answers one question: can I trust this model in my simulation? The same text opens report.md.', 'The grid is the worst block per port and cell. Click a cell to see every block and the model-vs-ground-truth curve.', 'MARG means one block is near its limit; N/R means the data behind it was never run. Neither is hidden in the deliverable.'], [{k:'T', d:'chart / table'}, {k:'Arrows', d:'move between cells'}, {k:'C', d:'copy digest for this cell'}, {k:'Ctrl Enter', d:'Deliver'}]),
+      ...this.cliVals('pmukit report demo_pmu --port ' + s.port + ' --cell ' + s.corner + '/' + s.temp.replace('−','m') + 'c/v3 --block ' + (rail ? 'zout' : 'noise')),
+      chartMenu: (e) => this.openMenu(e, 'chart', [ { label: 'Copy data as CSV' }, { label: 'Export PNG' }, { label: s.view === 'chart' ? 'Show as table' : 'Show as chart', action: () => this.setState({view: s.view === 'chart' ? 'table' : 'chart'}) }, '-', { label: 'Overlay tt / 25 °C' }, { label: 'Show phase' } ]),
       heads, rows, blocks, selPort: s.port, selCell: s.corner + ' / ' + s.temp + ' °C / VSET 3', selGrade: LBL[g], selCls: BADGE[g],
       chartTitle: rail ? '|Zout| · load ' + (s.port === 'VDD0P8_A' ? '500 µA' : '2 mA') : 'current noise PSD · ' + s.port, chartNote: rail ? '|Zout| in Ω vs frequency · log–log · hover for values' : 'A²/Hz vs frequency · log–log · hover for values', unit,
       isChart: s.view === 'chart', isTable: s.view === 'table', viewChartCls: s.view === 'chart' ? 'on' : '', viewTableCls: s.view === 'table' ? 'on' : '',
@@ -877,7 +926,10 @@ class Component extends CtxLogic {
       menu: (e) => this.openMenu(e, f.name, [ { label: 'Preview', action: () => this.setState({sel: f.name}) }, { label: 'Copy path' }, { label: 'Copy include line', disabled: !f.name.endsWith('.scs') }, '-', { label: 'Diff vs previous deliverable' }, { label: 'Show provenance' } ]) }));
     const f = FILES.find(x => x.name === s.sel);
     const body = BODIES[f.name] || BODIES['PMU_demo_pmu_tt.va'].replace(/corner tt/, 'corner ' + f.name.slice(-5, -3)).replace('HB check 7.7e-3', f.name.includes('_ss') ? 'HB check 9.1e-3' : 'HB check 6.4e-3');
-    return { ...this.menuVals(), files, sel: { ...f, body }, copyLabel: s.copied ? 'Copied' : 'Copy',
+    return { ...this.menuVals(),
+      ...this.helpVals('Deliver', ['One folder, stamped by time. The .scs library selects the corner with the same section name as your PDK, so your corner setup needs one extra include line.', 'envelope.json is the contract: outside it the report shows red and the model refuses to extrapolate silently.', 'Every .va repeats provenance.json in its header, so a file that wanders away from the folder is still traceable.'], [{k:'Enter', d:'preview the selected file'}, {k:'Ctrl C', d:'copy the include line'}, {k:'D', d:'diff vs the previous deliverable'}]),
+      ...this.cliVals('pmukit deliver demo_pmu --out ~/pmukit_data/demo_pmu/deliver/ && pmukit show ' + f.name),
+      files, sel: { ...f, body }, copyLabel: s.copied ? 'Copied' : 'Copy',
       copy: () => { this.setState({copied:true}); setTimeout(() => this.setState({copied:false}), 1500); } };
   }
 }
@@ -977,7 +1029,10 @@ class Component extends CtxLogic {
     if (kept.has('tran')) lines.push('[D5 tran load-EN VDD0P8_A ss/25c on] t[s] V_gt V_model  (decimated 200 pts; extrema kept exactly: dip 0.7482 V @ 2.0031e-6)', '  …');
     if (kept.has('zpsrr_all')) lines.push('[D4 zout/psrr · 9 cells × 2 rails × 4 loads] …');
     lines.push('[D9 trailer] kept ' + kept.size + '/' + sel.length + ' blocks · ' + acc.toFixed(1) + ' KB' + (dropped.length ? ' · DROPPED (budget): ' + dropped.map(d => d.id).join(', ') : ' · nothing dropped') + ' · sha256 ' + Math.round(acc*7919 % 65536).toString(16).padStart(4,'0') + '…');
-    return { ...this.menuVals(), items, budgets, sizeKb: sizeKb.toFixed(1), keptKb: acc.toFixed(1), budgetKb: s.budget,
+    return { ...this.menuVals(),
+      ...this.helpVals('Copy for desk', ['Plain text for the air gap: paste it through the relay to the desk agent. Numbers are lossless; curves are resampled and say so.', 'Over budget, the lowest-priority blocks drop first and are named in the trailer. Never a silent cut.', 'On the desk: pmukit digest import rebuilds a dataset subset; pmukit reproduce refits and diffs every number against what the box reported.'], [{k:'Ctrl C', d:'copy the digest (or the current part)'}, {k:'1 · 2 · 3', d:'budget 32 / 64 / 128 KB'}, {k:'N', d:'next part'}]),
+      ...this.cliVals('pmukit digest demo_pmu --budget ' + s.budget + ' --blocks ' + ITEMS.filter(i => s.on[i.id]).map(i => i.id).join(',') + ' > digest_demo_pmu.txt'),
+      items, budgets, sizeKb: sizeKb.toFixed(1), keptKb: acc.toFixed(1), budgetKb: s.budget,
       barKept: Math.min(100, 100 * acc / Math.max(sizeKb, 0.1)).toFixed(1), barDrop: Math.min(100, 100 * (sizeKb - acc) / Math.max(sizeKb, 0.1)).toFixed(1),
       partsText: parts > 1 ? 'split into ' + parts + ' parts of ≤ 32 KB (relay-sized)' : 'one paste',
       partsBtn: parts > 1 ? 'part 1 of ' + parts : 'digest', preview: lines.join('\\n'),
@@ -986,8 +1041,121 @@ class Component extends CtxLogic {
 }
 """
 
+# ------------------------------------------------------------------ 0 Home
+PROJECTS = [
+    dict(name="demo_pmu", dut="PMU_DEMO", step="4 · Model", stepN=4, when="today 14:02", deliv=2, cells="9 (tt/ss/ff × 3 T)", status="ok", note="fit done · 1 cell MARG · 1 not run"),
+    dict(name="ldo_v3_miller", dut="LDO_V3_MILLER (synthetic)", step="5 · Deliver", stepN=5, when="yesterday", deliv=4, cells="9", status="ok", note="regression fixture · all OK"),
+    dict(name="vco_bias_probe", dut="BIAS_DEMO", step="3 · Run", stepN=3, when="2 h ago", deliv=0, cells="3 (tt × 3 T)", status="run", note="41 / 60 runs done · 1 failed"),
+    dict(name="capless_try", dut="LDO_V2_CAPLESS (synthetic)", step="1 · New", stepN=1, when="3 days ago", deliv=0, cells="—", status="mute", note="netlist loaded · plan not built"),
+]
+
+HOME_BODY = f"""
+<div class="main">
+  <div class="col" style="flex:1">
+    <div class="panel" style="flex:1">
+      <div class="ph"><span>Projects</span><div style="display:flex;gap:8px"><input class="inp mono" style="width:220px;height:26px" placeholder="filter · name, DUT, status"><button class="btn sm pri">+ New project</button></div></div>
+      <div class="pb" style="padding:0">
+        <table class="t">
+          <thead><tr><th>Project</th><th>DUT</th><th>Where it is</th><th>Cells</th><th class="num" style="text-align:right">Deliverables</th><th>Last touched</th><th>Note</th></tr></thead>
+          <tbody><sc-for list="{{{{ projects }}}}" as="p" hint-placeholder-count="4"><tr class="click rc {{{{ p.cls }}}}" onClick="{{{{ p.pick }}}}" onContextMenu="{{{{ p.menu }}}}"><td class="mono" style="font-weight:600">{{{{ p.name }}}}</td><td class="mono" style="color:#5d5a53">{{{{ p.dut }}}}</td><td><span class="badge {{{{ p.bcls }}}}">{{{{ p.step }}}}</span></td><td class="mono">{{{{ p.cells }}}}</td><td class="num">{{{{ p.deliv }}}}</td><td class="hint">{{{{ p.when }}}}</td><td class="hint">{{{{ p.note }}}}</td></tr></sc-for></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="panel" style="flex:none">
+      <div class="ph"><span>Compare two deliverables</span><span class="sub">same project, two stamps · what changed and why</span></div>
+      <div class="pb" style="display:flex;gap:12px;align-items:center">
+        <select class="inp mono" style="width:260px"><option>demo_pmu · 2026-09-15T14-02 (v2)</option></select><span class="hint">vs</span><select class="inp mono" style="width:260px"><option>demo_pmu · 2026-09-12T09-40 (v1)</option></select>
+        <button class="btn">Diff</button>
+        <span class="hint">shows: envelope changes · per-cell grade changes · parameter deltas · which runs were re-run</span>
+      </div>
+    </div>
+  </div>
+  <div class="col" style="flex:0 0 380px">
+    <div class="panel" style="flex:none">
+      <div class="ph"><span>Selected</span><span class="sub mono">{{{{ sel.name }}}}</span></div>
+      <div class="pb"><div class="kv"><span class="k">DUT</span><span class="mono">{{{{ sel.dut }}}}</span><span class="k">Where</span><span>{{{{ sel.step }}}}</span><span class="k">Data</span><span class="mono">~/pmukit_data/{{{{ sel.name }}}}/</span><span class="k">Config</span><span class="mono">{{{{ sel.name }}}}.json</span></div>
+        <div style="display:flex;gap:8px;margin-top:12px"><button class="btn pri">Open at {{{{ sel.step }}}}</button><button class="btn">Open report</button></div>
+      </div>
+    </div>
+    <div class="panel" style="flex:none">
+      <div class="ph"><span>This machine</span><span class="badge b-ok">{ICONS['check']} ready</span></div>
+      <div class="pb"><div class="kv"><span class="k">Engine</span><span class="mono">alps 2026.03.hf1 · -mt 8</span><span class="k">Queue</span><span class="mono">rf_short · 12 slots free</span><span class="k">PDK</span><span class="mono">$PDK → …/models (alps)</span><span class="k">Data dir</span><span class="mono">~/pmukit_data (git-ignored)</span><span class="k">pmukit</span><span class="mono">0.1.0 · web ui · py 3.11</span><span class="k">Last check</span><span class="hint">14:30 · dsub reachable · license OK</span></div></div>
+    </div>
+    <div class="panel" style="flex:1">
+      <div class="ph"><span>Recent activity</span></div>
+      <div class="pb" style="font-size:12.5px;display:flex;flex-direction:column;gap:6px">
+        <div><span class="hint mono">14:02</span> demo_pmu · deliverable v2 written (3 corners)</div>
+        <div><span class="hint mono">13:48</span> demo_pmu · fit finished · VDD0P8_B ss/25 °C MARG</div>
+        <div><span class="hint mono">13:40</span> demo_pmu · run e4d27a5c1f90 failed twice → NOT RUN</div>
+        <div><span class="hint mono">12:05</span> vco_bias_probe · 60 runs submitted</div>
+        <div><span class="hint mono">yesterday</span> ldo_v3_miller · deliverable v4 · regression PASS</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="foot"><span class="hint">Home lists every project under <span class="mono">~/pmukit_data</span>. A project is a folder; delete the folder, it is gone from here.</span><button class="btn pri">+ New project</button></div>
+"""
+
+HOME_SCRIPT = "const PROJECTS = " + json.dumps(PROJECTS, ensure_ascii=False) + """;
+const STEPCLS = { ok:'b-ok', run:'b-acc', mute:'b-mute' };
+class Component extends CtxLogic {
+  constructor(p){ super(p); this.state = { sel: 'demo_pmu' }; }
+  renderVals(){
+    const s = this.state;
+    const projects = PROJECTS.map(p => ({ ...p, cls: p.name === s.sel ? 'sel' : '', bcls: STEPCLS[p.status], pick: () => this.setState({sel: p.name}),
+      menu: (e) => this.openMenu(e, p.name, [ { label: 'Open at ' + p.step, action: () => this.setState({sel: p.name}) }, { label: 'Open report', disabled: p.stepN < 4 }, { label: 'Open data folder' }, '-', { label: 'Duplicate as new project (same netlist, new name)' }, { label: 'Compare deliverables', disabled: p.deliv < 2 }, '-', { label: 'Archive (hide from Home)' } ]) }));
+    const sel = PROJECTS.find(p => p.name === s.sel);
+    return { ...this.menuVals(),
+      ...this.helpVals('Home', ['Every project under ~/pmukit_data, with where it stopped. Open one and you land on that screen.', 'Compare two deliverables of the same project: envelope, grades, parameters, re-run list.', 'This machine: whether the engine, queue, PDK and license are reachable right now, so a failure later is not a surprise.'], [{k:'N', d:'new project'}, {k:'Enter', d:'open the selected project'}, {k:'/', d:'filter'}]),
+      ...this.cliVals('pmukit list && pmukit open ' + sel.name), projects, sel };
+  }
+}
+"""
+
+STATES_BODY = f"""
+<div class="main" style="display:grid;grid-template-columns:repeat(3, minmax(0,1fr));grid-template-rows:repeat(2, minmax(0,1fr));gap:16px">
+  <div class="panel"><div class="ph"><span>New · error state</span><span class="badge b-bad">{ICONS['x']} netlist rejected</span></div><div class="pb">
+    <div class="err"><div class="t">{ICONS['x']} Netlist rejected: 2 pins have no role</div>
+      <div><span class="k">What</span>VDD0P8_A and IB_PTAT are wired but no IL_ / VB_ / VS_ / VEN_ source drives them.</div>
+      <div><span class="k">Why</span>pmukit tells rails from biases only by the source-name prefix; it never guesses.</div>
+      <div><span class="k">Do</span>Rename the sources in your schematic (IL_VDD0P8_A, VB_IB_PTAT) and export again, or right-click the pin below and set its role by hand.</div>
+      <div><span class="k">Where</span><span class="mono">tb/input.scs</span> lines 41, 57 · <a href="#">open</a> · <a href="#">docs: netlist convention</a></div></div>
+    <div class="hint" style="margin-top:10px">Same four parts for every error: what happened · why · what to do · where to look. The pin table stays visible so the fix is one right-click away.</div></div></div>
+  <div class="panel"><div class="ph"><span>New · loading state</span><span class="badge b-acc">{ICONS['spin']} parsing</span></div><div class="pb" style="display:flex;flex-direction:column;gap:10px">
+    <div class="hint">Parsing <span class="mono">tb/input.scs</span> · 41 KB · resolving 10 pins…</div>
+    <div class="skel" style="width:60%"></div><div class="skel" style="width:85%"></div><div class="skel" style="width:70%"></div><div class="skel" style="width:80%"></div>
+    <div class="hint" style="margin-top:8px">Skeleton rows in the shape of the table that will appear; no spinner-only screens. Anything longer than 2 s shows what it is doing.</div></div></div>
+  <div class="panel"><div class="ph"><span>Plan · empty state</span><span class="badge b-mute">nothing to plan</span></div><div class="pb"><div class="empty">
+    <span style="color:#8a867d">{ICONS['file']}</span><div class="t">No plan yet</div><div>Finish the three questions on New. Plan is computed from them and from the model spec; there is nothing to fill in here.</div><button class="btn" style="margin-top:6px">Go to New</button></div></div></div>
+  <div class="panel"><div class="ph"><span>Run · error state</span><span class="badge b-bad">{ICONS['x']} queue unreachable</span></div><div class="pb">
+    <div class="err"><div class="t">{ICONS['x']} Cannot submit: dsub is not answering</div>
+      <div><span class="k">What</span>The 282 planned runs are written to disk but none was submitted.</div>
+      <div><span class="k">Why</span><span class="mono">dsub --json</span> timed out after 30 s (Donau scheduler down, or you are not on a submit host).</div>
+      <div><span class="k">Do</span>Retry when the scheduler is back; the ledger resumes exactly where it stopped. Or copy the netlists and submit by hand.</div>
+      <div><span class="k">Where</span><span class="mono">~/pmukit_data/demo_pmu/runs/</span> · <a href="#">submit log</a></div></div>
+    <div style="display:flex;gap:8px;margin-top:10px"><button class="btn pri">Retry submit</button><button class="btn">Copy dsub commands</button></div>
+    <div class="hint" style="margin-top:10px">Sibling errors with the same shape: license not found · PDK dir missing · ahdl compile failed · disk full.</div></div></div>
+  <div class="panel"><div class="ph"><span>Model · empty state</span><span class="badge b-mute">not fitted</span></div><div class="pb"><div class="empty">
+    <span style="color:#8a867d">{ICONS['spin']}</span><div class="t">Model not fitted yet</div><div>191 of 282 runs are done. Fit needs every DC and AC group complete; noise and transients can arrive later and refine it.</div><div class="hint">You can fit early with what is there: blocks without data are marked NOT RUN, and refit is one click when the rest lands.</div><button class="btn" style="margin-top:6px">Fit with what is done</button></div></div></div>
+  <div class="panel"><div class="ph"><span>Deliver · partial state</span><span class="badge b-warn">{ICONS['alert']} with reservations</span></div><div class="pb">
+    <div class="callout warn" style="display:flex;gap:8px"><span style="color:#b7791f;margin-top:2px">{ICONS['alert']}</span><div><b>This deliverable carries 1 NOT RUN block and 1 MARG cell.</b> Both are printed in report.md and in every .va header. Deliver anyway, or go back and retry the missing run.</div></div>
+    <div style="display:flex;gap:8px;margin-top:10px"><button class="btn pri">Deliver with reservations</button><button class="btn">Back to Run · retry</button></div>
+    <div class="hint" style="margin-top:10px">Nothing is blocked silently; nothing is hidden. The user decides, the report remembers.</div></div></div>
+</div>
+<div class="foot"><span class="hint">State sheet: how each screen looks when empty, loading, failing or partial. The message grammar is fixed: what · why · do · where.</span><span class="hint">not a step · reference for the build</span></div>
+"""
+
+STATES_SCRIPT = """
+class Component extends CtxLogic {
+  constructor(p){ super(p); this.state = {}; }
+  renderVals(){ return { ...this.menuVals(), ...this.helpVals('States', ['Reference sheet, not a step: the empty, loading, error and partial states of each screen.', 'Every error has four parts: what happened, why, what to do, where to look. Every long wait shows what it is doing.', 'Nothing is blocked silently; partial results are delivered with reservations printed in the report.'], [{k:'—', d:'reference only'}]), ...this.cliVals('pmukit help states') }; }
+}
+"""
+
 
 def main():
+    (OUT / "Home.dc.html").write_text(page("Home", 0, HOME_BODY, HOME_SCRIPT), encoding="utf-8")
+    (OUT / "States.dc.html").write_text(page("States", 0, STATES_BODY, STATES_SCRIPT), encoding="utf-8")
     (OUT / "Main.dc.html").write_text(page("New", 1, NEW_BODY, NEW_SCRIPT), encoding="utf-8")
     (OUT / "Plan.dc.html").write_text(page("Plan", 2, PLAN_BODY, PLAN_SCRIPT), encoding="utf-8")
     (OUT / "Run.dc.html").write_text(page("Run", 3, RUN_BODY, RUN_SCRIPT), encoding="utf-8")
@@ -997,16 +1165,18 @@ def main():
     W, H, GX, GY = 1440, 900, 100, 170
     canvas = {
         "artboards": [
-            {"file": "Main.dc.html", "title": "1 · New project", "x": 0, "y": 0, "w": W, "h": H, "is_interactive": True},
-            {"file": "Plan.dc.html", "title": "2 · Plan", "x": W + GX, "y": 0, "w": W, "h": H, "is_interactive": True},
-            {"file": "Run.dc.html", "title": "3 · Run", "x": 2 * (W + GX), "y": 0, "w": W, "h": H, "is_interactive": True},
+            {"file": "Home.dc.html", "title": "0 · Home", "x": 0, "y": 0, "w": W, "h": H, "is_interactive": True},
+            {"file": "Main.dc.html", "title": "1 · New project", "x": W + GX, "y": 0, "w": W, "h": H, "is_interactive": True},
+            {"file": "Plan.dc.html", "title": "2 · Plan", "x": 2 * (W + GX), "y": 0, "w": W, "h": H, "is_interactive": True},
+            {"file": "Run.dc.html", "title": "3 · Run", "x": 3 * (W + GX), "y": 0, "w": W, "h": H, "is_interactive": True},
             {"file": "Model.dc.html", "title": "4 · Model", "x": 0, "y": H + GY, "w": W, "h": H, "is_interactive": True},
             {"file": "Deliver.dc.html", "title": "5 · Deliver", "x": W + GX, "y": H + GY, "w": W, "h": H, "is_interactive": True},
             {"file": "Digest.dc.html", "title": "4b · Copy for desk (from Model / Run)", "x": 2 * (W + GX), "y": H + GY, "w": W, "h": H, "is_interactive": True},
+            {"file": "States.dc.html", "title": "States · empty / loading / error / partial", "x": 3 * (W + GX), "y": H + GY, "w": W, "h": H, "is_interactive": False},
         ],
         "annotations": [
-            {"id": "journey", "x": 0, "y": 2 * (H + GY), "w": 620,
-             "text": "pmukit — the sub-block designer's journey.\nThe PMU is a black box to them. They bring one netlist built to the naming convention and answer three questions; everything else is derived and shown, never asked.\n\nAll data is synthetic (PMU_DEMO). Each screen is clickable on its own: load the sample netlist, untick a plan group, retry a failed run, click a grade cell, pick a file, change the digest budget. Right-click any row, chip, cell, chart or file: every interactive object has a context menu with all its verbs.\n\n4b is reached from the Copy-for-desk buttons on Model and Run: the air-gap return channel (plain text through the relay, budgeted by priority, dropped blocks named)."},
+            {"id": "journey", "x": 0, "y": 2 * (H + GY), "w": 720,
+             "text": "pmukit — the sub-block designer's journey.\nThe PMU is a black box to them. They bring one netlist built to the naming convention and answer three questions; everything else is derived and shown, never asked.\n\nAll data is synthetic (PMU_DEMO). Each screen is clickable on its own: load the sample netlist, untick a plan group, retry a failed run, click a grade cell, pick a file, change the digest budget. Right-click any row, chip, cell, chart or file: every interactive object has a context menu with all its verbs. The ? Help button (top right) opens per-screen help + keys; the strip above the footer echoes the CLI equivalent of the current state, like ADE's CIW echo. Home (0) lists projects and machine status; States is the empty / loading / error / partial reference sheet.\n\n4b is reached from the Copy-for-desk buttons on Model and Run: the air-gap return channel (plain text through the relay, budgeted by priority, dropped blocks named)."},
         ],
         "launch": {"view": "canvas"},
     }

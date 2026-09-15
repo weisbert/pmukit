@@ -91,10 +91,26 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
 .ctx .it .k{color:#8a867d;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11px}
 .ctx .sep{height:1px;background:#ebe8e1;margin:3px 6px}
 .rc{cursor:context-menu}
+.main{padding-bottom:46px}
+.cli{position:absolute;left:0;right:0;bottom:52px;height:30px;display:flex;align-items:center;gap:10px;padding:0 20px;background:#faf9f6;border-top:1px solid #ebe8e1;font-size:12px}
+.cli .d{color:#8a867d;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cli .c{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;color:#1c1b18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:900px}
+.help{position:absolute;z-index:41;right:20px;top:56px;width:460px;max-height:780px;background:#ffffff;border:1px solid #cfccc4;border-radius:4px;box-shadow:0 6px 20px rgba(28,27,24,.14);display:flex;flex-direction:column}
+.help .pb{display:flex;flex-direction:column;gap:12px}
+.keys{display:grid;grid-template-columns:110px 1fr;gap:5px 12px;font-size:12.5px}
+.keys .kb{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11.5px;background:#f3f1ec;border:1px solid #dedbd3;border-radius:3px;padding:1px 6px;display:inline-block}
+.err{border:1px solid #efc2bd;background:#fdeeec;border-radius:4px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+.err .t{font-weight:600;color:#b3362e;display:flex;gap:8px;align-items:center}
+.err .k{color:#5d5a53;width:64px;display:inline-block}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#5d5a53;padding:40px 20px;text-align:center}
+.empty .t{font-weight:600;color:#1c1b18}
+.skel{height:12px;border-radius:3px;background:linear-gradient(90deg,#ebe8e1,#f5f3ee,#ebe8e1);background-size:200% 100%;animation:sk 1.2s infinite}
+@keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.q{display:inline-flex;width:14px;height:14px;border-radius:50%;border:1px solid #cfccc4;color:#8a867d;font-size:10px;align-items:center;justify-content:center;margin-left:6px;cursor:help;font-family:'IBM Plex Sans',system-ui,sans-serif;vertical-align:middle}
 </style>
 </helmet>
 <div class="app" onContextMenu="{{ noNativeMenu }}">
-<div class="nav"><span class="brand">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step cur"><span class="n">1</span><span>New</span></div><div class="step"><span class="n">2</span><span>Plan</span></div><div class="step"><span class="n">3</span><span>Run</span></div><div class="step"><span class="n">4</span><span>Model</span></div><div class="step"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span></div></div>
+<div class="nav"><span class="brand" title="Home: all projects (key 0)">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step cur"><span class="n">1</span><span>New</span></div><div class="step"><span class="n">2</span><span>Plan</span></div><div class="step"><span class="n">3</span><span>Run</span></div><div class="step"><span class="n">4</span><span>Model</span></div><div class="step"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span><button class="btn sm" onClick="{{ help.open }}" title="Help and keyboard shortcuts (?)">? Help</button></div></div>
 
 <div class="main">
   <div class="col" style="flex:0 0 700px">
@@ -134,7 +150,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
     <div class="panel" style="flex:1">
       <div class="ph"><span>Three things only you know</span><span class="sub">everything else is derived</span></div>
       <div class="pb" style="display:flex;flex-direction:column;gap:18px">
-        <div class="field"><span class="lbl">1 · Corners and temperatures you simulate at</span>
+        <div class="field"><span class="lbl">1 · Corners and temperatures you simulate at<span class="q" title="pmukit rewrites the PDK include section= per corner and sets options temp= per temperature. Temperature is continuous inside the model; these points are where AC/noise are characterized.">?</span></span>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="hint" style="width:70px">corners</span>
             <sc-for list="{{ corners }}" as="c" hint-placeholder-count="3"><span class="chip rc {{ c.cls }}" onClick="{{ c.toggle }}" onContextMenu="{{ c.menu }}">{{ c.name }}</span></sc-for>
             <input class="inp mono" style="width:150px;height:24px" placeholder="MOSff_RCss">
@@ -145,7 +161,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
           </div>
           <div style="display:flex;gap:6px;align-items:center"><span class="hint" style="width:70px">VSET codes</span><input class="inp mono" style="width:90px;height:24px" value="3"><span class="hint">from <span class="mono">parameters VSET=3</span></span></div>
         </div>
-        <div class="field"><span class="lbl">2 · What your block draws from each rail</span>
+        <div class="field"><span class="lbl">2 · What your block draws from each rail<span class="q" title="On/off currents set the characterization grid (off, 0.2×on, on, 2×on). Switches = your block turns on and off during simulation; that load step is the one large-signal event modeled.">?</span></span>
           <table class="t">
             <thead><tr><th>Rail</th><th>On</th><th>Off</th><th>Switches on/off</th><th></th></tr></thead>
             <tbody>
@@ -156,7 +172,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
           </table>
           <span class="hint">On/Off defaults come from the IL_ source's dc. "Switches" adds the load-EN on/off transient, the one large-signal event that is modeled.</span>
         </div>
-        <div class="field"><span class="lbl">3 · Highest frequency you care about</span>
+        <div class="field"><span class="lbl">3 · Highest frequency you care about<span class="q" title="Zout and PSRR are characterized up to this frequency and never extrapolated past it. Default = the HB fundamental × harmonics found in your netlist.">?</span></span>
           <div style="display:flex;gap:8px;align-items:center"><input class="inp mono" style="width:120px" value="20 GHz"><span class="hint">default from the netlist's HB: fund 5.0 GHz × 4 harmonics. Zout/PSRR are characterized up to here and never extrapolated past it.</span></div>
         </div>
         <div class="field">
@@ -180,6 +196,18 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
 </div>
 <div class="foot"><span class="hint">{{ footText }}</span><button class="btn pri" disabled="{{ notLoaded }}">Build plan <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"></path></svg></button></div>
 
+<div class="cli"><span class="d">$</span><span class="c">{{ cli }}</span><button class="btn sm" style="height:22px" onClick="{{ copyCli }}">{{ copyCliLabel }}</button><span class="hint">every action on this screen has this command · paste it in a script or a cron job</span></div>
+<sc-if value="{{ help.on }}" hint-placeholder-val="{{ false }}">
+  <div class="ctx-veil" onClick="{{ help.close }}"></div>
+  <div class="help"><div class="ph"><span>{{ help.title }}</span><button class="btn sm" onClick="{{ help.close }}">Close · Esc</button></div>
+    <div class="pb">
+      <div><div class="lbl" style="margin-bottom:6px">This screen</div><sc-for list="{{ help.lines }}" as="l" hint-placeholder-count="3"><div style="font-size:12.5px;line-height:1.5;margin-bottom:4px">{{ l }}</div></sc-for></div>
+      <div><div class="lbl" style="margin-bottom:6px">Keys here</div><div class="keys"><sc-for list="{{ help.keys }}" as="k" hint-placeholder-count="4"><span><span class="kb">{{ k.k }}</span></span><span>{{ k.d }}</span></sc-for></div></div>
+      <div><div class="lbl" style="margin-bottom:6px">Everywhere</div><div class="keys"><span><span class="kb">?</span></span><span>this panel</span><span><span class="kb">Ctrl K</span></span><span>command palette: type any action or run id</span><span><span class="kb">0 … 5</span></span><span>go to Home, New, Plan, Run, Model, Deliver</span><span><span class="kb">Ctrl Enter</span></span><span>the screen's primary button</span><span><span class="kb">Ctrl Z</span></span><span>undo the last config change (not a submitted run)</span><span><span class="kb">Esc</span></span><span>close menu / panel</span><span><span class="kb">right-click</span></span><span>all verbs for any row, chip, cell, chart or file</span></div></div>
+      <div class="hint">Docs: <span class="mono">pmukit help &lt;screen&gt;</span> prints this text. Error messages always carry four parts: what happened · why · what to do · where to look.</div>
+    </div>
+  </div>
+</sc-if>
 <sc-if value="{{ menu.on }}" hint-placeholder-val="{{ false }}">
   <div class="ctx-veil" onClick="{{ menu.close }}" onContextMenu="{{ menu.close }}"></div>
   <div class="ctx" style="left:{{ menu.x }}px;top:{{ menu.y }}px">
@@ -203,6 +231,13 @@ class CtxLogic extends DCLogic {
     this.setState({ _menu: { title, items, x: Math.max(0, x), y: Math.max(0, y) } });
   }
   closeMenu(e){ if (e && e.preventDefault) e.preventDefault(); this.setState({ _menu: null }); }
+  helpVals(title, lines, keys){
+    const h = !!this.state._help;
+    return { help: { on: h, title, lines, keys, open: () => this.setState({_help: true}), close: (e) => { if (e && e.preventDefault) e.preventDefault(); this.setState({_help: false}); } } };
+  }
+  cliVals(cmd){
+    return { cli: cmd, copyCliLabel: this.state._cliCopied ? 'Copied' : 'Copy', copyCli: () => { this.setState({_cliCopied: true}); setTimeout(() => this.setState({_cliCopied: false}), 1500); } };
+  }
   menuVals(){
     const m = this.state._menu;
     return { noNativeMenu: (e) => { if (e && e.preventDefault) e.preventDefault(); },
@@ -248,7 +283,10 @@ class Component extends CtxLogic {
         { label: s.sw[r.name] ? 'Static load only (no load-EN)' : 'Characterize load-EN on/off', action: () => { const o = Object.assign({}, s.sw); o[r.name] = !o[r.name]; this.setState({sw:o}); } },
         { label: 'Show the IL_ source line' } ]) }));
     const nc = s.corners.filter(c => s.cornersOn[c]).length, nt = s.temps.filter(t => s.tempsOn[t]).length;
+    const onC = s.corners.filter(c => s.cornersOn[c]).join(','), onT = s.temps.filter(t => s.tempsOn[t]).join(',');
     return { ...this.menuVals(),
+      ...this.helpVals('New project', ['Bring one Spectre netlist exported at the nominal corner. Sources named IL_ / VB_ / VS_ / VEN_ tell pmukit which pin is which; nothing else is needed.', 'Answer three things only you know. Everything under "derived settings" is decided by pmukit and can be overridden later.', 'Nothing runs yet. Build plan shows what would run and what it costs before anything is submitted.'], [{k:'Ctrl O', d:'choose a netlist file'}, {k:'Ctrl Enter', d:'Build plan'}, {k:'A', d:'show / hide derived settings'}]),
+      ...this.cliVals(s.loaded ? `pmukit new demo_pmu --netlist tb/input.scs --pmu PMU_TOP --corners ${onC} --temps ${onT} --vset 3 --load VDD0P8_A=500u/2u${s.sw.VDD0P8_A ? '/switch' : ''} --load VDD0P8_B=2m/20u${s.sw.VDD0P8_B ? '/switch' : ''} --fmax 20G` : 'pmukit new demo_pmu --netlist <input.scs>'),
       loaded: s.loaded, notLoaded: !s.loaded, adv: s.adv,
       advLabel: s.adv ? 'Hide derived settings' : 'Show derived settings (pmukit decided these)',
       load: () => this.setState({loaded:true}), toggleAdv: (e) => { if (e && e.preventDefault) e.preventDefault(); this.setState({adv: !s.adv}); },

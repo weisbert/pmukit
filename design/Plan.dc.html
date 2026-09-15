@@ -91,10 +91,26 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
 .ctx .it .k{color:#8a867d;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11px}
 .ctx .sep{height:1px;background:#ebe8e1;margin:3px 6px}
 .rc{cursor:context-menu}
+.main{padding-bottom:46px}
+.cli{position:absolute;left:0;right:0;bottom:52px;height:30px;display:flex;align-items:center;gap:10px;padding:0 20px;background:#faf9f6;border-top:1px solid #ebe8e1;font-size:12px}
+.cli .d{color:#8a867d;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cli .c{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;color:#1c1b18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:900px}
+.help{position:absolute;z-index:41;right:20px;top:56px;width:460px;max-height:780px;background:#ffffff;border:1px solid #cfccc4;border-radius:4px;box-shadow:0 6px 20px rgba(28,27,24,.14);display:flex;flex-direction:column}
+.help .pb{display:flex;flex-direction:column;gap:12px}
+.keys{display:grid;grid-template-columns:110px 1fr;gap:5px 12px;font-size:12.5px}
+.keys .kb{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11.5px;background:#f3f1ec;border:1px solid #dedbd3;border-radius:3px;padding:1px 6px;display:inline-block}
+.err{border:1px solid #efc2bd;background:#fdeeec;border-radius:4px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+.err .t{font-weight:600;color:#b3362e;display:flex;gap:8px;align-items:center}
+.err .k{color:#5d5a53;width:64px;display:inline-block}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#5d5a53;padding:40px 20px;text-align:center}
+.empty .t{font-weight:600;color:#1c1b18}
+.skel{height:12px;border-radius:3px;background:linear-gradient(90deg,#ebe8e1,#f5f3ee,#ebe8e1);background-size:200% 100%;animation:sk 1.2s infinite}
+@keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.q{display:inline-flex;width:14px;height:14px;border-radius:50%;border:1px solid #cfccc4;color:#8a867d;font-size:10px;align-items:center;justify-content:center;margin-left:6px;cursor:help;font-family:'IBM Plex Sans',system-ui,sans-serif;vertical-align:middle}
 </style>
 </helmet>
 <div class="app" onContextMenu="{{ noNativeMenu }}">
-<div class="nav"><span class="brand">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step done"><span class="n">1</span><span>New</span></div><div class="step cur"><span class="n">2</span><span>Plan</span></div><div class="step"><span class="n">3</span><span>Run</span></div><div class="step"><span class="n">4</span><span>Model</span></div><div class="step"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span></div></div>
+<div class="nav"><span class="brand" title="Home: all projects (key 0)">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step done"><span class="n">1</span><span>New</span></div><div class="step cur"><span class="n">2</span><span>Plan</span></div><div class="step"><span class="n">3</span><span>Run</span></div><div class="step"><span class="n">4</span><span>Model</span></div><div class="step"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span><button class="btn sm" onClick="{{ help.open }}" title="Help and keyboard shortcuts (?)">? Help</button></div></div>
 
 <div class="main">
   <div class="col" style="flex:1">
@@ -163,6 +179,18 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
 </div>
 <div class="foot"><span class="hint">Queue <span class="mono">rf_short</span> · 8 CPU per job · resume: runs already in the ledger are skipped</span><div style="display:flex;gap:8px"><button class="btn">Export plan (CSV)</button><button class="btn pri"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l9-5.5z"></path></svg> Submit {{ runs }} runs</button></div></div>
 
+<div class="cli"><span class="d">$</span><span class="c">{{ cli }}</span><button class="btn sm" style="height:22px" onClick="{{ copyCli }}">{{ copyCliLabel }}</button><span class="hint">every action on this screen has this command · paste it in a script or a cron job</span></div>
+<sc-if value="{{ help.on }}" hint-placeholder-val="{{ false }}">
+  <div class="ctx-veil" onClick="{{ help.close }}"></div>
+  <div class="help"><div class="ph"><span>{{ help.title }}</span><button class="btn sm" onClick="{{ help.close }}">Close · Esc</button></div>
+    <div class="pb">
+      <div><div class="lbl" style="margin-bottom:6px">This screen</div><sc-for list="{{ help.lines }}" as="l" hint-placeholder-count="3"><div style="font-size:12.5px;line-height:1.5;margin-bottom:4px">{{ l }}</div></sc-for></div>
+      <div><div class="lbl" style="margin-bottom:6px">Keys here</div><div class="keys"><sc-for list="{{ help.keys }}" as="k" hint-placeholder-count="4"><span><span class="kb">{{ k.k }}</span></span><span>{{ k.d }}</span></sc-for></div></div>
+      <div><div class="lbl" style="margin-bottom:6px">Everywhere</div><div class="keys"><span><span class="kb">?</span></span><span>this panel</span><span><span class="kb">Ctrl K</span></span><span>command palette: type any action or run id</span><span><span class="kb">0 … 5</span></span><span>go to Home, New, Plan, Run, Model, Deliver</span><span><span class="kb">Ctrl Enter</span></span><span>the screen's primary button</span><span><span class="kb">Ctrl Z</span></span><span>undo the last config change (not a submitted run)</span><span><span class="kb">Esc</span></span><span>close menu / panel</span><span><span class="kb">right-click</span></span><span>all verbs for any row, chip, cell, chart or file</span></div></div>
+      <div class="hint">Docs: <span class="mono">pmukit help &lt;screen&gt;</span> prints this text. Error messages always carry four parts: what happened · why · what to do · where to look.</div>
+    </div>
+  </div>
+</sc-if>
 <sc-if value="{{ menu.on }}" hint-placeholder-val="{{ false }}">
   <div class="ctx-veil" onClick="{{ menu.close }}" onContextMenu="{{ menu.close }}"></div>
   <div class="ctx" style="left:{{ menu.x }}px;top:{{ menu.y }}px">
@@ -186,6 +214,13 @@ class CtxLogic extends DCLogic {
     this.setState({ _menu: { title, items, x: Math.max(0, x), y: Math.max(0, y) } });
   }
   closeMenu(e){ if (e && e.preventDefault) e.preventDefault(); this.setState({ _menu: null }); }
+  helpVals(title, lines, keys){
+    const h = !!this.state._help;
+    return { help: { on: h, title, lines, keys, open: () => this.setState({_help: true}), close: (e) => { if (e && e.preventDefault) e.preventDefault(); this.setState({_help: false}); } } };
+  }
+  cliVals(cmd){
+    return { cli: cmd, copyCliLabel: this.state._cliCopied ? 'Copied' : 'Copy', copyCli: () => { this.setState({_cliCopied: true}); setTimeout(() => this.setState({_cliCopied: false}), 1500); } };
+  }
   menuVals(){
     const m = this.state._menu;
     return { noNativeMenu: (e) => { if (e && e.preventDefault) e.preventDefault(); },
@@ -269,7 +304,11 @@ class Component extends CtxLogic {
     const rl = runsOf(selG); const runSel = rl.find(r => r.id === s.runSel) || rl[0];
     const runList = rl.map(r => ({ ...r, cls: r.id === runSel.id ? 'sel' : '', pick: () => this.setState({runSel: r.id}),
       menu: (e) => this.openMenu(e, 'run ' + r.id, [ { label: 'Show recipe', action: () => this.setState({runSel: r.id}) }, { label: 'Copy recipe' }, { label: 'Copy dsub command' }, { label: 'Open input.scs' }, '-', { label: 'Run only this one' }, { label: 'Skip this run (mark NOT RUN)' }, '-', { label: 'Copy run id', key: r.id.slice(0,6) + '…' } ]) }));
-    return { ...this.menuVals(), groups, runs, cpuh: cpuh.toFixed(1), nGroups: onG.length + '/' + GROUPS.length,
+    const offIds = offList.map(g => g.id).join(',');
+    return { ...this.menuVals(),
+      ...this.helpVals('Plan', ['Every row is a group of runs that share one netlist edit. AC groups read every port from one injection (superposition), so nothing is simulated twice.', 'Click a row for why it exists. Untick it to see, in red, which model block would be reported NOT RUN.', 'Runs tab: the per-corner list and the exact recipe (netlist edits, analysis, submit command) for any single run.'], [{k:'Space', d:'tick / untick the selected group'}, {k:'W · R', d:'Why tab · Runs tab'}, {k:'Ctrl Enter', d:'Submit'}]),
+      ...this.cliVals('pmukit plan demo_pmu' + (offIds ? ' --skip ' + offIds : '') + ' && pmukit run demo_pmu --queue rf_short --cpu 8'),
+      groups, runs, cpuh: cpuh.toFixed(1), nGroups: onG.length + '/' + GROUPS.length,
       sel: selG, allOn: offList.length === 0, anyOff: offList.length > 0, offList,
       isWhy: s.tab === 'why', isRuns: s.tab === 'runs', tabWhyCls: s.tab === 'why' ? 'on' : '', tabRunsCls: s.tab === 'runs' ? 'on' : '',
       showWhy: () => this.setState({tab:'why'}), showRuns: () => this.setState({tab:'runs'}),

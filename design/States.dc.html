@@ -110,43 +110,38 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
 </style>
 </helmet>
 <div class="app" onContextMenu="{{ noNativeMenu }}">
-<div class="nav"><span class="brand" title="Home: all projects (key 0)">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step done"><span class="n">1</span><span>New</span></div><div class="step done"><span class="n">2</span><span>Plan</span></div><div class="step done"><span class="n">3</span><span>Run</span></div><div class="step done"><span class="n">4</span><span>Model</span></div><div class="step cur"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span><button class="btn sm" onClick="{{ help.open }}" title="Help and keyboard shortcuts (?)">? Help</button></div></div>
+<div class="nav"><span class="brand" title="Home: all projects (key 0)">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step"><span class="n">1</span><span>New</span></div><div class="step"><span class="n">2</span><span>Plan</span></div><div class="step"><span class="n">3</span><span>Run</span></div><div class="step"><span class="n">4</span><span>Model</span></div><div class="step"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span><button class="btn sm" onClick="{{ help.open }}" title="Help and keyboard shortcuts (?)">? Help</button></div></div>
 
-<div class="main">
-  <div class="col" style="flex:0 0 620px">
-    <div class="panel" style="flex:1">
-      <div class="ph"><span>Deliverable</span><span class="sub mono">~/pmukit_data/demo_pmu/deliver/2026-09-15T14-02/</span></div>
-      <div class="pb" style="padding:0">
-        <table class="t">
-          <thead><tr><th></th><th>File</th><th>What</th><th class="num" style="text-align:right">Size</th><th>sha</th></tr></thead>
-          <tbody><sc-for list="{{ files }}" as="f" hint-placeholder-count="7"><tr class="click rc {{ f.cls }}" onClick="{{ f.pick }}" onContextMenu="{{ f.menu }}"><td style="color:#8a867d;width:20px"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M4 1.5h5.5L13 5v9.5H4z"></path><path d="M9.5 1.5V5H13"></path></svg></td><td class="mono">{{ f.name }}</td><td><div>{{ f.kind }}</div><div class="hint">{{ f.desc }}</div></td><td class="num">{{ f.size }}</td><td class="id" style="color:#8a867d">{{ f.sha }}</td></tr></sc-for></tbody>
-        </table>
-      </div>
-    </div>
-    <div class="panel" style="flex:none">
-      <div class="ph"><span>Use it in your testbench</span><button class="btn sm" onClick="{{ copy }}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5.5" y="5.5" width="8" height="8" rx="1"></rect><path d="M10.5 5.5v-3h-8v8h3"></path></svg> {{ copyLabel }}</button></div>
-      <div class="pb"><div class="code" style="white-space:pre-wrap">// model setup — pick the section with the same corner variable as the PDK
-include "~/pmukit_data/demo_pmu/deliver/2026-09-15T14-02/PMU_demo_pmu.scs" section=tt
-
-// instance — same pins as PMU_DEMO, plus per-rail switches
-PMU_TOP (AVDD1P0 VDD0P8_A VDD0P8_B IB_PTAT IB_CONST EN TESTMODE VSS_A VSS_B AGND) PMU_demo_pmu \
-    vset=3  load_en_A=1  load_en_B=1</div>
-        <div class="hint" style="margin-top:8px">Temperature comes from your <span class="mono">options temp=</span>. Anything outside envelope.json is reported, never silently extrapolated.</div>
-      </div>
-    </div>
-  </div>
-  <div class="col" style="flex:1">
-    <div class="panel" style="flex:1">
-      <div class="ph"><span class="mono">{{ sel.name }}</span><span class="sub">{{ sel.kind }}</span></div>
-      <div class="pb"><div class="code" style="height:100%;box-sizing:border-box">{{ sel.body }}</div></div>
-    </div>
-    <div class="panel" style="flex:none">
-      <div class="ph"><span>Provenance</span><span class="badge b-ok"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg> reproducible</span></div>
-      <div class="pb"><div class="kv"><span class="k">Config</span><span class="mono">demo_pmu.json · sha 5d8c…a1</span><span class="k">Dataset</span><span class="mono">a91f…c3 · 280 runs consumed · 2026-09-15</span><span class="k">pmukit</span><span class="mono">0.1.0 · emitter hb_safe</span><span class="k">TB state</span><span>RX mode, register 0x12 = 0x03 (as characterized)</span><span class="k">Header</span><span class="hint">every .va repeats this block in its first 12 lines</span></div></div>
-    </div>
-  </div>
+<div class="main" style="display:grid;grid-template-columns:repeat(3, minmax(0,1fr));grid-template-rows:repeat(2, minmax(0,1fr));gap:16px">
+  <div class="panel"><div class="ph"><span>New · error state</span><span class="badge b-bad"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"></path></svg> netlist rejected</span></div><div class="pb">
+    <div class="err"><div class="t"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"></path></svg> Netlist rejected: 2 pins have no role</div>
+      <div><span class="k">What</span>VDD0P8_A and IB_PTAT are wired but no IL_ / VB_ / VS_ / VEN_ source drives them.</div>
+      <div><span class="k">Why</span>pmukit tells rails from biases only by the source-name prefix; it never guesses.</div>
+      <div><span class="k">Do</span>Rename the sources in your schematic (IL_VDD0P8_A, VB_IB_PTAT) and export again, or right-click the pin below and set its role by hand.</div>
+      <div><span class="k">Where</span><span class="mono">tb/input.scs</span> lines 41, 57 · <a href="#">open</a> · <a href="#">docs: netlist convention</a></div></div>
+    <div class="hint" style="margin-top:10px">Same four parts for every error: what happened · why · what to do · where to look. The pin table stays visible so the fix is one right-click away.</div></div></div>
+  <div class="panel"><div class="ph"><span>New · loading state</span><span class="badge b-acc"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 2.5a5.5 5.5 0 1 1-5.2 3.7"></path></svg> parsing</span></div><div class="pb" style="display:flex;flex-direction:column;gap:10px">
+    <div class="hint">Parsing <span class="mono">tb/input.scs</span> · 41 KB · resolving 10 pins…</div>
+    <div class="skel" style="width:60%"></div><div class="skel" style="width:85%"></div><div class="skel" style="width:70%"></div><div class="skel" style="width:80%"></div>
+    <div class="hint" style="margin-top:8px">Skeleton rows in the shape of the table that will appear; no spinner-only screens. Anything longer than 2 s shows what it is doing.</div></div></div>
+  <div class="panel"><div class="ph"><span>Plan · empty state</span><span class="badge b-mute">nothing to plan</span></div><div class="pb"><div class="empty">
+    <span style="color:#8a867d"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M4 1.5h5.5L13 5v9.5H4z"></path><path d="M9.5 1.5V5H13"></path></svg></span><div class="t">No plan yet</div><div>Finish the three questions on New. Plan is computed from them and from the model spec; there is nothing to fill in here.</div><button class="btn" style="margin-top:6px">Go to New</button></div></div></div>
+  <div class="panel"><div class="ph"><span>Run · error state</span><span class="badge b-bad"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"></path></svg> queue unreachable</span></div><div class="pb">
+    <div class="err"><div class="t"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"></path></svg> Cannot submit: dsub is not answering</div>
+      <div><span class="k">What</span>The 282 planned runs are written to disk but none was submitted.</div>
+      <div><span class="k">Why</span><span class="mono">dsub --json</span> timed out after 30 s (Donau scheduler down, or you are not on a submit host).</div>
+      <div><span class="k">Do</span>Retry when the scheduler is back; the ledger resumes exactly where it stopped. Or copy the netlists and submit by hand.</div>
+      <div><span class="k">Where</span><span class="mono">~/pmukit_data/demo_pmu/runs/</span> · <a href="#">submit log</a></div></div>
+    <div style="display:flex;gap:8px;margin-top:10px"><button class="btn pri">Retry submit</button><button class="btn">Copy dsub commands</button></div>
+    <div class="hint" style="margin-top:10px">Sibling errors with the same shape: license not found · PDK dir missing · ahdl compile failed · disk full.</div></div></div>
+  <div class="panel"><div class="ph"><span>Model · empty state</span><span class="badge b-mute">not fitted</span></div><div class="pb"><div class="empty">
+    <span style="color:#8a867d"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 2.5a5.5 5.5 0 1 1-5.2 3.7"></path></svg></span><div class="t">Model not fitted yet</div><div>191 of 282 runs are done. Fit needs every DC and AC group complete; noise and transients can arrive later and refine it.</div><div class="hint">You can fit early with what is there: blocks without data are marked NOT RUN, and refit is one click when the rest lands.</div><button class="btn" style="margin-top:6px">Fit with what is done</button></div></div></div>
+  <div class="panel"><div class="ph"><span>Deliver · partial state</span><span class="badge b-warn"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5l6 11H2z"></path><path d="M8 7v3"></path><path d="M8 12.2v.1"></path></svg> with reservations</span></div><div class="pb">
+    <div class="callout warn" style="display:flex;gap:8px"><span style="color:#b7791f;margin-top:2px"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5l6 11H2z"></path><path d="M8 7v3"></path><path d="M8 12.2v.1"></path></svg></span><div><b>This deliverable carries 1 NOT RUN block and 1 MARG cell.</b> Both are printed in report.md and in every .va header. Deliver anyway, or go back and retry the missing run.</div></div>
+    <div style="display:flex;gap:8px;margin-top:10px"><button class="btn pri">Deliver with reservations</button><button class="btn">Back to Run · retry</button></div>
+    <div class="hint" style="margin-top:10px">Nothing is blocked silently; nothing is hidden. The user decides, the report remembers.</div></div></div>
 </div>
-<div class="foot"><span class="hint">Nothing in this folder enters git. report.md carries numbers only.</span><div style="display:flex;gap:8px"><button class="btn">Copy folder path</button><button class="btn pri">Export report PDF</button></div></div>
+<div class="foot"><span class="hint">State sheet: how each screen looks when empty, loading, failing or partial. The message grammar is fixed: what · why · do · where.</span><span class="hint">not a step · reference for the build</span></div>
 
 <div class="cli"><span class="d">$</span><span class="c">{{ cli }}</span><button class="btn sm" style="height:22px" onClick="{{ copyCli }}">{{ copyCliLabel }}</button><span class="hint">every action on this screen has this command · paste it in a script or a cron job</span></div>
 <sc-if value="{{ help.on }}" hint-placeholder-val="{{ false }}">
@@ -200,76 +195,10 @@ class CtxLogic extends DCLogic {
   }
 }
 
-const FILES = [{"name": "PMU_demo_pmu.scs", "kind": "Spectre library", "size": "1.2 KB", "sha": "4e0a…91", "desc": "library with sections tt / ss / ff, each including its .va"}, {"name": "PMU_demo_pmu_tt.va", "kind": "Verilog-A", "size": "38 KB", "sha": "c17b…2d", "desc": "tt corner · temperature continuous · vset, load-EN switches as instance params"}, {"name": "PMU_demo_pmu_ss.va", "kind": "Verilog-A", "size": "38 KB", "sha": "9f42…7a", "desc": "ss corner"}, {"name": "PMU_demo_pmu_ff.va", "kind": "Verilog-A", "size": "38 KB", "sha": "1b8d…e5", "desc": "ff corner"}, {"name": "envelope.json", "kind": "validity", "size": "0.9 KB", "sha": "77c0…03", "desc": "load / temp / freq / corner / VSET ranges · which large-signal terms are on"}, {"name": "report.md", "kind": "report", "size": "14 KB", "sha": "a3e6…b8", "desc": "trust summary · per-cell grades · HB health check · not-run list"}, {"name": "provenance.json", "kind": "provenance", "size": "0.6 KB", "sha": "e90d…4f", "desc": "config sha · dataset sha · pmukit version · TB state at characterization"}];
-const BODIES = {
-  'PMU_demo_pmu.scs': `// pmukit 0.1.0 · demo_pmu · 2026-09-15T14:02 · config 5d8c…a1 · dataset a91f…c3
-library PMU_demo_pmu
-  section tt
-    ahdl_include "PMU_demo_pmu_tt.va"
-  endsection tt
-  section ss
-    ahdl_include "PMU_demo_pmu_ss.va"
-  endsection ss
-  section ff
-    ahdl_include "PMU_demo_pmu_ff.va"
-  endsection ff
-endlibrary PMU_demo_pmu`,
-  'PMU_demo_pmu_tt.va': `// pmukit 0.1.0 · demo_pmu · corner tt · 2026-09-15T14:02
-// config 5d8c…a1 · dataset a91f…c3 · TB state: RX mode, reg 0x12=0x03
-// valid: load_A 2u..1m  load_B 20u..4m  temp -40..125  f<=20G  vset 3
-// large-signal: load_en_A ON (HB check 7.7e-3)  load_en_B OFF (default)  en_ramp usable-only
-\`include "disciplines.vams"
-module PMU_demo_pmu(AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND);
-  inout AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND;  // TESTMODE: pass-through, no role
-  electrical AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND;
-  parameter integer vset = 3;
-  parameter integer load_en_A = 1, load_en_B = 0;
-  // ---- rail A: dc table(T) · zout ladder · psrr gm-C biquad · noise · load_en (opt-in)
-  ...`,
-  'envelope.json': `{
-  "load_a": {"VDD0P8_A": [2e-6, 1e-3], "VDD0P8_B": [2e-5, 4e-3]},
-  "temp_c": [-40, 125],
-  "freq_hz_max": 2e10,
-  "corners": ["tt", "ss", "ff"],
-  "vset": [3],
-  "large_signal_default_on": {"load_en_A": true, "load_en_B": true},
-  "usable_not_signoff": ["en_ramp"],
-  "not_run": [["tran_load_off.B", "ss", 125, 3]]
-}`,
-  'report.md': `# demo_pmu — can I trust this model in my simulation?
 
-Valid for: load_A 2 µ–1 mA · load_B 20 µ–4 mA · −40–125 °C · ≤ 20 GHz · tt/ss/ff · VSET 3
-Usable, not sign-off: EN power-up ramp
-Not run: tran_load_off.B @ ss / 125 °C (failed twice)
-HB health: first-step residual 7.7e-3, all large-signal terms individually checked
-
-| port | tt −40 | tt 25 | tt 125 | ss −40 | ss 25 | ss 125 | ff −40 | ff 25 | ff 125 |
-|---|---|---|---|---|---|---|---|---|---|
-| VDD0P8_A | OK | OK | OK | OK | OK | MARG | OK | OK | OK |
-...`,
-  'provenance.json': `{
-  "pmukit": "0.1.0",
-  "config_sha": "5d8c…a1",
-  "dataset_sha": "a91f…c3",
-  "runs_consumed": 280,
-  "tb_state": "RX mode, register 0x12 = 0x03",
-  "created": "2026-09-15T14:02:11"
-}`,
-};
 class Component extends CtxLogic {
-  constructor(p){ super(p); this.state = { sel: 'PMU_demo_pmu.scs', copied: false }; }
-  renderVals(){
-    const s = this.state;
-    const files = FILES.map(f => ({ ...f, cls: f.name === s.sel ? 'sel' : '', pick: () => this.setState({sel: f.name}),
-      menu: (e) => this.openMenu(e, f.name, [ { label: 'Preview', action: () => this.setState({sel: f.name}) }, { label: 'Copy path' }, { label: 'Copy include line', disabled: !f.name.endsWith('.scs') }, '-', { label: 'Diff vs previous deliverable' }, { label: 'Show provenance' } ]) }));
-    const f = FILES.find(x => x.name === s.sel);
-    const body = BODIES[f.name] || BODIES['PMU_demo_pmu_tt.va'].replace(/corner tt/, 'corner ' + f.name.slice(-5, -3)).replace('HB check 7.7e-3', f.name.includes('_ss') ? 'HB check 9.1e-3' : 'HB check 6.4e-3');
-    return { ...this.menuVals(),
-      ...this.helpVals('Deliver', ['One folder, stamped by time. The .scs library selects the corner with the same section name as your PDK, so your corner setup needs one extra include line.', 'envelope.json is the contract: outside it the report shows red and the model refuses to extrapolate silently.', 'Every .va repeats provenance.json in its header, so a file that wanders away from the folder is still traceable.'], [{k:'Enter', d:'preview the selected file'}, {k:'Ctrl C', d:'copy the include line'}, {k:'D', d:'diff vs the previous deliverable'}]),
-      ...this.cliVals('pmukit deliver demo_pmu --out ~/pmukit_data/demo_pmu/deliver/ && pmukit show ' + f.name),
-      files, sel: { ...f, body }, copyLabel: s.copied ? 'Copied' : 'Copy',
-      copy: () => { this.setState({copied:true}); setTimeout(() => this.setState({copied:false}), 1500); } };
-  }
+  constructor(p){ super(p); this.state = {}; }
+  renderVals(){ return { ...this.menuVals(), ...this.helpVals('States', ['Reference sheet, not a step: the empty, loading, error and partial states of each screen.', 'Every error has four parts: what happened, why, what to do, where to look. Every long wait shows what it is doing.', 'Nothing is blocked silently; partial results are delivered with reservations printed in the report.'], [{k:'—', d:'reference only'}]), ...this.cliVals('pmukit help states') }; }
 }
 
 </script>
