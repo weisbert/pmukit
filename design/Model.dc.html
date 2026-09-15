@@ -1,0 +1,217 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap">
+  <style>
+body{margin:0;background:#f7f6f3;color:#1c1b18;font-family:'IBM Plex Sans',system-ui,'Segoe UI',sans-serif;font-size:13px;line-height:1.45}
+a{color:#1f6f9f}a:hover{color:#16506f}
+.mono{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace}
+.app{width:1440px;height:900px;display:flex;flex-direction:column;background:#f7f6f3;overflow:hidden;box-sizing:border-box}
+.nav{height:48px;display:flex;align-items:center;gap:8px;padding:0 20px;background:#ffffff;border-bottom:1px solid #dedbd3;flex:none}
+.brand{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-weight:600;font-size:14px;letter-spacing:.02em}
+.proj{color:#5d5a53;font-size:12.5px;padding-left:12px;border-left:1px solid #dedbd3;margin-left:4px}
+.steps{display:flex;gap:2px;margin-left:28px}
+.step{display:flex;align-items:center;gap:8px;padding:5px 12px;border-radius:4px;color:#8a867d;font-size:12.5px}
+.step.cur{background:#e8f1f7;color:#1f6f9f;font-weight:600}
+.step .n{width:18px;height:18px;border-radius:50%;border:1px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:11px;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.step.done{color:#1c1b18}.step.done .n{background:#1c1b18;color:#fff;border-color:#1c1b18}
+.navr{margin-left:auto;display:flex;gap:16px;color:#8a867d;font-size:12px}
+.main{flex:1;display:flex;gap:16px;padding:16px 20px;min-height:0}
+.col{display:flex;flex-direction:column;gap:16px;min-height:0}
+.panel{background:#ffffff;border:1px solid #dedbd3;border-radius:4px;display:flex;flex-direction:column;min-height:0}
+.ph{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 14px;border-bottom:1px solid #ebe8e1;font-weight:600;font-size:13px;flex:none}
+.ph .sub{font-weight:400;color:#8a867d;font-size:12px}
+.pb{padding:12px 14px;overflow:auto;flex:1;min-height:0}
+table.t{width:100%;border-collapse:collapse;font-size:12.5px}
+.t th{text-align:left;font-weight:600;color:#5d5a53;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid #dedbd3;white-space:nowrap}
+.t td{padding:6px 8px;border-bottom:1px solid #ebe8e1;vertical-align:middle}
+.t tr.sel td{background:#e8f1f7}
+.t tr.click{cursor:pointer}.t tr.click:hover td{background:#f3f1ec}
+.t tr.sel.click:hover td{background:#e8f1f7}
+.num{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.id{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;white-space:nowrap}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:1px 7px;border-radius:3px;font-size:11px;font-weight:600;border:1px solid;white-space:nowrap;line-height:16px}
+.b-ok{color:#2f7d4f;border-color:#bfe0cb;background:#eef8f1}
+.b-warn{color:#b7791f;border-color:#ecd9a8;background:#fbf5e6}
+.b-bad{color:#b3362e;border-color:#efc2bd;background:#fdeeec}
+.b-mute{color:#8a867d;border-color:#dedbd3;background:#f3f1ec}
+.b-acc{color:#1f6f9f;border-color:#bcd7e8;background:#e8f1f7}
+.b-ink{color:#1c1b18;border-color:#cfccc4;background:#f3f1ec}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:4px;border:1px solid #cfccc4;background:#ffffff;color:#1c1b18;font:inherit;font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap}
+.btn:hover{background:#f3f1ec}
+.btn.pri{background:#1f6f9f;border-color:#1f6f9f;color:#ffffff}.btn.pri:hover{background:#16506f}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.sm{height:26px;padding:0 10px;font-size:12px}
+.chip{display:inline-flex;align-items:center;height:24px;padding:0 10px;border-radius:12px;border:1px solid #cfccc4;background:#ffffff;font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.chip.on{background:#1c1b18;color:#ffffff;border-color:#1c1b18}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:5px 12px;font-size:12.5px}
+.kv .k{color:#5d5a53}
+.field{display:flex;flex-direction:column;gap:5px}
+.lbl{font-size:10.5px;font-weight:600;color:#5d5a53;letter-spacing:.05em;text-transform:uppercase}
+.inp{height:30px;border:1px solid #cfccc4;border-radius:4px;padding:0 8px;font:inherit;background:#ffffff;box-sizing:border-box}
+.hint{color:#8a867d;font-size:12px}
+.foot{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#ffffff;border-top:1px solid #dedbd3;flex:none}
+.stat{display:flex;flex-direction:column;gap:2px;padding:0 18px 0 0;margin-right:18px;border-right:1px solid #ebe8e1}
+.stat:last-child{border-right:0}
+.stat .v{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:20px;font-weight:600;line-height:1.1}
+.stat .l{font-size:11px;color:#8a867d;text-transform:uppercase;letter-spacing:.05em}
+.callout{border:1px solid #dedbd3;border-radius:4px;padding:10px 12px;background:#faf9f6;font-size:12.5px}
+.callout.warn{border-color:#ecd9a8;background:#fbf5e6}
+.callout.bad{border-color:#efc2bd;background:#fdeeec}
+.trust{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.trust .box{border:1px solid #dedbd3;border-radius:4px;padding:10px 12px;background:#ffffff}
+.trust .h{font-size:10.5px;font-weight:600;color:#5d5a53;letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px}
+.code{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;background:#1c1b18;color:#e9e6de;padding:10px 12px;border-radius:4px;white-space:pre;overflow:auto;line-height:1.5}
+.bar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:#ebe8e1}
+.seg{height:100%}
+.grid{display:grid;gap:4px}
+.cell{height:30px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid transparent;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cell.sel{outline:2px solid #1c1b18;outline-offset:1px}
+.c-ok{background:#eef8f1;color:#2f7d4f;border-color:#bfe0cb}
+.c-warn{background:#fbf5e6;color:#b7791f;border-color:#ecd9a8}
+.c-bad{background:#fdeeec;color:#b3362e;border-color:#efc2bd}
+.c-mute{background:#f3f1ec;color:#8a867d;border-color:#dedbd3}
+.c-head{background:transparent;color:#5d5a53;font-size:10.5px;cursor:default;font-weight:600;letter-spacing:.04em}
+.legend{display:flex;gap:14px;font-size:12px;color:#5d5a53;align-items:center}
+.sw{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
+</style>
+</helmet>
+<div class="app">
+<div class="nav"><span class="brand">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step done"><span class="n">1</span><span>New</span></div><div class="step done"><span class="n">2</span><span>Plan</span></div><div class="step done"><span class="n">3</span><span>Run</span></div><div class="step cur"><span class="n">4</span><span>Model</span></div><div class="step"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span></div></div>
+
+<div class="main">
+  <div class="col" style="flex:1">
+    <div class="panel" style="flex:none">
+      <div class="ph"><span>Can I trust this model in my simulation?</span><span class="sub">the same text opens report.md</span></div>
+      <div class="pb">
+        <div class="trust">
+          <div class="box"><div class="h">Valid range</div><div class="kv" style="grid-template-columns:70px 1fr"><span class="k">load A</span><span class="mono">2 µ – 1 mA</span><span class="k">load B</span><span class="mono">20 µ – 4 mA</span><span class="k">temp</span><span class="mono">−40 – 125 °C (continuous)</span><span class="k">freq</span><span class="mono">≤ 20 GHz</span><span class="k">corners</span><span class="mono">tt · ss · ff</span><span class="k">VSET</span><span class="mono">3</span></div></div>
+          <div class="box"><div class="h">Usable, not sign-off</div><div style="display:flex;flex-direction:column;gap:6px"><span class="badge b-warn"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5l6 11H2z"></path><path d="M8 7v3"></path><path d="M8 12.2v.1"></path></svg> EN power-up ramp</span><span class="hint">Rails and biases rise with the measured time. Use the real LDO for startup sign-off.</span></div></div>
+          <div class="box"><div class="h">Not run</div><div style="display:flex;flex-direction:column;gap:6px"><span class="badge b-bad"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"></path></svg> tran_load_off.B @ ss / 125 °C</span><span class="hint">Failed twice. load_en.B at that cell uses the ss / 25 °C fit; overshoot there is unverified.</span></div></div>
+          <div class="box"><div class="h">HB health check</div><div style="display:flex;flex-direction:column;gap:6px"><span class="badge b-ok"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg> first-step residual 7.7e-3</span><span class="hint">Driven HB, every large-signal term toggled one at a time; none exceeds 10× the all-off residual.</span></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="panel" style="flex:1">
+      <div class="ph"><span>Grade per port and cell</span><span class="sub">worst block in the cell · click a cell</span></div>
+      <div class="pb">
+        <div class="grid" style="grid-template-columns:110px repeat(9, minmax(0,1fr))">
+          <div class="cell c-head"></div>
+          <sc-for list="{{ heads }}" as="h" hint-placeholder-count="9"><div class="cell c-head">{{ h }}</div></sc-for>
+          <sc-for list="{{ rows }}" as="r" hint-placeholder-count="4">
+            <div class="cell c-head" style="justify-content:flex-start;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;color:#1c1b18">{{ r.name }}</div>
+            <sc-for list="{{ r.cells }}" as="c" hint-placeholder-count="9"><div class="cell {{ c.cls }}" onClick="{{ c.pick }}">{{ c.label }}</div></sc-for>
+          </sc-for>
+        </div>
+        <div class="legend" style="margin-top:12px"><span><span class="badge b-ok">OK</span> all blocks within tolerance</span><span><span class="badge b-warn">MARG</span> one block near its limit</span><span><span class="badge b-bad">FAIL</span> block outside tolerance</span><span><span class="badge b-mute">N/R</span> data not run</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="col" style="flex:0 0 560px">
+    <div class="panel" style="flex:1">
+      <div class="ph"><span><span class="mono">{{ selPort }}</span> · {{ selCell }}</span><span class="badge {{ selCls }}">{{ selGrade }}</span></div>
+      <div class="pb" style="display:flex;flex-direction:column;gap:12px">
+        <table class="t">
+          <thead><tr><th>Block</th><th>Metric</th><th class="num" style="text-align:right">Model vs GT</th><th class="num" style="text-align:right">Limit</th><th>Grade</th></tr></thead>
+          <tbody><sc-for list="{{ blocks }}" as="b" hint-placeholder-count="5"><tr class="click {{ b.cls }}" onClick="{{ b.pick }}"><td class="mono">{{ b.name }}</td><td class="hint">{{ b.metric }}</td><td class="num">{{ b.val }}</td><td class="num" style="color:#8a867d">{{ b.lim }}</td><td><span class="badge {{ b.gcls }}">{{ b.grade }}</span></td></tr></sc-for></tbody>
+        </table>
+        <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600">{{ chartTitle }}</span><div style="display:flex;gap:6px"><span class="chip {{ viewChartCls }}" onClick="{{ showChart }}">Chart</span><span class="chip {{ viewTableCls }}" onClick="{{ showTable }}">Table</span></div></div>
+        <sc-if value="{{ isChart }}" hint-placeholder-val="{{ true }}">
+          <div style="position:relative">
+            <svg width="520" height="250" viewBox="0 0 520 250" style="display:block;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:10.5px" onMouseMove="{{ hover }}" onMouseLeave="{{ unhover }}">
+              <sc-for list="{{ gridV }}" as="g" hint-placeholder-count="9"><line x1="{{ g.x }}" x2="{{ g.x }}" y1="14" y2="216" stroke="#ebe8e1"></line><text x="{{ g.x }}" y="232" text-anchor="middle" fill="#8a867d">{{ g.t }}</text></sc-for>
+              <sc-for list="{{ gridH }}" as="g" hint-placeholder-count="4"><line x1="48" x2="512" y1="{{ g.y }}" y2="{{ g.y }}" stroke="#ebe8e1"></line><text x="42" y="{{ g.ty }}" text-anchor="end" fill="#8a867d">{{ g.t }}</text></sc-for>
+              <line x1="48" x2="512" y1="216" y2="216" stroke="#cfccc4"></line>
+              <path d="{{ pathGT }}" fill="none" stroke="#b45309" stroke-width="2" stroke-linejoin="round"></path>
+              <path d="{{ pathModel }}" fill="none" stroke="#1f6f9f" stroke-width="2" stroke-linejoin="round"></path>
+              <text x="{{ lblGT.x }}" y="{{ lblGT.y }}" fill="#5d5a53" font-family="'IBM Plex Sans',system-ui,sans-serif" font-size="11">ground truth</text>
+              <text x="{{ lblM.x }}" y="{{ lblM.y }}" fill="#5d5a53" font-family="'IBM Plex Sans',system-ui,sans-serif" font-size="11">model</text>
+              <sc-if value="{{ hov.on }}" hint-placeholder-val="{{ false }}">
+                <line x1="{{ hov.x }}" x2="{{ hov.x }}" y1="14" y2="216" stroke="#8a867d" stroke-dasharray="3 3"></line>
+                <circle cx="{{ hov.x }}" cy="{{ hov.yg }}" r="4" fill="#b45309" stroke="#ffffff" stroke-width="2"></circle>
+                <circle cx="{{ hov.x }}" cy="{{ hov.ym }}" r="4" fill="#1f6f9f" stroke="#ffffff" stroke-width="2"></circle>
+              </sc-if>
+            </svg>
+            <sc-if value="{{ hov.on }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:{{ hov.tx }}px;top:8px;background:#1c1b18;color:#e9e6de;padding:6px 8px;border-radius:4px;font-size:11px;white-space:nowrap;pointer-events:none" class="mono">{{ hov.text }}</div></sc-if>
+          </div>
+          <div class="legend"><span><span class="sw" style="background:#b45309"></span>ground truth (transistor PMU)</span><span><span class="sw" style="background:#1f6f9f"></span>model (.va)</span><span class="hint">|Zout| in Ω vs frequency · log–log · hover for values</span></div>
+        </sc-if>
+        <sc-if value="{{ isTable }}" hint-placeholder-val="{{ false }}">
+          <table class="t"><thead><tr><th>Frequency</th><th class="num" style="text-align:right">GT |Z| Ω</th><th class="num" style="text-align:right">Model |Z| Ω</th><th class="num" style="text-align:right">Δ dB</th></tr></thead>
+          <tbody><sc-for list="{{ tableRows }}" as="t" hint-placeholder-count="8"><tr><td class="mono">{{ t.f }}</td><td class="num">{{ t.g }}</td><td class="num">{{ t.m }}</td><td class="num">{{ t.d }}</td></tr></sc-for></tbody></table>
+        </sc-if>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="foot"><span class="hint">Fit from dataset <span class="mono">a91f…c3</span> · 271 of 282 runs consumed · 11 cached</span><div style="display:flex;gap:8px"><button class="btn">Open report.md</button><button class="btn pri">Deliver <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"></path></svg></button></div></div>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{}'>
+
+const CORNERS = ['tt','ss','ff'], TEMPS = ['−40','25','125'];
+const PORTS = ['VDD0P8_A','VDD0P8_B','IB_PTAT','IB_CONST'];
+const GRADE = {};  // default OK; exceptions:
+GRADE['VDD0P8_B|ss|125'] = 'nr'; GRADE['VDD0P8_B|ss|25'] = 'warn'; GRADE['VDD0P8_B|ff|−40'] = 'warn'; GRADE['IB_CONST|ff|−40'] = 'warn'; GRADE['VDD0P8_A|ss|125'] = 'warn';
+const CLS = { ok:'c-ok', warn:'c-warn', bad:'c-bad', nr:'c-mute' }, LBL = { ok:'OK', warn:'MARG', bad:'FAIL', nr:'N/R' }, BADGE = { ok:'b-ok', warn:'b-warn', bad:'b-bad', nr:'b-mute' };
+function blocksFor(port, g){
+  const rail = port.startsWith('VDD');
+  if (rail) return [
+    {name:'dc', metric:'vout error · dropout', val:'0.8 mV · 2 %', lim:'5 mV · 10 %', grade:'ok'},
+    {name:'zout', metric:'|Z| RMS · peak freq', val: g==='warn' ? '1.9 dB · 12 %' : '0.31 dB · 3 %', lim:'2 dB · 15 %', grade: g==='warn' ? 'warn' : 'ok'},
+    {name:'psrr', metric:'|H| RMS · phase', val:'0.9 dB · 4°', lim:'2 dB · 15°', grade:'ok'},
+    {name:'noise', metric:'PSD log-RMS', val:'0.4 dB', lim:'1.5 dB', grade:'ok'},
+    {name:'load_en', metric:'dip · overshoot', val: g==='nr' ? '3.8 % · not run' : '3.8 % · 6.1 %', lim:'10 % · 10 %', grade: g==='nr' ? 'nr' : 'ok'},
+  ];
+  return [
+    {name:'idc', metric:'I error · PTAT slope', val:'0.6 % · 1.1 %', lim:'2 % · 5 %', grade:'ok'},
+    {name:'yout', metric:'gds · Cout', val:'3 % · 5 %', lim:'10 % · 20 %', grade:'ok'},
+    {name:'noise', metric:'PSD log-RMS', val: g==='warn' ? '1.3 dB' : '0.5 dB', lim:'1.5 dB', grade: g==='warn' ? 'warn' : 'ok'},
+    {name:'psrr', metric:'|H| RMS', val:'1.0 dB', lim:'2 dB', grade:'ok'},
+  ];
+}
+// |Zout| model vs GT: 2nd-order peak + cap roll-off, log axes
+function zGT(f){ const w = f/1.78e6; const peak = 388/Math.sqrt(Math.pow(1-w*w,2)+Math.pow(w/2.6,2)); const lf = 23/Math.sqrt(1+Math.pow(f/4e4,2)); const hf = 1/(2*Math.PI*f*1e-9) + 0.4; return Math.min(peak+lf, 1e4) + (f>3e7 ? 0 : 0) + (f>1e8 ? hf : 0); }
+function zModel(f){ const w = f/1.74e6; const peak = 380/Math.sqrt(Math.pow(1-w*w,2)+Math.pow(w/2.5,2)); const lf = 23.4/Math.sqrt(1+Math.pow(f/4.2e4,2)); const hf = 1/(2*Math.PI*f*1e-9) + 0.4; return Math.min(peak+lf, 1e4) + (f>1e8 ? hf : 0); }
+const FMIN = 1e1, FMAX = 1e10, ZMIN = 0.1, ZMAX = 1e3;
+const X0 = 48, X1 = 512, Y0 = 14, Y1 = 216;
+const xOf = f => X0 + (X1-X0) * (Math.log10(f)-1)/9;
+const yOf = z => Y1 - (Y1-Y0) * (Math.log10(Math.max(z, ZMIN))-Math.log10(ZMIN))/4;
+const FS = []; for (let i = 0; i <= 180; i++) FS.push(Math.pow(10, 1 + i/20));
+const pathOf = fn => FS.map((f,i) => (i?'L':'M') + xOf(f).toFixed(1) + ' ' + yOf(fn(f)).toFixed(1)).join(' ');
+const fmtF = f => f >= 1e9 ? (f/1e9).toFixed(f>=1e10?0:1)+' GHz' : f >= 1e6 ? (f/1e6).toFixed(0)+' MHz' : f >= 1e3 ? (f/1e3).toFixed(0)+' kHz' : f.toFixed(0)+' Hz';
+class Component extends DCLogic {
+  constructor(p){ super(p); this.state = { port:'VDD0P8_B', corner:'ss', temp:'25', block:'zout', view:'chart', hov:null }; }
+  renderVals(){
+    const s = this.state;
+    const heads = []; CORNERS.forEach(c => TEMPS.forEach(t => heads.push(c + ' ' + t)));
+    const rows = PORTS.map(p => ({ name:p, cells: CORNERS.flatMap(c => TEMPS.map(t => { const g = GRADE[p+'|'+c+'|'+t] || 'ok'; const sel = s.port===p && s.corner===c && s.temp===t;
+      return { cls: CLS[g] + (sel ? ' sel' : ''), label: LBL[g], pick: () => this.setState({port:p, corner:c, temp:t, hov:null}) }; })) }));
+    const g = GRADE[s.port+'|'+s.corner+'|'+s.temp] || 'ok';
+    const blocks = blocksFor(s.port, g).map(b => ({ ...b, gcls: BADGE[b.grade], grade: LBL[b.grade], cls: b.name === s.block ? 'sel' : '', pick: () => this.setState({block:b.name}) }));
+    const hov = s.hov ? { on:true, x: s.hov.x, yg: yOf(zGT(s.hov.f)), ym: yOf(zModel(s.hov.f)), tx: Math.min(s.hov.x + 10, 360), text: fmtF(s.hov.f) + '  GT ' + zGT(s.hov.f).toFixed(1) + ' Ω  model ' + zModel(s.hov.f).toFixed(1) + ' Ω' } : { on:false };
+    const gridV = [1e1,1e2,1e3,1e4,1e5,1e6,1e7,1e8,1e9,1e10].map(f => ({ x: xOf(f).toFixed(1), t: f>=1e9 ? (f/1e9)+'G' : f>=1e6 ? (f/1e6)+'M' : f>=1e3 ? (f/1e3)+'k' : f }));
+    const gridH = [0.1,1,10,100,1000].map(z => ({ y: yOf(z).toFixed(1), ty: (yOf(z)+3.5).toFixed(1), t: z>=1 ? z : z }));
+    const tableRows = [1e2,1e4,1e5,1e6,1.78e6,1e7,1e8,1e9,1e10].map(f => { const gv = zGT(f), mv = zModel(f); return { f: fmtF(f), g: gv.toFixed(2), m: mv.toFixed(2), d: (20*Math.log10(mv/gv)).toFixed(2) }; });
+    return { heads, rows, blocks, selPort: s.port, selCell: s.corner + ' / ' + s.temp + ' °C / VSET 3', selGrade: LBL[g], selCls: BADGE[g],
+      chartTitle: s.block === 'zout' ? '|Zout| · load ' + (s.port === 'VDD0P8_A' ? '500 µA' : '2 mA') : s.block + ' · model vs ground truth',
+      isChart: s.view === 'chart', isTable: s.view === 'table', viewChartCls: s.view === 'chart' ? 'on' : '', viewTableCls: s.view === 'table' ? 'on' : '',
+      showChart: () => this.setState({view:'chart'}), showTable: () => this.setState({view:'table'}),
+      pathGT: pathOf(zGT), pathModel: pathOf(zModel), lblGT: { x: xOf(3e3).toFixed(0), y: (yOf(zGT(3e3)) - 8).toFixed(0) }, lblM: { x: xOf(2e8).toFixed(0), y: (yOf(zModel(2e8)) + 14).toFixed(0) },
+      hov, gridV, gridH, tableRows,
+      hover: (e) => { const svg = e.currentTarget, r = svg.getBoundingClientRect(); const x = Math.max(X0, Math.min(X1, e.clientX - r.left)); const f = Math.pow(10, 1 + 9*(x-X0)/(X1-X0)); this.setState({hov:{x: x.toFixed(1), f}}); },
+      unhover: () => this.setState({hov:null}) };
+  }
+}
+
+</script>
+</body>
+</html>

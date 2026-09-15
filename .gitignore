@@ -17,3 +17,4 @@ dist/
 build/
 .pmukit-denylist
 .DS_Store
+design/pmukit-screens.html

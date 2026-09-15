@@ -1,0 +1,162 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap">
+  <style>
+body{margin:0;background:#f7f6f3;color:#1c1b18;font-family:'IBM Plex Sans',system-ui,'Segoe UI',sans-serif;font-size:13px;line-height:1.45}
+a{color:#1f6f9f}a:hover{color:#16506f}
+.mono{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace}
+.app{width:1440px;height:900px;display:flex;flex-direction:column;background:#f7f6f3;overflow:hidden;box-sizing:border-box}
+.nav{height:48px;display:flex;align-items:center;gap:8px;padding:0 20px;background:#ffffff;border-bottom:1px solid #dedbd3;flex:none}
+.brand{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-weight:600;font-size:14px;letter-spacing:.02em}
+.proj{color:#5d5a53;font-size:12.5px;padding-left:12px;border-left:1px solid #dedbd3;margin-left:4px}
+.steps{display:flex;gap:2px;margin-left:28px}
+.step{display:flex;align-items:center;gap:8px;padding:5px 12px;border-radius:4px;color:#8a867d;font-size:12.5px}
+.step.cur{background:#e8f1f7;color:#1f6f9f;font-weight:600}
+.step .n{width:18px;height:18px;border-radius:50%;border:1px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:11px;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.step.done{color:#1c1b18}.step.done .n{background:#1c1b18;color:#fff;border-color:#1c1b18}
+.navr{margin-left:auto;display:flex;gap:16px;color:#8a867d;font-size:12px}
+.main{flex:1;display:flex;gap:16px;padding:16px 20px;min-height:0}
+.col{display:flex;flex-direction:column;gap:16px;min-height:0}
+.panel{background:#ffffff;border:1px solid #dedbd3;border-radius:4px;display:flex;flex-direction:column;min-height:0}
+.ph{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 14px;border-bottom:1px solid #ebe8e1;font-weight:600;font-size:13px;flex:none}
+.ph .sub{font-weight:400;color:#8a867d;font-size:12px}
+.pb{padding:12px 14px;overflow:auto;flex:1;min-height:0}
+table.t{width:100%;border-collapse:collapse;font-size:12.5px}
+.t th{text-align:left;font-weight:600;color:#5d5a53;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid #dedbd3;white-space:nowrap}
+.t td{padding:6px 8px;border-bottom:1px solid #ebe8e1;vertical-align:middle}
+.t tr.sel td{background:#e8f1f7}
+.t tr.click{cursor:pointer}.t tr.click:hover td{background:#f3f1ec}
+.t tr.sel.click:hover td{background:#e8f1f7}
+.num{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.id{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;white-space:nowrap}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:1px 7px;border-radius:3px;font-size:11px;font-weight:600;border:1px solid;white-space:nowrap;line-height:16px}
+.b-ok{color:#2f7d4f;border-color:#bfe0cb;background:#eef8f1}
+.b-warn{color:#b7791f;border-color:#ecd9a8;background:#fbf5e6}
+.b-bad{color:#b3362e;border-color:#efc2bd;background:#fdeeec}
+.b-mute{color:#8a867d;border-color:#dedbd3;background:#f3f1ec}
+.b-acc{color:#1f6f9f;border-color:#bcd7e8;background:#e8f1f7}
+.b-ink{color:#1c1b18;border-color:#cfccc4;background:#f3f1ec}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:4px;border:1px solid #cfccc4;background:#ffffff;color:#1c1b18;font:inherit;font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap}
+.btn:hover{background:#f3f1ec}
+.btn.pri{background:#1f6f9f;border-color:#1f6f9f;color:#ffffff}.btn.pri:hover{background:#16506f}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.sm{height:26px;padding:0 10px;font-size:12px}
+.chip{display:inline-flex;align-items:center;height:24px;padding:0 10px;border-radius:12px;border:1px solid #cfccc4;background:#ffffff;font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.chip.on{background:#1c1b18;color:#ffffff;border-color:#1c1b18}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:5px 12px;font-size:12.5px}
+.kv .k{color:#5d5a53}
+.field{display:flex;flex-direction:column;gap:5px}
+.lbl{font-size:10.5px;font-weight:600;color:#5d5a53;letter-spacing:.05em;text-transform:uppercase}
+.inp{height:30px;border:1px solid #cfccc4;border-radius:4px;padding:0 8px;font:inherit;background:#ffffff;box-sizing:border-box}
+.hint{color:#8a867d;font-size:12px}
+.foot{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#ffffff;border-top:1px solid #dedbd3;flex:none}
+.stat{display:flex;flex-direction:column;gap:2px;padding:0 18px 0 0;margin-right:18px;border-right:1px solid #ebe8e1}
+.stat:last-child{border-right:0}
+.stat .v{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:20px;font-weight:600;line-height:1.1}
+.stat .l{font-size:11px;color:#8a867d;text-transform:uppercase;letter-spacing:.05em}
+.callout{border:1px solid #dedbd3;border-radius:4px;padding:10px 12px;background:#faf9f6;font-size:12.5px}
+.callout.warn{border-color:#ecd9a8;background:#fbf5e6}
+.callout.bad{border-color:#efc2bd;background:#fdeeec}
+.trust{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.trust .box{border:1px solid #dedbd3;border-radius:4px;padding:10px 12px;background:#ffffff}
+.trust .h{font-size:10.5px;font-weight:600;color:#5d5a53;letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px}
+.code{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;background:#1c1b18;color:#e9e6de;padding:10px 12px;border-radius:4px;white-space:pre;overflow:auto;line-height:1.5}
+.bar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:#ebe8e1}
+.seg{height:100%}
+.grid{display:grid;gap:4px}
+.cell{height:30px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid transparent;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cell.sel{outline:2px solid #1c1b18;outline-offset:1px}
+.c-ok{background:#eef8f1;color:#2f7d4f;border-color:#bfe0cb}
+.c-warn{background:#fbf5e6;color:#b7791f;border-color:#ecd9a8}
+.c-bad{background:#fdeeec;color:#b3362e;border-color:#efc2bd}
+.c-mute{background:#f3f1ec;color:#8a867d;border-color:#dedbd3}
+.c-head{background:transparent;color:#5d5a53;font-size:10.5px;cursor:default;font-weight:600;letter-spacing:.04em}
+.legend{display:flex;gap:14px;font-size:12px;color:#5d5a53;align-items:center}
+.sw{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
+</style>
+</helmet>
+<div class="app">
+<div class="nav"><span class="brand">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step done"><span class="n">1</span><span>New</span></div><div class="step cur"><span class="n">2</span><span>Plan</span></div><div class="step"><span class="n">3</span><span>Run</span></div><div class="step"><span class="n">4</span><span>Model</span></div><div class="step"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span></div></div>
+
+<div class="main">
+  <div class="col" style="flex:1">
+    <div class="panel" style="flex:none">
+      <div class="pb" style="display:flex;padding:14px 18px">
+        <div class="stat"><span class="v">9</span><span class="l">cells</span></div>
+        <div class="stat"><span class="v">{{ runs }}</span><span class="l">runs</span></div>
+        <div class="stat"><span class="v">{{ cpuh }}</span><span class="l">CPU-h est.</span></div>
+        <div class="stat"><span class="v">0</span><span class="l">cached</span></div>
+        <div class="stat"><span class="v">{{ nGroups }}</span><span class="l">groups on</span></div>
+        <div style="margin-left:auto;align-self:center" class="hint">Estimates from the last 3 projects on this queue. Groups merge runs by AC superposition; nothing here is duplicated.</div>
+      </div>
+    </div>
+    <div class="panel" style="flex:1">
+      <div class="ph"><span>What will run, and why</span><span class="sub">click a row for the reason · untick to see what you lose</span></div>
+      <div class="pb" style="padding:0">
+        <table class="t">
+          <thead><tr><th style="width:28px"></th><th>Analysis</th><th>Ports</th><th class="num" style="text-align:right">Runs</th><th>Stimulus</th><th>Reads</th><th>Feeds</th><th class="num" style="text-align:right">CPU-h</th></tr></thead>
+          <tbody>
+            <sc-for list="{{ groups }}" as="g" hint-placeholder-count="12">
+              <tr class="click {{ g.cls }}" onClick="{{ g.select }}"><td><input type="checkbox" checked="{{ g.on }}" onChange="{{ g.toggle }}" onClick="{{ g.stop }}"></td><td class="mono" style="{{ g.style }}">{{ g.an }}</td><td class="mono" style="color:#5d5a53">{{ g.ports }}</td><td class="num">{{ g.runs }}</td><td class="hint">{{ g.stim }}</td><td class="mono" style="font-size:11.5px">{{ g.reads }}</td><td style="font-size:12px">{{ g.feeds }}</td><td class="num">{{ g.h }}</td></tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col" style="flex:0 0 380px">
+    <div class="panel" style="flex:1">
+      <div class="ph"><span>Why this run exists</span><span class="sub mono">{{ sel.an }}</span></div>
+      <div class="pb" style="display:flex;flex-direction:column;gap:14px">
+        <div style="font-size:13px;line-height:1.55">{{ sel.why }}</div>
+        <div class="kv"><span class="k">Feeds</span><span class="mono">{{ sel.feeds }}</span><span class="k">Runs</span><span class="mono">{{ sel.runs }} across 9 cells</span><span class="k">Stimulus</span><span class="mono">{{ sel.stim }}</span></div>
+        <div><div class="lbl" style="margin-bottom:6px">If you skip it</div><div class="callout warn">{{ sel.cons }}</div></div>
+      </div>
+    </div>
+    <div class="panel" style="flex:none">
+      <div class="ph"><span>Consequences of current selection</span></div>
+      <div class="pb">
+        <sc-if value="{{ allOn }}" hint-placeholder-val="{{ true }}"><div style="display:flex;gap:8px;align-items:center;color:#2f7d4f"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg><span>Every block in the model spec has its data. Nothing will be reported as NOT RUN.</span></div></sc-if>
+        <sc-if value="{{ anyOff }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <sc-for list="{{ offList }}" as="o" hint-placeholder-count="1"><div class="callout bad" style="display:flex;gap:8px"><span style="color:#b3362e;margin-top:2px"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"></path></svg></span><div><b class="mono">{{ o.an }}</b> — {{ o.cons }}</div></div></sc-for>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="foot"><span class="hint">Queue <span class="mono">rf_short</span> · 8 CPU per job · resume: runs already in the ledger are skipped</span><div style="display:flex;gap:8px"><button class="btn">Export plan (CSV)</button><button class="btn pri"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l9-5.5z"></path></svg> Submit {{ runs }} runs</button></div></div>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{}'>
+const GROUPS = [{"id": "g1", "an": "dc_load", "ports": "VDD0P8_A, VDD0P8_B", "runs": 18, "stim": "IL_* swept 0 → 2×on", "reads": "vout(load)", "feeds": "vout table · dropout · ilimit", "h": 0.3, "why": "Every rail's DC level at every load and corner. Also finds dropout and the current limit, which the hot corner can cut by 8×.", "cons": "Rail DC unknown → nothing else can be fit. Cannot be skipped."}, {"id": "g2", "an": "dc_temp", "ports": "all ports", "runs": 3, "stim": "temp −40 → 125 step 5", "reads": "vout(T), idc(T)", "feeds": "continuous-T tables", "h": 0.2, "why": "One sweep per corner makes temperature continuous inside the .va, so you can set any temperature, not just the three points.", "cons": "Model valid only at −40/25/125 exactly; any other temperature is refused."}, {"id": "g3", "an": "dc_iv", "ports": "IB_PTAT, IB_CONST", "runs": 18, "stim": "VB_* swept 0 → 1.0 V", "reads": "I(Vpin)", "feeds": "idc · compliance · gds", "h": 0.3, "why": "Bias current vs pin voltage: the PTAT slope goes straight into KVCO drift, and the knee sets the compliance range.", "cons": "Bias ports emitted as ideal current sources with no knee and no temperature slope."}, {"id": "g4", "an": "ac · inject VDD0P8_A", "ports": "VDD0P8_A", "runs": 36, "stim": "IL_VDD0P8_A ac=1 (9 cells × 4 loads)", "reads": "Zout.A", "feeds": "zout.A ladder", "h": 1.8, "why": "Output impedance vs frequency. Your block's current ripple × Zout = rail ripple = AM-PM.", "cons": "zout.A NOT RUN → rail A emitted as an ideal voltage source; spur/pushing paths missing."}, {"id": "g5", "an": "ac · inject VDD0P8_B", "ports": "VDD0P8_B", "runs": 36, "stim": "IL_VDD0P8_B ac=1", "reads": "Zout.B", "feeds": "zout.B ladder", "h": 1.8, "why": "Same as above for rail B.", "cons": "zout.B NOT RUN → rail B emitted as an ideal voltage source."}, {"id": "g6", "an": "ac · inject AVDD1P0", "ports": "all outputs", "runs": 36, "stim": "VS_AVDD1P0 ac=1", "reads": "PSRR.A, PSRR.B, psrr.IB_PTAT, psrr.IB_CONST", "feeds": "4 psrr blocks", "h": 1.8, "why": "One supply injection is read at every output at once (AC superposition), so 4 transfers cost 1 run per cell.", "cons": "All 4 PSRR blocks NOT RUN → supply ripple never reaches the outputs in your sim."}, {"id": "g7", "an": "noise VDD0P8_A", "ports": "VDD0P8_A", "runs": 36, "stim": "—", "reads": "noise_v.A", "feeds": "noise.A (white + 1/f + shaped)", "h": 2.4, "why": "Rail voltage noise; supply pushing turns it into phase noise. Depends on load, hence 4 loads.", "cons": "noise.A NOT RUN → rail A is noiseless in .noise / pnoise / hbnoise. Report will be red."}, {"id": "g8", "an": "noise VDD0P8_B", "ports": "VDD0P8_B", "runs": 36, "stim": "—", "reads": "noise_v.B", "feeds": "noise.B", "h": 2.4, "why": "Same for rail B.", "cons": "noise.B NOT RUN → rail B noiseless."}, {"id": "g9", "an": "noise IB_*", "ports": "IB_PTAT, IB_CONST", "runs": 18, "stim": "—", "reads": "noise_i.PTAT, noise_i.CONST", "feeds": "bias noise blocks", "h": 1.2, "why": "Bias current noise up-converts into VCO phase noise and is often the dominant term.", "cons": "Bias ports noiseless → phase noise optimistic by up to 10 dB close-in."}, {"id": "g10", "an": "tran · load-EN A", "ports": "VDD0P8_A", "runs": 18, "stim": "IL_VDD0P8_A pwl 2 µ ↔ 500 µ, 2 ns edge", "reads": "tran_load_on.A, tran_load_off.A", "feeds": "load_en.A (large-signal, opt-in)", "h": 1.6, "why": "Your block switching on: how deep the rail dips and how it overshoots on switch-off (the LDO cannot sink).", "cons": "load_en.A not fit → rail A stays linear; dips under-predicted for mA steps. HB deliverable unaffected."}, {"id": "g11", "an": "tran · load-EN B", "ports": "VDD0P8_B", "runs": 18, "stim": "IL_VDD0P8_B pwl 20 µ ↔ 2 m, 2 ns edge", "reads": "tran_load_on.B, tran_load_off.B", "feeds": "load_en.B", "h": 1.6, "why": "Same for rail B.", "cons": "load_en.B not fit → rail B stays linear."}, {"id": "g12", "an": "tran · EN", "ports": "all outputs", "runs": 9, "stim": "VEN_EN 0 → 1", "reads": "tran_en", "feeds": "en.ramp (usable, not sign-off)", "h": 0.9, "why": "Rails and biases come up with the measured rise time so a testbench that toggles EN does not blow up. Startup sign-off still uses the real LDO.", "cons": "EN pin emitted as an instant switch."}];
+class Component extends DCLogic {
+  constructor(p){ super(p); const on = {}; GROUPS.forEach(g => on[g.id] = true); this.state = { on, sel: 'g7' }; }
+  renderVals(){
+    const s = this.state;
+    const groups = GROUPS.map(g => ({ ...g, on: !!s.on[g.id], cls: s.sel === g.id ? 'sel' : '',
+      style: s.on[g.id] ? '' : 'text-decoration:line-through;color:#8a867d',
+      select: () => this.setState({sel: g.id}),
+      toggle: () => { const o = Object.assign({}, s.on); o[g.id] = !o[g.id]; this.setState({on:o}); },
+      stop: (e) => { if (e && e.stopPropagation) e.stopPropagation(); } }));
+    const onG = groups.filter(g => g.on);
+    const runs = onG.reduce((a,g) => a + g.runs, 0), cpuh = onG.reduce((a,g) => a + g.h, 0);
+    const offList = groups.filter(g => !g.on);
+    return { groups, runs, cpuh: cpuh.toFixed(1), nGroups: onG.length + ' / ' + GROUPS.length,
+      sel: GROUPS.find(g => g.id === s.sel), allOn: offList.length === 0, anyOff: offList.length > 0, offList };
+  }
+}
+
+</script>
+</body>
+</html>
