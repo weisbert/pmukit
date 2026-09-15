@@ -159,3 +159,38 @@ $ pmukit plan demo_pmu --off noise:noise_v.a --off tran_en
   NOT RUN: en ramp -- i_overshoot, i_rise, t_delay, t_rise, v_overshoot
 ```
   `pmukit help <screen>` = 帮助面板同一段文字（**验收条件，已锁**）。**20 个测试**。
+
+## 附加交付：搭台子的模板 + `pmukit check`（契约 0a 里那条「配套一个 schematic 模板」）
+
+开工单的首跑清单第 2 条是「用约定命名搭真 PMU 台子，导出一份网表」—— 这是明早最容易出错的一步，
+所以补齐了三件东西：
+
+- **`docs/TESTBENCH.md`** —— 一页纸：命名约定表、方向为什么不能挑反、从 Virtuoso 生成、导出后怎么校、
+  以及四个常见坑（源挂反 / include 没 `section=` / 引脚名≠网名 / 分地读不到）。
+- **`tools/templates/tb_convention.scs`** —— 带注释的文本模板，可以直接改。**它自己要过校验器**（有测试锁住）。
+- **`pmukit check <netlist> --pmu-inst NAME`** —— 开项目之前的预检：打印引脚表、点名认不出的引脚和原因、
+  列出会被剥掉的分析语句，并检查「有没有带 `section=` 的 include」「有没有 `VSET`」「有没有电源源」
+  「有没有任何可建模端口」。**创建任何东西之前就能知道台子对不对。**
+- **`tools/skill/pmukit_tb.il`** —— 给定 PMU 的 cell 和一张角色表，在 Virtuoso 里生成带约定命名源的
+  测试台 schematic（另有 `pmukitPreviewTB` 干跑，什么都不碰）。
+  ⚠️ **桌面没有 Virtuoso，这个 `.il` 没被执行过**；它按老仓 `pmu_top_symbol.il` / `ldo_cellview.il`
+  的既有写法写成，第一次真跑是在用户的会话里。**判据是 `pmukit check`，不是这个脚本**；手连一个台子同样合格。
+
+实测（对模板本身）：
+```
+$ pmukit check tools/templates/tb_convention.scs --pmu-inst PMU_TOP
+  ... 引脚表 ...
+  note: subcircuit 'PMU_CELL' is not defined in this netlist -- pin names fall back to the
+        connected net names, and per-pin grounds cannot be read from the wiring
+  no role: TESTMODE
+Convention OK.                                                     exit=0
+
+$ pmukit check <把 IL_ 挂成 vsource 的版本> --pmu-inst PMU_TOP
+What : source 'IL_VDD0P8_A' on net 'VDD0P8_A' is a vsource, but the 'IL_' prefix means 'rail',
+       which must be an isource.
+Why  : The read math depends on the master: a rail is read as a voltage under a current
+       injection (isource), a bias is read as a probe current under a voltage drive (vsource).
+Do   : Change 'IL_VDD0P8_A' to an isource.                          exit=2
+```
+顺手修掉一个真 bug：黑盒 include（网表里没有 PMU 子电路定义）时，引脚名回退成网名，
+三个都接 `0` 的地引脚会在字典里**互相覆盖成一个**。现在按位置去重（`0`、`0#8`、`0#9`）并有测试锁住。

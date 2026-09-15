@@ -6,6 +6,7 @@ netlist.
 """
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -239,3 +240,56 @@ def test_every_screen_has_a_command(capsys):
         if not cmd:
             continue
         assert cmd.split()[1] in verbs, (screen, cmd)
+
+
+# ------------------------------------------------------- `pmukit check`, the pre-flight
+TEMPLATE = REPO / "tools" / "templates" / "tb_convention.scs"
+
+
+def test_check_accepts_the_shipped_template(capsys):
+    """The template we hand the user must itself pass the checker."""
+    assert cli.main(["check", str(TEMPLATE), "--pmu-inst", "PMU_TOP"]) == 0
+    out = capsys.readouterr().out
+    assert "Convention OK" in out
+    assert "rail" in out and "bias" in out and "supply" in out
+
+
+def test_check_names_the_unclassifiable_pin_and_how_to_fix_it(capsys):
+    cli.main(["check", str(TEMPLATE), "--pmu-inst", "PMU_TOP"])
+    out = capsys.readouterr().out
+    assert "no role: TESTMODE" in out
+    assert "IL_<pin>  isource" in out and "VB_<pin>  vsource" in out
+
+
+def test_check_flags_a_missing_section(tmp_path, capsys):
+    bad = tmp_path / "nosection.scs"
+    # strip section= from EVERY include -- one surviving section is enough to make corners
+    text = re.sub(r"\s+section=\S+", "", TEMPLATE.read_text(encoding="utf-8"))
+    bad.write_text(text, encoding="utf-8", newline="\n")
+    assert cli.main(["check", str(bad), "--pmu-inst", "PMU_TOP"]) == 1
+    assert "cannot generate process corners" in capsys.readouterr().out
+
+
+def test_check_refuses_a_rail_driven_by_a_voltage_source(tmp_path, capsys):
+    bad = tmp_path / "wrongmaster.scs"
+    bad.write_text(TEMPLATE.read_text(encoding="utf-8").replace(
+        "IL_VDD0P8_A (VDD0P8_A 0) isource dc=500u",
+        "IL_VDD0P8_A (VDD0P8_A 0) vsource dc=0.8"), encoding="utf-8", newline="\n")
+    assert cli.main(["check", str(bad), "--pmu-inst", "PMU_TOP"]) == 2
+    err = capsys.readouterr().err
+    assert "must be an isource" in err and "Do   :" in err
+
+
+def test_check_json_is_machine_readable(capsys):
+    cli.main(["--json", "check", str(TEMPLATE), "--pmu-inst", "PMU_TOP"])
+    d = json.loads(capsys.readouterr().out)
+    assert d["problems"] == [] and d["unclassified"] == ["TESTMODE"]
+    assert d["sections"]["pdk/toplevel.scs"] == "tt"
+
+
+def test_duplicate_ground_pins_do_not_collapse(capsys):
+    """Three grounds all tied to 0 must stay three pins, not one."""
+    cli.main(["--json", "check", str(TEMPLATE), "--pmu-inst", "PMU_TOP"])
+    pins = json.loads(capsys.readouterr().out)["pins"]
+    grounds = [k for k, v in pins.items() if v["is_ground"]]
+    assert len(grounds) == 3, grounds

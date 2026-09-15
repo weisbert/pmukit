@@ -236,6 +236,62 @@ def cmd_pins(a) -> int:
     return 0
 
 
+def cmd_check(a) -> int:
+    """Read a netlist and say whether it satisfies the convention -- before any project exists.
+
+    This is the first thing to run after exporting a testbench: it prints the pin table pmukit
+    would read, names every pin it cannot classify and why, and says what is missing for corners
+    and codes. It creates nothing and changes nothing.
+    """
+    nlmod = _need("netlist", "check")
+    nl = nlmod.Netlist.from_file(a.netlist)
+    table = nl.scan(a.pmu_inst)
+    problems: list[str] = []
+    if not any(s for _f, s in nl.includes()):
+        problems.append("no `include ... section=` line -- pmukit cannot generate process corners; "
+                        "add section=<nominal> to the PDK include")
+    if "VSET" not in nl.parameters():
+        problems.append("no `parameters VSET=<n>` -- pmukit cannot switch output codes; add it if "
+                        "your PMU has one (harmless to omit if it does not)")
+    if not table.of_role("supply"):
+        problems.append("no VS_* supply source -- PSRR cannot be characterized and the bias I-V "
+                        "sweep has no upper limit")
+    if not table.of_role("rail") and not table.of_role("bias"):
+        problems.append("no IL_* rail and no VB_* bias source -- there is nothing to model")
+    payload = {"pins": table.to_dict(), "unclassified": [p.name for p in table.unclassified()],
+               "notes": table.notes, "problems": problems,
+               "sections": dict(nl.includes()), "parameters": nl.parameters(),
+               "analyses_to_strip": table.analyses}
+    if a.json:
+        _out(payload, True)
+        return 0 if not problems else 1
+    print(_pin_table_text(table))
+    for n in table.notes:
+        print(f"\n  note: {n}")
+    unclassified = payload["unclassified"]
+    if unclassified:
+        print(f"\n  no role: {', '.join(unclassified)}")
+        print("  That is fine for test and configuration pins -- mark them `ignore`.")
+        print("  A pin you want modelled needs a convention source:")
+        print("    IL_<pin>  isource   a voltage rail  (dc = your typical load)")
+        print("    VB_<pin>  vsource   a current bias  (dc = the pin's operating voltage)")
+        print("    VS_<pin>  vsource   a supply        (dc = nominal)")
+        print("    VEN_<pin> vsource   the enable")
+    if table.analyses:
+        print(f"\n  {len(table.analyses)} analysis statement(s) will be stripped; "
+              "pmukit writes its own.")
+    if problems:
+        print()
+        for pr in problems:
+            print(f"  PROBLEM: {pr}")
+        print("\nSee docs/TESTBENCH.md.")
+        return 1
+    print("\nConvention OK.  Next:")
+    print(f"  {PROG} new <project> --netlist {a.netlist} --pmu-inst {a.pmu_inst} \\")
+    print("      --corners tt,ss,ff --temps -40,25,125 --load <rail>=<on_a>,<off_a>")
+    return 0
+
+
 def cmd_config(a) -> int:
     cfgmod = _need("config", "config")
     cfg, der, d = _load(a.project)
@@ -539,6 +595,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", action="append", help="PIN=model|stub|ignore (repeatable)")
     p.add_argument("--note", help="what state the testbench was in (goes into provenance)")
     p.set_defaults(fn=cmd_new)
+
+    p = sub.add_parser("check", help="does this netlist satisfy the convention? (creates nothing)")
+    p.add_argument("netlist")
+    p.add_argument("--pmu-inst", required=True)
+    p.set_defaults(fn=cmd_check)
 
     p = sub.add_parser("pins", help="the pin table read out of the testbench")
     p.add_argument("project")

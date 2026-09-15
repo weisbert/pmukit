@@ -19,3 +19,4 @@ include = ["pmukit*"]
 testpaths = ["tests"]
 addopts = "-q"
 filterwarnings = ["error::DeprecationWarning:pmukit.*"]
+markers = ["vm: needs the Linux VM with Spectre (skipped when ssh is unreachable)"]
