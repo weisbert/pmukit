@@ -305,3 +305,71 @@ $ pmukit plan demo_pmu --submit && pmukit run demo_pmu --engine fake
 ⇒ **明早 `git clone` → `bash apply` → `pmukit ui` 这条路在真 Linux 上走通了**，
 而且不依赖桌面的 numpy/scipy 版本。
 （`tests/` 不进包，所以盒子上没有 fixture —— 这是故意的，fixture 将来可能含真测量。）
+
+## M5 — 运行器 + 导入器（**真 Spectre 跑通**）
+
+`pmukit/psf.py` + `binpsf.py`（从老仓搬：二进制大端 PSF、**窗口化瞬态**的逆向读法、
+`groups=1` 的定长跨步读法）、`pmukit/runner.py`、`pmukit/backends/{spectre_ssh,dry_run,fake,donau_alps}.py`、
+`pmukit/importer.py`。
+
+**验收 1 —— `fake` 全流程**：19 组 / 242 run / 4 个负载态 →
+`done=242 failed=0 cached=0`，数据集 29 个变量、`{declared: 314, filled: 314, missing: 0, never_run: 0}`。
+
+**验收 2 —— `spectre_ssh` 在 VM 上真跑**：
+```
+ssh -o BatchMode=yes ewave-vm 'tcsh -c "source ~/.cshrc; cd ~/pmukit_work/7d25e460b63c;
+    spectre -64 input.scs -format psfascii -raw raw +log spectre.log -E"'
+```
+AC：`done cpu=0.185s`，`acz.ac: freq[161] 10..1e9`；导出的 `ac_zout.VDD0P8_A`（tt/27C/500 µA）
+= 6.41661 Ω @10 Hz → **39.47 Ω 峰 @1 MHz（+43.90°）** → 0.3018 Ω @1 GHz。
+噪声：`nz.noise: freq[141]`，`noise_v` = 5.934e-11 V²/Hz @10 Hz（√ = 7.703 µV/√Hz）。
+**原始 `V(VDD0P8_A)` 是 −6.41661** —— 导入器从网表读出 `IL_VDD0P8_A ... isource` 才把符号摆正，
+这正是「所有比值在 Python 里算」那道防火墙的价值。
+
+**验收 3 —— resume**：重跑 → `skipped_cached=242 / 242`。
+**验收 4 —— 导入已有结果**：把 242 个目录里的 132 个当成用户自己在 ADE 跑过的，喂给一个新项目 →
+`filled: 132, unmatched: 0, still_to_run: 110`，台账 `imported=132` 且带 `source_path`。
+**验收 5 —— `donau_alps` 干跑**：命令逐个 flag 断言成老仓验证过的形状。**从未真执行过，明早在盒子上是第一次。**
+**验收 6**：`760 passed, 6 skipped`；需要仿真器的测试在 `available()` 为假时干净跳过。
+
+## M6 — 拟合器（**数学从老仓搬，不重写**）
+
+`pmukit/fit/{zout,psrr,noise,dc,bias,load_en,en,identifiability}.py` + 驱动。
+每个块两个函数：`fit(...)` 和**纯解析的 `predict(...)`** —— Model 屏的曲线和分数由它算，
+**`pmukit/fit/` 里任何模块都不许起进程**（有测试断言不出现 `subprocess`/`os.system`/`multiprocessing`）。
+
+**参数回收（对解析生成的真值，planted vs fitted）**：
+
+| 用例 | planted | fitted |
+|---|---|---|
+| Zout 单支 | Ra .05 / La 2 µH / Cout 1 nF / esr .5 | .0500 / 2.02 µH / 0.990 nF / .5000 —— **0.064 dB** |
+| Zout 梯形 | Ra .1，(24 µH‖60 Ω)，(2 µH‖120 Ω) | .100000 / 24.000 µH / 60.000 / 2.0000 µH / 120.00 —— **0.020 dB** |
+| PSRR 复极点 | pc_w0 7.5398e6，Q 3.0，G1 −6e-3 @20 kHz | 7.5402e6 / 3.003 / −5.92e-3 @20.09 kHz —— **0.011 dB / 0.1°** |
+| 噪声（2 个负载） | white 1/2 nA，flicker 30/50 nA，拐点 1 k/100 k | 996.3 Hz / 99.97 kHz，幅度差 0.1 % —— **0.002 dB** |
+| 偏置 idc | 500 nA，PTAT 1.2 nA/°C，vhi .85 | 500.0 nA / 1.2000 nA/°C / .8500 —— **0.58 %** |
+| EN 斜坡 | 1 µs / 2 µs / 32 mV | 0.993 µs / 2.02 µs / 33.2 mV —— **0.26 %** |
+
+**识别性门是真的会说话**：单支 Zout 那一例里 `Rpl`（1e5 Ω，几乎不阻尼）被点名为**不可辨识**，
+而不是返回一个自信的错数。
+
+**被拒方法的诱惑，记录在案**：合成单支轨上 branch B 被误挂（因为 `Cout` 提取差几个百分点），
+代理差点给 keep-best 门加一条残差下限 —— 那正是 METHODOLOGY 里 REJECTED 的那类修补。
+数值没动，改成把测试挪到可辨识的用例上。
+
+**规模**：3 角 × 3 温度 × 2 档 × 4 负载 = 214 个 `BlockFit`，**11 秒**。
+
+## 两个被 M5/M6 暴露出来的真问题（在我自己的模块里，已修）
+
+1. **反着接的约定源认不出来**：`VB_<pin> (0 <pin>)`（节点顺序反了）过去会让引脚变成"无法归类"。
+   人手画的时候很容易这么接。现在：正着接的优先；反着接的**照样认出来**，但在 `Pin.src_reversed`
+   上记一笔并在 notes 里说明极性是反的（导入器本来就从工作点符号判方向）。一条网上有两个约定源 → 报错点名。
+2. **简单角写法会"改过头"**：契约说简单写法 `["tt","ss"]` 时"所有带 `section=` 的 include 统一替换"。
+   字面执行会把 RC skew 文件（section 叫 typ/ss/ff）也改成 `tt`，Spectre 直接
+   `No section found with name 'tt'`。现在**读得到的 include 才按它真有的 section 改**，
+   读不到的照契约改但**明说"没验证过"**，并把每个角实际落到哪几个文件报给 Plan 屏：
+```
+- pdk/rc.scs: left at section=typ; it declares {ff, ss, typ} and has no 'tt'.
+  Use the composite corner form to set it explicitly.
+- corner 'ss' set on 2 includes: pdk/toplevel.scs=ss, pdk/rc.scs=ss
+- corner 'ff' set on 2 includes: pdk/toplevel.scs=ff, pdk/rc.scs=ff
+```
