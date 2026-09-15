@@ -32,14 +32,29 @@
 | M3 | **合成 PMU 真件**：用老仓 `ground_truth/ldo_gt.lib` 类电路搭一个 Spectre 语法的 `PMU_DEMO`（两条 LDO 轨 + 两个电流镜偏置含 PTAT + EN），BSIM3 level 49；老仓 14 个合成 LDO 转 Spectre 语法进 `tests/fixtures/` | 本地 Spectre 跑 DC/AC/noise 各一遍通过 |
 | M4 | `plan.py`：规格 × 配置 → 计划，AC 叠加合并，每条 run 带 `feeds` + `recipe`，成本估计可插拔 | PMU_DEMO 配置得到完整计划；去掉一组能列出 NOT RUN 的块 |
 | M5 | `runner.py`：一个接口，后端 `spectre_local`（真）、`dry_run`、`fake`、`donau_alps`（搬 `cluster/`，dry-run）；按 run_id 缓存 resume；写台账；PSF 读取搬 `binpsf.py`/`psf.py` | PMU_DEMO 全计划在本地 Spectre 跑完落成契约 2 数据集；重跑全部 `skipped_cached`；台账每条有 `consumes` |
-| M6 | 拟合器 `fit/`：从老仓搬 dc 表、Zout 梯（AAA 种子 + 最小二乘）、PSRR 实/复极点段、噪声（白 + 1/f + Lorentzian）、偏置 idc(T)/PTAT、yout、电流噪声、电流 PSRR、load-EN assist（`fit_iassist` 的 ODE 路径）、EN 上升；**每个工艺角分开拟合，温度在角内连续**（DC 量用扫温表，AC/noise 按离散温度点，参数随 T 插值只在单调量上做）| PMU_DEMO 每角每块有分数；识别性门（cond/σ）能报出不可辨识参数 |
+| M6 | 拟合器 `fit/`：从老仓搬 dc 表、Zout 梯（AAA 种子 + 最小二乘）、PSRR 实/复极点段、噪声（白 + 1/f + Lorentzian）、偏置 idc(T)/PTAT、yout、电流噪声、电流 PSRR、load-EN assist（`fit_iassist` 的 ODE 路径）、EN 上升；**每个块带解析 `predict(f | T | t)`，Model 屏的模型曲线和分数由它算，不跑仿真**；**每个工艺角分开拟合，温度在角内连续**（DC 量用扫温表，AC/noise 按离散温度点，参数随 T 插值只在单调量上做）| PMU_DEMO 每角每块有分数；识别性门（cond/σ）能报出不可辨识参数 |
 | M7 | 发射器 `emit/`：单一 `.va` 发射器（stub 端口发成直流值理想源并在头部列出）（搬 `emit_pmu_model` 的 HB 安全原语 + 分地 + `hb_robust` 默认开），每角一份 `.va` + `.scs` section 库，温度连续，`vset` / `load_en_*` 实例参数，溯源头，`envelope.json`，`report.md`；**数值条件 lint**：每个元件在 `f_max`（配置的 care_up_to_hz）处的导纳动态范围超 1e6 报警 | 三个角的 `.va` 本地 Spectre 编译 0 error；AC 对比拟合值 ≤ 0.01 dB |
 | M8 | 验证 `verify/`：每角分块分数 → 绿黄红；**HB 体检门**：本地 Spectre 驱动式 HB，逐项开关非线性项，记录首步残差，任一项比全关高 10 倍即不通过；系统级：一个简单振荡器台 + 模型做自治 HB 收敛；合成 LDO 回归：14 个 GT 各跑一遍全流程，分数写进 `tests/regression/baseline.json` | PMU_DEMO 全绿或有解释；HB 体检结果进 report；回归基线文件生成 |
 | M9 | 摘要：导出按优先级裁、丢的点名、分段；`digest import` 重建子集；`reproduce --from-digest` 重拟合并逐数字对比 | 导出→导入→reproduce 全流程在 PMU_DEMO 上 round-trip |
-| M10 | web 壳 `pmukit/server.py` + `web/index.html`：八块画板照 `design/*.dc.html` 重写成普通 HTML/JS；右键菜单、帮助面板、命令回显、四种状态、Ctrl Z；`--demo` 假数据 + 真项目模式 | `python -m pmukit ui` 打开后能从 New 到 Deliver 走通 PMU_DEMO；冒烟测试每条路由 200；node 语法检查通过 |
+| M10 | web 壳 `pmukit/server.py` + `web/index.html`：八块画板照 `design/*.dc.html` 重写成**单页应用**（一个页面，按项目状态切屏）；路由见下节接口表；长任务在后台线程，页面轮询台账 + 日志流式；项目状态落 `state.json`（当前步、三问、配置历史供 Ctrl Z）；右键菜单、帮助面板、命令回显、四种状态；`--demo` 假数据 + 真项目模式；服务器只绑 127.0.0.1，`--host` 可改 | **`tests/test_e2e_api.py`：不开浏览器，按顺序调接口 new → parse → plan → run(spectre_local) → fit → verify → deliver → digest，PMU_DEMO 全程通过**；每条路由冒烟 200；node 语法检查通过 |
 | M11 | CLI `pmukit new/plan/run/status/fit/verify/report/deliver/digest/reproduce/list/open/help`，命令回显条的每一条都真能跑 | `pmukit help <screen>` = 帮助面板同一段文字 |
 | M12 | 盒子打包 `deploy/`：从老仓搬 `package.py` / `audit_wheels.py` / `apply` / `update.sh`，去 Qt，manylinux2014 (glibc 2.17) 轮子离线包，`bash apply` 装到 tcsh 盒子，`pmukit ui` 一条命令起服务并打印 URL | 本机 dry-run 打包成功，轮子审计全过，安装脚本 LF |
 | M13 | `BUILD_REPORT.md`：做了什么、测试数、跳过了什么和为什么、**明天在盒子上要首跑的清单**（Donau 提交、真 PSF 读取、真网表前缀识别、web 在盒子 Firefox）、明早先看什么 | 一页，数字只在表里 |
+
+## 接口表（M10 的契约；页面只通过这些路由拿数据）
+
+所有响应 JSON；错误统一 `{"error": {"what","why","do","where"}}`（四段式）。长任务返回 `{"job": id}`，进度从台账或 `/api/jobs/<id>` 轮询。
+
+| 屏 | 路由 | 作用 |
+|---|---|---|
+| Home | `GET /api/projects` · `POST /api/projects` · `GET /api/machine` · `GET /api/deliverables/diff?a=&b=` | 项目列表与新建；引擎/队列/PDK/license 探测（各带超时）；交付版本对比 |
+| New | `POST /api/p/<n>/netlist`（上传或路径）· `GET /api/p/<n>/pins` · `PUT /api/p/<n>/pins/<pin>`（role/fate）· `GET/PUT /api/p/<n>/config` · `GET /api/p/<n>/config/derived` · `POST /api/p/<n>/config/undo` · `POST /api/p/<n>/measure-load` | 解析网表、引脚表、model/stub/ignore、三问、推导配置、撤销、从网表量负载 |
+| Plan | `GET /api/p/<n>/plan` · `PUT /api/p/<n>/plan/groups`（勾选）· `GET /api/p/<n>/plan/consequences` · `GET /api/p/<n>/plan/runs?group=` · `GET /api/p/<n>/runs/<id>/recipe` · `POST /api/p/<n>/submit` | 计划、勾选、后果、每组的 run 列表、配方、提交 |
+| Run | `GET /api/p/<n>/ledger?status=` · `GET /api/p/<n>/runs/<id>` · `GET /api/p/<n>/runs/<id>/log`（流式）· `POST /api/p/<n>/runs/<id>/{retry,skip,kill}` · `POST /api/p/<n>/fit` | 台账、详情、日志流、动作、拟合 |
+| Model | `GET /api/p/<n>/model/summary`（信任四格）· `GET /api/p/<n>/model/grades` · `GET /api/p/<n>/model/cell?port=&corner=&temp=` · `GET /api/p/<n>/model/curve?port=&cell=&block=`（GT + predict 同频点）· `POST /api/p/<n>/verify` | 顶部四格、格子、分块、曲线、HB 体检 |
+| Deliver | `POST /api/p/<n>/deliver` · `GET /api/p/<n>/deliverables` · `GET /api/p/<n>/deliverables/<stamp>/files/<name>` | 交付、列表、文件预览 |
+| Digest | `GET /api/p/<n>/digest/blocks` · `POST /api/p/<n>/digest`（blocks, budget → text, parts）· `POST /api/digest/import` | 块清单与大小、导出、导入 |
+| 全局 | `GET /api/help/<screen>` · `GET /api/cli?screen=&state=` · `GET /api/jobs/<id>` | 帮助文本、命令回显、后台任务进度 |
 
 ## 并行建议
 
