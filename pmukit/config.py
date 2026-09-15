@@ -630,6 +630,13 @@ def derive(cfg: ProjectConfig, pins=None, site=None) -> DerivedConfig:
     d.dc_temp_sweep = {
         "start_c": lo, "stop_c": hi, "step_c": step, "rule": rule,
         "n_points": (1 if span <= 0 else int(math.floor(span / step)) + 1),
+        # A continuous sweep needs two ends. With one declared temperature there is nothing to
+        # sweep, so the run is not generated and the parameters that read it are reported NOT RUN
+        # -- inventing a temperature range the user did not ask for would be worse.
+        "run": span > 0,
+        "reason": ("" if span > 0 else
+                   f"only one temperature declared ({lo:g} C); a continuous temperature sweep "
+                   "needs at least two"),
         "provenance": f"min/max(config.temps_c) with {rule} -- DC quantities get a continuous "
                       "temperature sweep (0b row: discrete temperatures + continuous DC sweep)",
     }
@@ -739,8 +746,15 @@ def _load_grid(cfg: ProjectConfig, rail: str, rail_info: Mapping) -> dict:
     if ml is None:
         dc = rail_info.get("i_typ_a")
         points = [float(dc)] if _is_num(dc) else []
+        # The load SWEEP (for load regulation, dropout and the current limit) still has to span a
+        # range even when only one operating point is known: 0 .. 2x the testbench's own load.
+        # That range comes from the netlist, not from a guess about the user's module.
+        sweep = ({"start_a": 0.0, "stop_a": 2.0 * float(dc), "n_points": 9,
+                  "provenance": f"my_load not declared -> 0 .. 2x the {rail_info.get('src') or 'IL_'} "
+                                "source dc, so load regulation and dropout are still measured"}
+                 if _is_num(dc) else {})
         return {"points_a": points, "load_en": False, "reason": "my_load not declared",
-                "events": [],
+                "events": [], "sweep": sweep,
                 "provenance": f"the {rail_info.get('src') or 'IL_'} source dc is the only load "
                               "point; my_load not declared -> no load-EN event, reported as NOT RUN "
                               "(0b row: load characterization grid)"}
@@ -762,8 +776,10 @@ def _load_grid(cfg: ProjectConfig, rail: str, rail_info: Mapping) -> dict:
                    "edge_s": edge}]
     else:
         reason = f"my_load[{rail!r}].switches is false"
+    sweep = {"start_a": min(points), "stop_a": max(points), "n_points": max(len(points), 9),
+             "provenance": "the declared load grid's own span"} if len(points) > 1 else {}
     return {"points_a": points, "load_en": bool(ml.switches), "reason": reason, "events": events,
-            "provenance": prov}
+            "sweep": sweep, "provenance": prov}
 
 
 def _transient_window(cfg: ProjectConfig, rail: str, load: Mapping) -> dict:

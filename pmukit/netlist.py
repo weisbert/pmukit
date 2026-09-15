@@ -234,14 +234,15 @@ class Pin:
     gnd: str | None = None      # the ground PIN this one returns to (split grounds)
     gnd_from: str = ""          # how the ground was determined
     is_ground: bool = False
+    src_reversed: bool = False  # the convention source is wired (gnd pin) instead of (pin gnd)
     fate: str = "model"         # model | stub | ignore
     reason: str = ""            # why unclassifiable
 
     def to_dict(self) -> dict:
         return {"role": self.role, "net": self.net, "index": self.index, "gnd": self.gnd,
                 "gnd_from": self.gnd_from, "src": self.src, "src_master": self.src_master,
-                "dc": self.dc, "fate": self.fate, "is_ground": self.is_ground,
-                "reason": self.reason}
+                "src_reversed": self.src_reversed, "dc": self.dc, "fate": self.fate,
+                "is_ground": self.is_ground, "reason": self.reason}
 
 
 @dataclass
@@ -378,10 +379,18 @@ class Netlist:
 
     # ---- role scanning (the convention)
     def _sources_by_net(self) -> dict[str, list[tuple]]:
+        """net -> [(name, nodes, master, rest, position)] for every source TOUCHING that net.
+
+        `position` is the node index the net sits at. A convention source is normally written
+        `IL_<pin> (<pin> 0)`, i.e. position 0; but `(0 <pin>)` is an easy thing for a person to
+        draw, and silently failing to classify the pin would be worse than noting the polarity.
+        """
         by_net: dict[str, list[tuple]] = collections.defaultdict(list)
         for name, nodes, master, rest in self.instances(0):
-            if master in ("isource", "vsource") and nodes:
-                by_net[nodes[0]].append((name, nodes, master, rest))
+            if master not in ("isource", "vsource"):
+                continue
+            for pos, net in enumerate(nodes[:2]):
+                by_net[net].append((name, nodes, master, rest, pos))
         return by_net
 
     def scan(self, pmu_inst: str, *, ports: dict[str, str] | None = None) -> PinTable:
@@ -435,8 +444,21 @@ class Netlist:
                 p.fate = "ignore"
                 table.pins[pin] = p
                 continue
-            # role from the source-name prefix on this pin's net
-            for src_name, _snodes, src_master, rest in by_net.get(net, []):
+            # role from the source-name prefix on this pin's net; a source wired the normal way
+            # round (the pin is its first node) always wins over a reversed one.
+            candidates = [c for c in by_net.get(net, [])
+                          if any(c[0].startswith(pre) for pre in PREFIX_ROLE)]
+            candidates.sort(key=lambda c: c[4])
+            if len({c[0] for c in candidates if c[4] == 0}) > 1:
+                names = sorted({c[0] for c in candidates if c[4] == 0})
+                raise PmuError(
+                    what=f"net '{net}' is driven by more than one convention source: "
+                         f"{', '.join(names)}.",
+                    why="A pin's role is read from the ONE source the convention puts on it; with "
+                        "two, the role and the dc value are both ambiguous.",
+                    do=[f"Keep one of {', '.join(names)} and rename or remove the others."],
+                    where=f"{self.path or 'netlist'}: net {net}")
+            for src_name, _snodes, src_master, rest, pos in candidates:
                 role = next((r for pre, r in PREFIX_ROLE.items() if src_name.startswith(pre)), None)
                 if role is None:
                     continue
@@ -456,6 +478,12 @@ class Netlist:
                             f"Or rename it if it is not the {role} source for this pin."],
                         where=f"{self.path or 'netlist'}: instance {src_name}")
                 p.role, p.src, p.src_master = role, src_name, src_master
+                p.src_reversed = pos != 0
+                if p.src_reversed:
+                    table.notes.append(
+                        f"{src_name} is wired ({_snodes[0]} {net}), not ({net} {_snodes[0]}) -- "
+                        "the pin is classified, but its polarity is inverted relative to the "
+                        "convention; the importer detects the sign from the operating point")
                 p.dc = parse_number(_params_of(rest[1:]).get("dc", ""))
                 break
             if p.role == "none":
@@ -688,6 +716,79 @@ class Netlist:
                     "Add `section=<nominal>` to the PDK include in your testbench and re-export."],
                 where=self.path or "(netlist text)")
         return self
+
+    # Cache of {resolved include path: set of section names}. A PDK toplevel is read once per
+    # process, not once per planned run.
+    _SECTION_CACHE: dict[str, set[str] | None] = {}
+
+    def _resolve_include(self, file_path: str) -> pathlib.Path | None:
+        """Where an include line's path actually points, relative to this netlist."""
+        p = pathlib.Path(file_path)
+        bases = []
+        if self.path:
+            bases.append(pathlib.Path(self.path).resolve().parent)
+        bases.append(pathlib.Path.cwd())
+        for base in ([p] if p.is_absolute() else [b / p for b in bases]):
+            if base.is_file():
+                return base
+        return None
+
+    def section_names(self, file_path: str) -> set[str] | None:
+        """The `section <name>` declarations inside an included file, or None if unreadable.
+
+        None is not a failure: a PDK often lives behind a path this machine cannot see. The
+        caller treats None as "cannot verify" and says so, rather than assuming either way.
+        """
+        resolved = self._resolve_include(file_path)
+        if resolved is None:
+            return None
+        key = str(resolved)
+        if key in Netlist._SECTION_CACHE:
+            return Netlist._SECTION_CACHE[key]
+        try:
+            text = resolved.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            Netlist._SECTION_CACHE[key] = None
+            return None
+        names = {m.group(1) for m in re.finditer(r"^\s*section\s+([A-Za-z0-9_.+-]+)", text,
+                                                 re.MULTILINE)}
+        Netlist._SECTION_CACHE[key] = names or None
+        return names or None
+
+    def set_section_all(self, section: str) -> list[str]:
+        """The simple-corner rewrite: point every include that HAS this section at it.
+
+        CONTRACTS.md 0a says a simple corner name rewrites "every include line carrying a
+        `section=`". Taken literally that also rewrites a second include whose sections are named
+        differently (an RC skew file with typ/ss/ff has no `tt`), and Spectre then fails with
+        "No section found with name 'tt'" -- which is how this was found. So: when the included
+        file can be read, rewrite it only if it really declares that section; when it cannot be
+        read, rewrite it (the contract's behaviour) and say the choice was unverified.
+
+        Returns the notes worth showing the user.
+        """
+        notes: list[str] = []
+        applied: list[str] = []
+        for file_path, current in self.includes():
+            if current is None:
+                continue
+            names = self.section_names(file_path)
+            if names is None:
+                self.set_section(file_path, section)
+                applied.append(f"{file_path}={section}")
+                notes.append(f"{file_path}: rewrote section={current} -> {section} without being "
+                             "able to read the file, so the section was not verified to exist")
+            elif section in names:
+                self.set_section(file_path, section)
+                applied.append(f"{file_path}={section}")
+            else:
+                notes.append(f"{file_path}: left at section={current}; it declares "
+                             f"{{{', '.join(sorted(names))}}} and has no '{section}'. Use the "
+                             "composite corner form to set it explicitly.")
+        if len(applied) > 1:
+            notes.append(f"corner '{section}' set on {len(applied)} includes: "
+                         f"{', '.join(applied)}")
+        return notes
 
     def set_temperature(self, temp_c: float) -> "Netlist":
         """`options temp=<c>` -- replaced in place when present, otherwise added at the top."""

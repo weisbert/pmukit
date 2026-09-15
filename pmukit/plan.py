@@ -378,16 +378,17 @@ def _iterate_axes(axes, analysis: str, derived: DerivedConfig,
                     yield corner, temp, code, state
 
 
-def _apply_corner(nl: Netlist, cfg: ProjectConfig, corner: str) -> None:
-    """Rewrite the PDK include section(s) for one corner name."""
+def _apply_corner(nl: Netlist, cfg: ProjectConfig, corner: str) -> list[str]:
+    """Rewrite the PDK include section(s) for one corner name. Returns any notes."""
     sections = cfg.corner_sections(corner)
     if isinstance(sections, dict):               # composite: each include file named explicitly
         for file_pattern, section in sections.items():
             nl.set_section(file_pattern, section)
-        return
-    for file_name, current in nl.includes():     # simple: every include carrying a section=
-        if current is not None:
-            nl.set_section(file_name, sections)
+        return []
+    # Simple corner: every include that actually HAS this section. See Netlist.set_section_all --
+    # rewriting a second include whose sections are named differently is what made Spectre say
+    # "No section found with name 'tt'".
+    return nl.set_section_all(sections)
 
 
 def _base_variant(base: Netlist, cfg: ProjectConfig, derived: DerivedConfig, corner: str,
@@ -395,7 +396,7 @@ def _base_variant(base: Netlist, cfg: ProjectConfig, derived: DerivedConfig, cor
     """The netlist every run of one cell starts from: corner, VSET, temperature, load state."""
     nl = base.copy()
     nl.edits.clear()
-    _apply_corner(nl, cfg, corner)
+    _apply_corner(nl, cfg, corner)      # notes surface once, via compile_plan's dry pass
     nl.set_param("VSET", code)
     if temp is not None:
         nl.set_temperature(float(temp))
@@ -408,6 +409,16 @@ def _base_variant(base: Netlist, cfg: ProjectConfig, derived: DerivedConfig, cor
 
 
 def _sweep_clause(start: float, stop: float, n: int) -> str:
+    """A DC sweep statement. Spectre refuses start == stop (SPECTRE-16108), and rightly: a sweep
+    over one point is not a sweep. The caller must skip the run instead of emitting one."""
+    if not (stop > start):
+        raise PmuError(
+            what=f"a DC sweep would run from {start:g} to {stop:g} -- one point, not a sweep.",
+            why="Spectre refuses a sweep whose stop equals its start (SPECTRE-16108); the axis "
+                "this run was generated for has only one value.",
+            do=["Declare a second value on that axis (a load range, or a second temperature).",
+                "Or accept it: the parameters that read this sweep are reported NOT RUN."],
+            where="plan compiler")
     return f"start={start:g} stop={stop:g} lin={int(n)}"
 
 
@@ -460,10 +471,20 @@ def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
                 "VEN_ source prefixes."],
             where=f"derived config for {cfg.project}")
 
+    # One dry corner rewrite up front, so a section mismatch is reported ONCE on the Plan screen
+    # instead of silently, per run, hundreds of times.
+    plan_notes: list[str] = []
+    for corner in ((derived.process or {}).get("corners") or []):
+        probe = netlist.copy()
+        probe.edits.clear()
+        for note in _apply_corner(probe, cfg, corner):
+            if note not in plan_notes:
+                plan_notes.append(note)
+
     states = load_states(derived)
     nominal = nominal_state(states, derived)
     plan = Plan(project=cfg.project, config_sha=cfg.sha(), derived_sha=derived.sha(),
-                states=states)
+                states=states, notes=plan_notes)
 
     modeled_rails = list(derived.rails)
     modeled_biases = list(derived.biases)
@@ -499,6 +520,13 @@ def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
         stim = _stimulus_for(obs, port, derived, supplies, enables)
         if stim is None:
             plan.notes.append(f"{obs} for {port}: no source to drive it, skipped")
+            continue
+        if analysis == "dc_temp" and not (derived.dc_temp_sweep or {}).get("run", True):
+            note = ("dc_temp not planned: "
+                    + str((derived.dc_temp_sweep or {}).get("reason", "nothing to sweep"))
+                    + " -- the parameters that read it will be reported NOT RUN")
+            if note not in plan.notes:
+                plan.notes.append(note)
             continue
         key = (analysis, stim)
         f = families.get(key)
@@ -622,9 +650,11 @@ def _build_run(cfg: ProjectConfig, derived: DerivedConfig, base: Netlist, b: dic
 
     elif analysis == "dc_load":
         port = b["reads"][0].split(".", 1)[1]
+        sw = (derived.loads.get(port) or {}).get("sweep") or {}
         grid = list((derived.loads.get(port) or {}).get("points_a", []))
-        lo, hi = (min(grid), max(grid)) if grid else (0.0, 1e-3)
-        n = max(len(grid), 5)
+        lo = float(sw.get("start_a", min(grid) if grid else 0.0))
+        hi = float(sw.get("stop_a", max(grid) if grid else 1e-3))
+        n = int(sw.get("n_points", max(len(grid), 9)))
         analyses.append(f"{DC_NAME} dc dev={stim} param=dc {_sweep_clause(lo, hi, n)}")
         saves.append((derived.rails.get(port) or {}).get("net") or port)
 

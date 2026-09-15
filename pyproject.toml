@@ -15,6 +15,11 @@ pmukit = "pmukit.cli:main"
 [tool.setuptools.packages.find]
 include = ["pmukit*"]
 
+[tool.setuptools.package-data]
+# The web shell is ONE inlined HTML file shipped inside the package. Without this an installed
+# wheel serves nothing and `pmukit ui` comes up blank on the box.
+"pmukit.web" = ["index.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

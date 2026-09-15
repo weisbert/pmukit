@@ -152,9 +152,11 @@ def test_fake_end_to_end_fills_the_dataset(workshop):
     z = np.asarray(ds.get("ac_zout.a", {"process": "tt", "temp_c": 27.0, "vset": 3,
                                         "load_a": ds.axis("load_a", "a")[0]}))
     assert np.all(z.real > 0)                  # Zout of a stable rail is passive
-    # a parallel RLC reads exactly R on resonance and is inductive well below it
-    assert np.max(np.abs(z)) == pytest.approx(MODEL["zout"]["r_ohm"], rel=0.15)
-    assert abs(z[0]) < 1e-3                    # 2*pi*10 Hz * 1 uH
+    # (R_dc + jwL) || (esr + 1/jwC): a FINITE DC floor, a resonance well above it, an ESR floor
+    # above that. Finite at DC is load-bearing -- see the comment on MODEL["zout"].
+    assert abs(z[0]) == pytest.approx(MODEL["zout"]["r_dc_ohm"], rel=0.05)
+    assert np.max(np.abs(z)) > 3 * abs(z[0])
+    assert abs(z[-1]) < abs(z[0])
 
 
 def test_a_run_pmukit_ran_itself_is_done_not_imported(workshop):

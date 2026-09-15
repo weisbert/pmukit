@@ -1,0 +1,2205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pmukit</title>
+<style>
+/* ---------------------------------------------------------------- tokens ---- */
+:root{
+  --bg:#f7f6f3; --panel:#ffffff; --ink:#1c1b18; --ink2:#5d5a53; --ink3:#8a867d;
+  --line:#dedbd3; --line2:#ebe8e1; --line3:#cfccc4; --soft:#f3f1ec; --softer:#faf9f6;
+  --acc:#1f6f9f; --acc-d:#16506f; --acc-bg:#e8f1f7; --acc-line:#bcd7e8;
+  --ok:#2f7d4f; --ok-bg:#eef8f1; --ok-line:#bfe0cb;
+  --warn:#b7791f; --warn-bg:#fbf5e6; --warn-line:#ecd9a8;
+  --bad:#b3362e; --bad-bg:#fdeeec; --bad-line:#efc2bd;
+  --gt:#b45309; --code-bg:#1c1b18; --code-ink:#e9e6de;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,"DejaVu Sans Mono",monospace;
+  --sans:system-ui,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#161513; --panel:#1e1d1a; --ink:#ece9e1; --ink2:#a9a49a; --ink3:#817c73;
+    --line:#33312c; --line2:#2a2825; --line3:#454239; --soft:#262420; --softer:#1a1916;
+    --acc:#61a8d4; --acc-d:#8cc4e6; --acc-bg:#1b2b36; --acc-line:#2f4c5e;
+    --ok:#6fbe8d; --ok-bg:#16291e; --ok-line:#2c4a37;
+    --warn:#d8a648; --warn-bg:#2c2517; --warn-line:#4e4123;
+    --bad:#e08278; --bad-bg:#2e1a18; --bad-line:#553029;
+    --gt:#e3944a; --code-bg:#0f0e0d; --code-ink:#d7d3c9;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#161513; --panel:#1e1d1a; --ink:#ece9e1; --ink2:#a9a49a; --ink3:#817c73;
+  --line:#33312c; --line2:#2a2825; --line3:#454239; --soft:#262420; --softer:#1a1916;
+  --acc:#61a8d4; --acc-d:#8cc4e6; --acc-bg:#1b2b36; --acc-line:#2f4c5e;
+  --ok:#6fbe8d; --ok-bg:#16291e; --ok-line:#2c4a37;
+  --warn:#d8a648; --warn-bg:#2c2517; --warn-line:#4e4123;
+  --bad:#e08278; --bad-bg:#2e1a18; --bad-line:#553029;
+  --gt:#e3944a; --code-bg:#0f0e0d; --code-ink:#d7d3c9;
+  color-scheme:dark;
+}
+/* ---------------------------------------------------------------- frame ----- */
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13px;line-height:1.45}
+a{color:var(--acc);cursor:pointer}
+.mono{font-family:var(--mono)}
+.app{min-height:100vh;display:flex;flex-direction:column;position:relative}
+.nav{height:48px;display:flex;align-items:center;gap:8px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap}
+.brand{font-family:var(--mono);font-weight:600;font-size:14px;letter-spacing:.02em;cursor:pointer;background:none;border:0;color:inherit;padding:0}
+.proj{color:var(--ink2);font-size:12.5px;padding-left:12px;border-left:1px solid var(--line);margin-left:4px;font-family:var(--mono)}
+.steps{display:flex;gap:2px;margin-left:20px;flex-wrap:wrap}
+.step{display:flex;align-items:center;gap:7px;padding:5px 11px;border-radius:4px;color:var(--ink3);font-size:12.5px;background:none;border:0;cursor:pointer;font-family:inherit}
+.step:hover{background:var(--soft)}
+.step.cur{background:var(--acc-bg);color:var(--acc);font-weight:600}
+.step .n{width:18px;height:18px;border-radius:50%;border:1px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:11px;font-family:var(--mono)}
+.step.done{color:var(--ink)}.step.done .n{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.navr{margin-left:auto;display:flex;gap:12px;color:var(--ink3);font-size:12px;align-items:center}
+.main{flex:1;display:flex;gap:14px;padding:14px 16px 14px;min-height:0;align-items:stretch;flex-wrap:wrap}
+.col{display:flex;flex-direction:column;gap:14px;min-width:340px;min-height:0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:4px;display:flex;flex-direction:column;min-height:0}
+.ph{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 13px;border-bottom:1px solid var(--line2);font-weight:600;font-size:13px;flex:none;flex-wrap:wrap}
+.ph .sub{font-weight:400;color:var(--ink3);font-size:12px}
+.pb{padding:12px 13px;overflow:auto;flex:1;min-height:0}
+.pb.flush{padding:0}
+table.t{width:100%;border-collapse:collapse;font-size:12.5px}
+.t th{text-align:left;font-weight:600;color:var(--ink2);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap;position:sticky;top:0;background:var(--panel)}
+.t td{padding:6px 8px;border-bottom:1px solid var(--line2);vertical-align:middle}
+.t tr.sel>td{background:var(--acc-bg)}
+.t tr.click{cursor:pointer}.t tr.click:hover>td{background:var(--soft)}
+.t tr.sel.click:hover>td{background:var(--acc-bg)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.id{font-family:var(--mono);font-size:12px;white-space:nowrap}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:1px 7px;border-radius:3px;font-size:11px;font-weight:600;border:1px solid;white-space:nowrap;line-height:16px}
+.b-ok{color:var(--ok);border-color:var(--ok-line);background:var(--ok-bg)}
+.b-warn{color:var(--warn);border-color:var(--warn-line);background:var(--warn-bg)}
+.b-bad{color:var(--bad);border-color:var(--bad-line);background:var(--bad-bg)}
+.b-mute{color:var(--ink3);border-color:var(--line);background:var(--soft)}
+.b-acc{color:var(--acc);border-color:var(--acc-line);background:var(--acc-bg)}
+.b-ink{color:var(--ink);border-color:var(--line3);background:var(--soft)}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 13px;border-radius:4px;border:1px solid var(--line3);background:var(--panel);color:var(--ink);font:inherit;font-weight:600;font-size:12.5px;cursor:pointer;white-space:nowrap}
+.btn:hover:not(:disabled){background:var(--soft)}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+.btn.pri:hover:not(:disabled){background:var(--acc-d)}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.sm{height:25px;padding:0 9px;font-size:11.5px}
+.chip{display:inline-flex;align-items:center;height:24px;padding:0 10px;border-radius:12px;border:1px solid var(--line3);background:var(--panel);color:var(--ink);font-size:12px;cursor:pointer;font-family:var(--mono)}
+.chip.on{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.kv{display:grid;grid-template-columns:minmax(110px,160px) 1fr;gap:5px 12px;font-size:12.5px}
+.kv .k{color:var(--ink2)}
+.field{display:flex;flex-direction:column;gap:5px}
+.lbl{font-size:10.5px;font-weight:600;color:var(--ink2);letter-spacing:.05em;text-transform:uppercase}
+.inp{height:28px;border:1px solid var(--line3);border-radius:4px;padding:0 8px;font:inherit;background:var(--panel);color:var(--ink)}
+.hint{color:var(--ink3);font-size:12px}
+.foot{min-height:50px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 16px;background:var(--panel);border-top:1px solid var(--line);flex:none;flex-wrap:wrap}
+.stat{display:flex;flex-direction:column;gap:2px;padding:0 16px 0 0;margin-right:16px;border-right:1px solid var(--line2)}
+.stat:last-child{border-right:0}
+.stat .v{font-family:var(--mono);font-size:19px;font-weight:600;line-height:1.1}
+.stat .l{font-size:11px;color:var(--ink3);text-transform:uppercase;letter-spacing:.05em}
+.callout{border:1px solid var(--line);border-radius:4px;padding:10px 12px;background:var(--softer);font-size:12.5px}
+.callout.warn{border-color:var(--warn-line);background:var(--warn-bg)}
+.callout.bad{border-color:var(--bad-line);background:var(--bad-bg)}
+.trust{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+.trust .box{border:1px solid var(--line);border-radius:4px;padding:10px 12px;background:var(--panel)}
+.trust .h{font-size:10.5px;font-weight:600;color:var(--ink2);letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px}
+.code{font-family:var(--mono);font-size:11.5px;background:var(--code-bg);color:var(--code-ink);padding:10px 12px;border-radius:4px;white-space:pre;overflow:auto;line-height:1.5}
+.code.wrap{white-space:pre-wrap}
+.code .e{color:#e3944a}.code .a{color:#7fb98b}.code .d{color:#d98b84}.code .c{color:#8a867d}
+.bar{display:flex;height:9px;border-radius:5px;overflow:hidden;background:var(--line2)}
+.seg{height:100%}
+.grid{display:grid;gap:4px;min-width:0}
+.cell{height:28px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid transparent;font-family:var(--mono)}
+.cell.sel{outline:2px solid var(--ink);outline-offset:1px}
+.c-ok{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-line)}
+.c-warn{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-line)}
+.c-bad{background:var(--bad-bg);color:var(--bad);border-color:var(--bad-line)}
+.c-mute{background:var(--soft);color:var(--ink3);border-color:var(--line)}
+.c-acc{background:var(--acc-bg);color:var(--acc);border-color:var(--acc-line)}
+.c-head{background:transparent;color:var(--ink2);font-size:10.5px;cursor:default;font-weight:600}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--ink2);align-items:center;flex-wrap:wrap}
+.sw{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+input[type=checkbox]{width:15px;height:15px;accent-color:var(--acc);margin:0}
+.rc{cursor:context-menu}
+/* ------------------------------------------------------------- overlays ----- */
+.veil{position:fixed;inset:0;z-index:40}
+.ctx{position:fixed;z-index:41;min-width:230px;max-width:360px;background:var(--panel);border:1px solid var(--line3);border-radius:4px;box-shadow:0 6px 20px rgba(0,0,0,.22);padding:4px;font-size:12.5px}
+.ctx .ttl{padding:5px 10px 6px;color:var(--ink3);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;border-bottom:1px solid var(--line2);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctx .it{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:6px 10px;border-radius:3px;cursor:pointer;white-space:nowrap;background:none;border:0;width:100%;font:inherit;color:inherit;text-align:left}
+.ctx .it:hover:not(:disabled){background:var(--acc-bg);color:var(--acc)}
+.ctx .it:disabled{color:var(--ink3);opacity:.55;cursor:default}
+.ctx .it .k{color:var(--ink3);font-family:var(--mono);font-size:11px}
+.ctx .sep{height:1px;background:var(--line2);margin:3px 6px}
+.cli{display:flex;align-items:center;gap:10px;padding:5px 16px;background:var(--softer);border-top:1px solid var(--line2);font-size:12px;flex:none;min-height:30px}
+.cli .d{color:var(--ink3);font-family:var(--mono)}
+.cli .c{font-family:var(--mono);color:var(--ink);overflow:auto;white-space:nowrap;flex:1}
+.help{position:fixed;z-index:41;right:16px;top:56px;width:min(460px,calc(100vw - 32px));max-height:calc(100vh - 120px);background:var(--panel);border:1px solid var(--line3);border-radius:4px;box-shadow:0 6px 20px rgba(0,0,0,.22);display:flex;flex-direction:column}
+.keys{display:grid;grid-template-columns:120px 1fr;gap:5px 12px;font-size:12.5px}
+.kb{font-family:var(--mono);font-size:11.5px;background:var(--soft);border:1px solid var(--line);border-radius:3px;padding:1px 6px;display:inline-block}
+.err{border:1px solid var(--bad-line);background:var(--bad-bg);border-radius:4px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;font-size:12.5px;margin-bottom:12px}
+.err .t{font-weight:600;color:var(--bad);display:flex;gap:8px;align-items:center}
+.err .k{color:var(--ink2);width:56px;display:inline-block;flex:none}
+.err .row{display:flex;gap:6px}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--ink2);padding:36px 20px;text-align:center}
+.empty .t{font-weight:600;color:var(--ink)}
+.skel{height:11px;border-radius:3px;background:linear-gradient(90deg,var(--line2),var(--soft),var(--line2));background-size:200% 100%;animation:sk 1.2s infinite}
+@keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.q{display:inline-flex;width:14px;height:14px;border-radius:50%;border:1px solid var(--line3);color:var(--ink3);font-size:10px;align-items:center;justify-content:center;margin-left:6px;cursor:help;vertical-align:middle}
+.prog{display:flex;align-items:center;gap:10px;padding:7px 13px;border:1px solid var(--acc-line);background:var(--acc-bg);border-radius:4px;font-size:12.5px;margin-bottom:12px}
+.prog .bar{flex:1;max-width:260px}
+.pal{position:fixed;z-index:42;left:50%;top:14vh;transform:translateX(-50%);width:min(560px,calc(100vw - 32px));background:var(--panel);border:1px solid var(--line3);border-radius:6px;box-shadow:0 10px 30px rgba(0,0,0,.28);overflow:hidden}
+.pal input{width:100%;height:40px;border:0;border-bottom:1px solid var(--line2);padding:0 14px;font:inherit;font-size:14px;background:var(--panel);color:var(--ink)}
+.pal input:focus{outline:none}
+.pal .list{max-height:44vh;overflow:auto;padding:4px}
+.pal .it{display:flex;justify-content:space-between;gap:12px;padding:7px 10px;border-radius:3px;cursor:pointer;background:none;border:0;width:100%;font:inherit;color:inherit;text-align:left}
+.pal .it.on,.pal .it:hover{background:var(--acc-bg);color:var(--acc)}
+svg.chart{display:block;width:100%;height:auto;font-family:var(--mono);font-size:10px}
+.drop{border:1.5px dashed var(--line3);border-radius:6px;min-height:200px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--ink2);padding:18px;text-align:center}
+.drop.over{border-color:var(--acc);background:var(--acc-bg)}
+.rowflex{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.grow{flex:1}
+@media (max-width:1100px){.col{min-width:100%}}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="nav" id="nav"></div>
+  <div class="main" id="main"></div>
+  <div class="cli" id="cli"></div>
+  <div class="foot" id="foot"></div>
+</div>
+<div id="overlays"></div>
+<script>
+"use strict";
+/* =========================================================================
+   pmukit web shell -- one page, eight screens, no framework and no build.
+   Everything the page knows comes from the routes in docs/OVERNIGHT_BRIEF.md.
+   ========================================================================= */
+
+/* --------------------------------------------------------------- state --- */
+var S = {
+  screen: "home",
+  project: "",
+  demo: false,
+  data: {},          /* cache key -> payload                                */
+  loading: {},       /* cache key -> true while in flight                   */
+  slow: {},          /* cache key -> true after 2 s (the "what is happening")*/
+  errs: {},          /* screen   -> {status, error, retry}                  */
+  sel: {},           /* per-screen selections                               */
+  menu: null,
+  help: null,
+  palette: false,
+  job: null,         /* {job, status, message, progress, title}             */
+  undoable: "",
+  toast: ""
+};
+
+var ICON = {
+  ok: '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"/></svg>',
+  warn: '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5l6 11H2z"/><path d="M8 7v3"/><path d="M8 12.2v.1"/></svg>',
+  x: '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
+  file: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13"/></svg>',
+  play: '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l9-5.5z"/></svg>',
+  copy: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5.5" y="5.5" width="8" height="8" rx="1"/><path d="M10.5 5.5v-3h-8v8h3"/></svg>',
+  retry: '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M13 8a5 5 0 1 1-1.5-3.6"/><path d="M13 2.5v3h-3"/></svg>',
+  arrow: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>',
+  up: '<svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 11V3.5M4.5 7L8 3.5 11.5 7"/><path d="M2.5 11.5v2h11v-2"/></svg>'
+};
+
+var STEPS = [["0","Home","home"],["1","New","new"],["2","Plan","plan"],["3","Run","run"],
+             ["4","Model","model"],["5","Deliver","deliver"]];
+
+/* ------------------------------------------------------------- helpers --- */
+function esc(s){
+  return String(s === null || s === undefined ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+function el(id){ return document.getElementById(id); }
+function num(x, d){ d = d === undefined ? 2 : d; var v = Number(x); return isFinite(v) ? v.toFixed(d) : "-"; }
+function eng(x, unit){
+  unit = unit || "";
+  var v = Number(x);
+  if (!isFinite(v) || v === 0) return "0 " + unit;
+  var sign = v < 0 ? "-" : ""; v = Math.abs(v);
+  var tab = [[12,"T"],[9,"G"],[6,"M"],[3,"k"],[0,""],[-3,"m"],[-6,"u"],[-9,"n"],[-12,"p"],[-15,"f"]];
+  for (var i = 0; i < tab.length; i++){
+    if (v >= Math.pow(10, tab[i][0]) || tab[i][0] === -15){
+      var s = (v / Math.pow(10, tab[i][0])).toPrecision(4).replace(/\.?0+$/,"");
+      return (sign + s + " " + tab[i][1] + unit).trim();
+    }
+  }
+  return sign + v + " " + unit;
+}
+function ago(iso){
+  if (!iso) return "-";
+  var t = Date.parse(String(iso).replace(" ","T"));
+  if (!isFinite(t)) return String(iso);
+  var s = (Date.now() - t) / 1000;
+  if (s < 90) return "just now";
+  if (s < 5400) return Math.round(s/60) + " min ago";
+  if (s < 172800) return Math.round(s/3600) + " h ago";
+  return Math.round(s/86400) + " days ago";
+}
+function copy(text){
+  var ok = function(){ S.toast = "copied"; render(); setTimeout(function(){ S.toast=""; render(); }, 1400); };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(ok, fallback); return; }
+  } catch(e){ /* fall through */ }
+  fallback();
+  function fallback(){
+    var ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); ok(); } catch(e2){ S.toast = "press Ctrl C"; render(); }
+    document.body.removeChild(ta);
+  }
+}
+/* Five states, not four. "fitted" is what a block is before `verify` has judged it against a
+   limit: it was measured and fitted, and that is all anyone can honestly say yet. It gets its
+   own neutral colour so it can never be mistaken for a pass. */
+function gradeCls(g){
+  return g === "green" || g === "ok" ? "ok" : g === "yellow" || g === "warn" ? "warn"
+       : g === "red" || g === "bad" ? "bad" : g === "fitted" ? "acc" : "mute";
+}
+function gradeLabel(g){
+  return g === "green" || g === "ok" ? "OK" : g === "yellow" || g === "warn" ? "MARG"
+       : g === "red" || g === "bad" ? "FAIL" : g === "fitted" ? "FIT" : "N/R";
+}
+
+/* ----------------------------------------------------------------- api --- */
+function api(path, opts){
+  opts = opts || {};
+  var init = { method: opts.method || "GET", headers: {} };
+  if (opts.body !== undefined){
+    init.headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(opts.body);
+  }
+  return fetch(path, init).then(function(r){
+    return r.text().then(function(txt){
+      var data = null;
+      try { data = txt ? JSON.parse(txt) : {}; } catch(e){ data = { raw: txt }; }
+      if (!r.ok){
+        var e4 = (data && data.error) || {
+          what: "the server answered " + r.status + " for " + path + ".",
+          why: "The response carried no four-part error, which means it did not come from a "
+             + "pmukit route handler.",
+          do: ["Reload the page", "Check the server console"],
+          where: path
+        };
+        throw { status: r.status, error: e4, path: path };
+      }
+      return data;
+    });
+  }, function(netErr){
+    throw { status: 0, path: path, error: {
+      what: "the page could not reach the pmukit server.",
+      why: "fetch(" + path + ") failed: " + netErr + ". The server process is gone, or the "
+         + "machine went to sleep while the page stayed open.",
+      do: ["Restart `pmukit ui` in the terminal", "Reload the page"],
+      where: path } };
+  });
+}
+
+/* A cached GET tied to a screen. Renders skeletons while in flight, a four-part error on
+   failure, and marks the request "slow" after 2 s so the screen can say what it is doing. */
+function need(key, path, screen){
+  if (S.data[key] !== undefined || S.loading[key]) return S.data[key];
+  S.loading[key] = true;
+  var timer = setTimeout(function(){ S.slow[key] = true; render(); }, 2000);
+  api(path).then(function(d){
+    clearTimeout(timer);
+    S.loading[key] = false; S.slow[key] = false; S.data[key] = d;
+    if (S.errs[screen] && S.errs[screen].key === key) delete S.errs[screen];
+    render();
+  }, function(e){
+    clearTimeout(timer);
+    S.loading[key] = false; S.slow[key] = false;
+    S.errs[screen] = { status: e.status, error: e.error, key: key,
+                       retry: function(){ delete S.data[key]; delete S.errs[screen]; render(); } };
+    render();
+  });
+  return undefined;
+}
+function forget(prefix){
+  Object.keys(S.data).forEach(function(k){ if (k.indexOf(prefix) === 0) delete S.data[k]; });
+  Object.keys(S.loading).forEach(function(k){ if (k.indexOf(prefix) === 0) delete S.loading[k]; });
+}
+function P(){ return encodeURIComponent(S.project); }
+
+/* ---------------------------------------------------------------- jobs --- */
+function startJob(promise, title, onDone){
+  promise.then(function(d){
+    if (!d || !d.job){ if (onDone) onDone(d); render(); return; }
+    S.job = { job: d.job, status: "running", progress: 0, message: "starting", title: title };
+    render();
+    poll(d.job, onDone);
+  }, function(e){ showErr(e); });
+}
+function poll(id, onDone){
+  api("/api/jobs/" + encodeURIComponent(id)).then(function(j){
+    S.job = { job: j.job, status: j.status, progress: j.progress, message: j.message,
+              title: j.title, error: j.error, not_landed: j.not_landed, result: j.result };
+    render();
+    if (j.status === "running" || j.status === "queued"){ setTimeout(function(){ poll(id, onDone); }, 700); return; }
+    if (j.status === "failed"){
+      S.errs[S.screen] = { status: 501, error: j.error, retry: function(){ S.job = null; render(); } };
+    }
+    if (onDone) onDone(j);
+    render();
+  }, function(e){ showErr(e); });
+}
+function showErr(e){
+  S.errs[S.screen] = { status: e.status, error: e.error,
+                       retry: function(){ delete S.errs[S.screen]; render(); } };
+  render();
+}
+
+/* =========================================================================
+   OBJECT -> VERBS.  One table.  The buttons on a row and the right-click
+   menu of that row are generated from it, so they can never drift apart.
+   `common: true` also becomes a button.
+   ========================================================================= */
+var VERBS = {
+  project: [
+    { id:"open",    label:function(c){ return "Open at " + (c.row.screen || "new"); }, common:true,
+      run:function(c){ openProject(c.row.name, c.row.screen); } },
+    { id:"report",  label:"Open report", when:function(c){ return c.row.step >= 4; },
+      run:function(c){ openProject(c.row.name, "deliver"); } },
+    { id:"folder",  label:"Copy data folder path",
+      run:function(c){ copy((c.root || "") + "/" + c.row.name); } },
+    { sep:true },
+    { id:"dup",     label:"Duplicate as a new project (same netlist, new name)",
+      run:function(c){ newProject(c.row.name + "_copy"); } },
+    { id:"diff",    label:"Compare two deliverables", when:function(c){ return c.row.deliverables >= 2; },
+      run:function(c){ S.sel.diffA = c.row.name; render(); } },
+    { sep:true },
+    { id:"copyname", label:"Copy project name", key:"name", run:function(c){ copy(c.row.name); } }
+  ],
+  pin: [
+    { id:"model",  label:"Model this port", common:true,
+      when:function(c){ return c.row.role === "rail" || c.row.role === "bias"; },
+      run:function(c){ setPin(c.row.name, { fate:"model" }); } },
+    { id:"stub",   label:"Stub: keep the pin, ideal source at its DC value, no runs", common:true,
+      when:function(c){ return c.row.role === "rail" || c.row.role === "bias"; },
+      run:function(c){ setPin(c.row.name, { fate:"stub" }); } },
+    { id:"ignore", label:"Ignore (leave wired as it is)",
+      run:function(c){ setPin(c.row.name, { fate:"ignore" }); } },
+    { sep:true },
+    { id:"r_rail", label:"Set role: rail  (writes IL_ into the netlist)",
+      run:function(c){ askRole(c.row, "rail"); } },
+    { id:"r_bias", label:"Set role: bias  (writes VB_ into the netlist)",
+      run:function(c){ askRole(c.row, "bias"); } },
+    { id:"r_sup",  label:"Set role: supply (writes VS_ into the netlist)",
+      run:function(c){ askRole(c.row, "supply"); } },
+    { id:"r_en",   label:"Set role: enable (writes VEN_ into the netlist)",
+      run:function(c){ askRole(c.row, "en"); } },
+    { sep:true },
+    { id:"copypin", label:"Copy pin name", key:"pin", run:function(c){ copy(c.row.name); } },
+    { id:"copynet", label:"Copy net name", key:"net", run:function(c){ copy(c.row.net); } }
+  ],
+  corner: [
+    { id:"only", label:"Only this", common:true, run:function(c){ c.only(); } },
+    { id:"all",  label:"All",       common:true, run:function(c){ c.all(); } },
+    { sep:true },
+    { id:"rm",   label:"Remove from the list", run:function(c){ c.remove(); } }
+  ],
+  rail: [
+    { id:"measure", label:"Measure on / off from the netlist", common:true,
+      run:function(){ measureLoad(); } },
+    { id:"sw", label:function(c){ return c.row.switches ? "Static load only (no load-EN)"
+                                                        : "Characterize load-EN on/off"; },
+      run:function(c){ toggleSwitch(c.row.name); } },
+    { sep:true },
+    { id:"src", label:"Copy the IL_ source line",
+      run:function(c){ copy("IL_" + c.row.name + " (" + c.row.name + " 0) isource dc=" + c.row.on_a); } }
+  ],
+  group: [
+    { id:"why",  label:"Why this run exists", common:true,
+      run:function(c){ S.sel.group = c.row.id; S.sel.planTab = "why"; render(); } },
+    { id:"runs", label:"Show its runs per corner", common:true,
+      run:function(c){ S.sel.group = c.row.id; S.sel.planTab = "runs"; forget("planruns:"); render(); } },
+    { sep:true },
+    { id:"only", label:"Only this group",
+      run:function(c){ setTicksAll(function(g){ return g.id === c.row.id; }); } },
+    { id:"except", label:"Everything except this",
+      run:function(c){ setTicksAll(function(g){ return g.id !== c.row.id; }); } },
+    { id:"allon", label:"All groups on", run:function(){ setTicksAll(function(){ return true; }); } },
+    { sep:true },
+    { id:"csv", label:"Copy this group as CSV",
+      run:function(c){ copy(["id,analysis,runs,cpu_hours,ports",
+        [c.row.id, c.row.analysis, c.row.runs, c.row.cpu_hours, (c.row.ports||[]).join(" ")].join(",")].join("\n")); } }
+  ],
+  planrun: [
+    { id:"recipe", label:"Show the recipe", common:true,
+      run:function(c){ S.sel.planRun = c.row.run_id; forget("recipe:"); render(); } },
+    { id:"copyid", label:"Copy run id", key:"id", run:function(c){ copy(c.row.run_id); } },
+    { sep:true },
+    { id:"why", label:"Why this run exists", run:function(c){ alertWhy(c.row.why); } }
+  ],
+  run: [
+    { id:"detail", label:"Show details", common:true,
+      run:function(c){ S.sel.run = c.row.run_id; forget("run:"); render(); } },
+    { id:"retry", label:"Retry", common:true, when:function(c){ return c.row.status === "failed"; },
+      run:function(c){ runAction(c.row.run_id, "retry"); } },
+    { id:"skip", label:"Skip (mark NOT RUN)",
+      when:function(c){ return ["done","imported","skipped_cached"].indexOf(c.row.status) < 0; },
+      run:function(c){ runAction(c.row.run_id, "skip"); } },
+    { id:"kill", label:"Kill the job", when:function(c){ return c.row.status === "running" || c.row.status === "submitted"; },
+      run:function(c){ runAction(c.row.run_id, "kill"); } },
+    { sep:true },
+    { id:"log", label:"Open the log", run:function(c){ S.sel.run = c.row.run_id; S.sel.runTab = "log"; forget("run:"); render(); } },
+    { id:"reci", label:"Copy the recipe", run:function(c){ copy(c.row.recipe || ""); } },
+    { id:"cid", label:"Copy run id", key:"id", run:function(c){ copy(c.row.run_id); } },
+    { sep:true },
+    { id:"bundle", label:"Copy failure bundle for the desk",
+      when:function(c){ return c.row.status === "failed"; },
+      run:function(c){ go("digest"); } }
+  ],
+  cell: [
+    { id:"curves", label:"Show the curves", common:true,
+      run:function(c){ pickCell(c.port, c.corner, c.temp); } },
+    { id:"runs", label:"Which runs are behind this cell",
+      run:function(c){ pickCell(c.port, c.corner, c.temp); S.sel.modelTab = "runs"; render(); } },
+    { sep:true },
+    { id:"digest", label:"Copy digest for this cell", run:function(){ go("digest"); } },
+    { id:"refit", label:"Re-fit this cell only", run:function(){ doFit(); } }
+  ],
+  block: [
+    { id:"chart", label:"Show this block's chart", common:true,
+      run:function(c){ S.sel.block = c.row.name; forget("curve:"); render(); } },
+    { id:"copy", label:"Copy the numbers",
+      run:function(c){ copy(JSON.stringify(c.row, null, 1)); } },
+    { sep:true },
+    { id:"explain", label:"What is this block", run:function(c){ alertWhy(c.row.metric || c.row.name); } }
+  ],
+  chart: [
+    { id:"csv", label:"Copy the data as CSV", common:true, run:function(c){ copy(curveCsv(c.curve)); } },
+    { id:"table", label:function(c){ return S.sel.curveView === "table" ? "Show as a chart" : "Show as a table"; },
+      common:true,
+      run:function(){ S.sel.curveView = S.sel.curveView === "table" ? "chart" : "table"; render(); } },
+    { sep:true },
+    { id:"phase", label:function(){ return S.sel.showPhase === false ? "Show the phase" : "Hide the phase"; },
+      run:function(){ S.sel.showPhase = S.sel.showPhase === false; render(); } }
+  ],
+  file: [
+    { id:"preview", label:"Preview", common:true,
+      run:function(c){ S.sel.file = c.row.name; forget("dfile:"); render(); } },
+    { id:"path", label:"Copy the path", run:function(c){ copy((c.stampPath || "") + "/" + c.row.name); } },
+    { id:"inc", label:"Copy the include line", when:function(c){ return /\.scs$/.test(c.row.name); },
+      run:function(c){ copy('include "' + (c.stampPath || "") + "/" + c.row.name + '" section=tt'); } },
+    { sep:true },
+    { id:"diff", label:"Diff against the previous deliverable", run:function(){ go("home"); } }
+  ],
+  digest: [
+    { id:"only", label:"Only this block (plus the fixed ones)", common:true,
+      run:function(c){ c.only(); } },
+    { id:"all", label:"All blocks", common:true, run:function(c){ c.all(); } },
+    { sep:true },
+    { id:"copyid", label:"Copy the block id", key:"id", run:function(c){ copy(c.row.id); } }
+  ]
+};
+
+function verbsFor(kind, ctx){
+  return (VERBS[kind] || []).filter(function(v){
+    if (v.sep) return true;
+    return v.when ? v.when(ctx) !== false : true;
+  });
+}
+function verbLabel(v, ctx){ return typeof v.label === "function" ? v.label(ctx) : v.label; }
+
+/* Buttons: the two or three common verbs of an object, same source as its menu. */
+function verbButtons(kind, ctx, cls){
+  return verbsFor(kind, ctx).filter(function(v){ return v.common; }).map(function(v, i){
+    var id = regAction(function(){ v.run(ctx); });
+    return '<button class="btn sm ' + (cls || "") + '" data-act="' + id + '">'
+         + esc(verbLabel(v, ctx)) + "</button>";
+  }).join(" ");
+}
+/* One named verb, rendered as a button -- same table, so a row button cannot drift from its menu. */
+function verbButton(kind, ctx, verbId, cls){
+  var v = verbsFor(kind, ctx).filter(function(x){ return x.id === verbId; })[0];
+  if (!v) return "";
+  var id = regAction(function(){ v.run(ctx); });
+  return '<button class="btn sm ' + (cls || "") + '" data-act="' + id + '">'
+       + esc(verbLabel(v, ctx)) + "</button>";
+}
+
+/* Menu: every verb of the object. */
+function openMenu(ev, kind, title, ctx){
+  ev.preventDefault(); ev.stopPropagation();
+  S.menu = { kind: kind, title: title, ctx: ctx, x: ev.clientX, y: ev.clientY };
+  render();
+}
+function rc(kind, title, ctxName){
+  /* the attributes that wire one object to its context menu. No class: the caller owns the
+     class attribute, and two class attributes on one tag would silently lose the first. */
+  return ' data-menu="' + esc(kind) + '" data-menutitle="' + esc(title)
+       + '" data-menuctx="' + esc(ctxName) + '"';
+}
+
+/* Action registry: HTML strings cannot carry closures, so handlers are registered per render. */
+var ACTS = {}, ACTN = 0;
+function regAction(fn){ var id = "a" + (++ACTN); ACTS[id] = fn; return id; }
+var CTXS = {}, CTXN = 0;
+function regCtx(obj){ var id = "c" + (++CTXN); CTXS[id] = obj; return id; }
+
+/* ------------------------------------------------------------ navigation - */
+function go(screen){
+  S.screen = screen;
+  delete S.errs[screen];
+  if (S.project && !S.demo){
+    api("/api/state/" + P(), { method:"PUT", body:{ screen: screen } }).then(function(){}, function(){});
+  }
+  render();
+  refreshCli();
+}
+function openProject(name, screen){
+  S.project = name;
+  S.data = {}; S.loading = {}; S.errs = {}; S.sel = {};
+  go(screen || "new");
+}
+function newProject(suggested){
+  var name = window.prompt("New project name (a directory under PMUKIT_DATA):", suggested || "");
+  if (!name) return;
+  api("/api/projects", { method:"POST", body:{ name: name } }).then(function(d){
+    forget("projects");
+    openProject(d.project, "new");
+  }, showErr);
+}
+
+/* ------------------------------------------------------------- rendering - */
+function render(){
+  ACTS = {}; CTXS = {};
+  renderNav();
+  var sc = SCREENS[S.screen] || SCREENS.home;
+  el("main").innerHTML = sc.main();
+  el("foot").innerHTML = sc.foot ? sc.foot() : "";
+  renderCli();
+  renderOverlays();
+  wire();
+}
+function renderNav(){
+  var steps = STEPS.map(function(s, i){
+    var cur = S.screen === s[2];
+    var idx = STEPS.map(function(x){ return x[2]; }).indexOf(S.screen);
+    var cls = cur ? "step cur" : (idx > i ? "step done" : "step");
+    return '<button class="' + cls + '" data-go="' + s[2] + '" title="key ' + s[0] + '">'
+         + '<span class="n">' + s[0] + "</span><span>" + s[1] + "</span></button>";
+  }).join("");
+  var extra = "";
+  if (S.screen === "digest") extra = '<span class="badge b-acc">4b Copy for desk</span>';
+  if (S.screen === "states") extra = '<span class="badge b-mute">reference sheet</span>';
+  el("nav").innerHTML =
+      '<button class="brand" data-go="home" title="Home: every project (key 0)">pmukit</button>'
+    + '<span class="proj">' + esc(S.project || "no project") + (S.demo ? " &middot; demo" : "") + "</span>"
+    + '<div class="steps">' + steps + "</div>"
+    + '<div class="navr">' + extra
+    + (S.toast ? '<span class="badge b-ok">' + esc(S.toast) + "</span>" : "")
+    + '<span class="hint">' + (S.undoable ? "Ctrl Z undoes: " + esc(S.undoable) : "") + "</span>"
+    + '<button class="btn sm" data-help="1" title="Help and keyboard shortcuts (?)">? Help</button>'
+    + "</div>";
+}
+function renderCli(){
+  el("cli").innerHTML = '<span class="d">$</span><span class="c">' + esc(S.cli || "pmukit")
+    + '</span><button class="btn sm" data-copycli="1">' + ICON.copy + " Copy</button>"
+    + '<span class="hint">every action on this screen has this command</span>';
+}
+function renderOverlays(){
+  var out = "";
+  if (S.menu){
+    var mctx = S.menu.ctx, mkind = S.menu.kind;
+    var items = verbsFor(mkind, mctx).map(function(v){
+      if (v.sep) return '<div class="sep"></div>';
+      var id = regAction(function(){ S.menu = null; v.run(mctx); });
+      return '<button class="it" data-act="' + id + '"><span>' + esc(verbLabel(v, mctx))
+           + '</span><span class="k">' + esc(v.key || "") + "</span></button>";
+    }).join("");
+    var x = Math.min(S.menu.x, Math.max(8, window.innerWidth - 360));
+    var y = Math.min(S.menu.y, Math.max(8, window.innerHeight - 40 - 30 * verbsFor(S.menu.kind, S.menu.ctx).length));
+    out += '<div class="veil" data-close="menu"></div><div class="ctx" style="left:'
+        + Math.max(4, x) + "px;top:" + Math.max(4, y) + 'px"><div class="ttl">'
+        + esc(S.menu.title) + "</div>" + items + "</div>";
+  }
+  if (S.help){
+    var h = S.help;
+    out += '<div class="veil" data-close="help"></div><div class="help"><div class="ph"><span>'
+        + esc(h.title || "Help") + '</span><button class="btn sm" data-close="help">Close &middot; Esc</button></div>'
+        + '<div class="pb" style="display:flex;flex-direction:column;gap:12px">'
+        + '<div><div class="lbl" style="margin-bottom:6px">This screen</div>'
+        + (h.lines || []).map(function(l){ return '<div style="margin-bottom:5px;line-height:1.5">' + esc(l) + "</div>"; }).join("")
+        + "</div>"
+        + ((h.keys && h.keys.length) ? '<div><div class="lbl" style="margin-bottom:6px">Keys here</div><div class="keys">'
+            + h.keys.map(function(k){ return "<span><span class=\"kb\">" + esc(k[0]) + "</span></span><span>" + esc(k[1]) + "</span>"; }).join("")
+            + "</div></div>" : "")
+        + '<div><div class="lbl" style="margin-bottom:6px">Everywhere</div><div class="keys">'
+        + (h.global_keys || []).map(function(k){ return "<span><span class=\"kb\">" + esc(k[0]) + "</span></span><span>" + esc(k[1]) + "</span>"; }).join("")
+        + "<span><span class=\"kb\">right-click</span></span><span>every verb of any row, chip, cell, chart or file</span>"
+        + "</div></div>"
+        + '<div class="hint">The same text: <span class="mono">pmukit help ' + esc(h.screen || "") + "</span>. "
+        + "Every error carries four parts: what happened, why, what to do, where to look.</div>"
+        + "</div></div>";
+  }
+  if (S.palette){
+    var q = S.paletteQ || "";
+    var cmds = paletteCommands().filter(function(c){
+      return !q || (c.label + " " + (c.hint || "")).toLowerCase().indexOf(q.toLowerCase()) >= 0;
+    });
+    out += '<div class="veil" data-close="palette"></div><div class="pal">'
+        + '<input id="palinp" placeholder="type an action, a screen or a run id" value="' + esc(q) + '">'
+        + '<div class="list">'
+        + (cmds.length ? cmds.map(function(c, i){
+            var id = regAction(function(){ S.palette = false; S.paletteQ = ""; c.run(); });
+            return '<button class="it' + (i === 0 ? " on" : "") + '" data-act="' + id + '"><span>'
+                 + esc(c.label) + '</span><span class="hint">' + esc(c.hint || "") + "</span></button>";
+          }).join("")
+          : '<div class="empty"><div class="t">nothing matches</div><div>Try a screen name, an action or a run id.</div></div>')
+        + "</div></div>";
+  }
+  el("overlays").innerHTML = out;
+  if (S.palette){
+    var inp = el("palinp");
+    if (inp){
+      inp.focus();
+      inp.oninput = function(){ S.paletteQ = inp.value; render(); };
+      inp.onkeydown = function(e){
+        if (e.key === "Enter"){
+          var first = paletteCommands().filter(function(c){
+            var qq = S.paletteQ || "";
+            return !qq || (c.label + " " + (c.hint||"")).toLowerCase().indexOf(qq.toLowerCase()) >= 0; })[0];
+          if (first){ S.palette = false; S.paletteQ = ""; first.run(); }
+        }
+      };
+    }
+  }
+}
+function wire(){
+  document.querySelectorAll("[data-act]").forEach(function(n){
+    n.onclick = function(e){ e.stopPropagation(); var f = ACTS[n.getAttribute("data-act")]; if (f) f(); };
+  });
+  document.querySelectorAll("[data-go]").forEach(function(n){
+    n.onclick = function(){ go(n.getAttribute("data-go")); };
+  });
+  document.querySelectorAll("[data-close]").forEach(function(n){
+    n.onclick = function(){
+      var w = n.getAttribute("data-close");
+      if (w === "menu") S.menu = null;
+      if (w === "help") S.help = null;
+      if (w === "palette"){ S.palette = false; S.paletteQ = ""; }
+      render();
+    };
+  });
+  document.querySelectorAll("[data-menu]").forEach(function(n){
+    n.oncontextmenu = function(e){
+      openMenu(e, n.getAttribute("data-menu"), n.getAttribute("data-menutitle"),
+               CTXS[n.getAttribute("data-menuctx")] || {});
+    };
+  });
+  var cc = document.querySelector("[data-copycli]");
+  if (cc) cc.onclick = function(){ copy(S.cli); };
+  var hb = document.querySelector("[data-help]");
+  if (hb) hb.onclick = function(){ openHelp(); };
+  document.querySelectorAll("[data-chart]").forEach(hoverChart);
+}
+function openHelp(){
+  api("/api/help/" + encodeURIComponent(S.screen)).then(function(h){ S.help = h; render(); },
+      function(e){ showErr(e); });
+}
+
+/* --------------------------------------------------------- shared blocks - */
+function panel(title, sub, body, opts){
+  opts = opts || {};
+  return '<div class="panel" style="' + (opts.style || "flex:1") + '"><div class="ph"><span>'
+       + title + "</span>" + (sub ? '<span class="sub">' + sub + "</span>" : (opts.right || ""))
+       + '</div><div class="pb' + (opts.flush ? " flush" : "") + '" style="' + (opts.bodyStyle || "") + '">'
+       + body + "</div></div>";
+}
+function skeleton(rows, what){
+  var lines = "";
+  for (var i = 0; i < (rows || 5); i++){
+    lines += '<div class="skel" style="width:' + (55 + ((i * 37) % 40)) + '%;margin-bottom:9px"></div>';
+  }
+  return '<div style="padding:4px 0">' + lines
+       + (what ? '<div class="hint" style="margin-top:8px">' + esc(what) + "</div>" : "") + "</div>";
+}
+function loadingBlock(key, what){
+  return skeleton(6, S.slow[key] ? what : "");
+}
+function emptyBlock(title, text, btnLabel, btnGo){
+  return '<div class="empty"><span style="color:var(--ink3)">' + ICON.file + "</span>"
+       + '<div class="t">' + esc(title) + "</div><div>" + esc(text) + "</div>"
+       + (btnLabel ? '<button class="btn" style="margin-top:6px" data-go="' + btnGo + '">'
+                     + esc(btnLabel) + "</button>" : "") + "</div>";
+}
+/* The four-part error, with the Do actions as real buttons. The table that produced it is
+   rendered underneath, never replaced. */
+function errBlock(screen){
+  var e = S.errs[screen];
+  if (!e) return "";
+  var er = e.error || {};
+  var dos = (er.do || []).map(function(d){
+    var id = regAction(function(){ doAction(d, e); });
+    return '<button class="btn sm" data-act="' + id + '">' + esc(d) + "</button>";
+  }).join(" ");
+  var rid = regAction(function(){ if (e.retry) e.retry(); });
+  return '<div class="err"><div class="t">' + ICON.x + " " + esc(er.what || "something failed")
+       + (e.status ? ' <span class="badge b-bad">' + e.status + "</span>" : "") + "</div>"
+       + '<div class="row"><span class="k">What</span><span>' + esc(er.what || "") + "</span></div>"
+       + '<div class="row"><span class="k">Why</span><span>' + esc(er.why || "") + "</span></div>"
+       + '<div class="row"><span class="k">Do</span><span class="rowflex">' + dos
+       + '<button class="btn sm" data-act="' + rid + '">' + ICON.retry + " Try again</button></span></div>"
+       + '<div class="row"><span class="k">Where</span><span class="mono">' + esc(er.where || "-") + "</span></div>"
+       + "</div>";
+}
+function doAction(text, e){
+  var t = String(text || "");
+  if (/new screen/i.test(t)) return go("new");
+  if (/plan screen/i.test(t)) return go("plan");
+  if (/run screen/i.test(t)) return go("run");
+  if (/model screen/i.test(t)) return go("model");
+  if (/\bhome\b/i.test(t)) return go("home");
+  if (/reload/i.test(t)) return window.location.reload();
+  if (/try again|retry/i.test(t)){ if (e && e.retry) return e.retry(); }
+  copy(t);
+}
+function jobBlock(){
+  if (!S.job) return "";
+  var j = S.job, pct = Math.round((j.progress || 0) * 100);
+  var cls = j.status === "failed" ? "bad" : j.status === "partial" ? "warn" : "";
+  var id = regAction(function(){ S.job = null; render(); });
+  return '<div class="prog" style="' + (cls === "bad" ? "border-color:var(--bad-line);background:var(--bad-bg)"
+        : cls === "warn" ? "border-color:var(--warn-line);background:var(--warn-bg)" : "") + '">'
+       + "<b>" + esc(j.title || j.job) + "</b>"
+       + '<div class="bar"><div class="seg" style="background:var(--acc);width:' + pct + '%"></div></div>'
+       + '<span class="hint">' + esc(j.message || j.status) + "</span>"
+       + (j.status === "running" ? "" : '<button class="btn sm" data-act="' + id + '">Dismiss</button>')
+       + "</div>";
+}
+function alertWhy(text){ window.alert(String(text || "")); }
+
+/* ------------------------------------------------------------- CLI echo -- */
+function cliState(){
+  var sc = SCREENS[S.screen];
+  return sc && sc.cli ? sc.cli() : {};
+}
+function refreshCli(){
+  var st = cliState();
+  api("/api/cli?screen=" + encodeURIComponent(S.screen) + "&project=" + P()
+      + "&state=" + encodeURIComponent(JSON.stringify(st)))
+    .then(function(d){ if (d.cli !== S.cli){ S.cli = d.cli; renderCli(); } }, function(){});
+}
+
+/* ========================================================================= *
+ *  SCREENS                                                                  *
+ * ========================================================================= */
+var SCREENS = {};
+
+/* ---------------------------------------------------------------- Home -- */
+SCREENS.home = {
+  cli: function(){ return { selected: S.sel.project || "" }; },
+  main: function(){
+    var pd = need("projects", "/api/projects", "home");
+    var md = need("machine", "/api/machine", "home");
+    var left, right;
+    if (S.loading["projects"] || pd === undefined){
+      left = panel("Projects", "", loadingBlock("projects", "listing the directories under PMUKIT_DATA"));
+    } else if (!pd.projects.length){
+      left = panel("Projects", "", emptyBlock("No projects yet",
+        "A project is a folder under PMUKIT_DATA. Create one and drop your testbench netlist on it.",
+        "", ""));
+    } else {
+      S.demo = !!pd.demo;
+      var rows = pd.projects.map(function(p){
+        var ctx = regCtx({ row: p, root: pd.data_root });
+        var sel = S.sel.project === p.name;
+        var id = regAction(function(){ S.sel.project = p.name; render(); });
+        var open = regAction(function(){ openProject(p.name, p.screen); });
+        return "<tr" + rc("project", p.name, ctx) + ' data-act="' + id + '" class="click rc'
+             + (sel ? " sel" : "") + '">'
+             + '<td class="mono" style="font-weight:600">' + esc(p.name) + "</td>"
+             + '<td class="mono" style="color:var(--ink2)">' + esc(p.dut) + "</td>"
+             + '<td><span class="badge b-' + (p.status === "ok" ? "ok" : p.status === "run" ? "acc"
+                 : p.status === "bad" ? "bad" : "mute")
+             + '">' + p.step + " &middot; " + esc(p.screen) + "</span></td>"
+             + '<td class="mono">' + esc(p.cells) + "</td>"
+             + '<td class="num">' + p.deliverables + "</td>"
+             + '<td class="hint">' + esc(ago(p.touched)) + "</td>"
+             + '<td class="hint">' + esc(p.note) + "</td>"
+             + '<td>' + '<button class="btn sm" data-act="' + open + '">Open</button>' + "</td></tr>";
+      }).join("");
+      left = panel("Projects", "",
+        '<table class="t"><thead><tr><th>Project</th><th>DUT</th><th>Where it is</th><th>Cells</th>'
+        + '<th class="num">Deliverables</th><th>Last touched</th><th>Note</th><th></th></tr></thead>'
+        + "<tbody>" + rows + "</tbody></table>", { flush: true });
+    }
+    var mach;
+    if (S.loading["machine"] || md === undefined){
+      mach = panel("This machine", "", loadingBlock("machine",
+        "probing the engine, the queue, the PDK and the licence (each with its own timeout)"),
+        { style: "flex:none" });
+    } else {
+      var probes = (md.probes || []).map(function(pr){
+        var badge = pr.ok ? '<span class="badge b-ok">' + ICON.ok + " ok</span>"
+                          : '<span class="badge b-bad">' + ICON.x + " no</span>";
+        var why = pr.ok ? esc(pr.detail)
+          : '<span class="hint">' + esc((pr.reason || {}).what || "") + "</span>";
+        var more = "";
+        if (!pr.ok && pr.reason){
+          var aid = regAction(function(){
+            S.errs.home = { status: 0, error: pr.reason, retry: function(){ forget("machine"); delete S.errs.home; render(); } };
+            render(); });
+          more = ' <button class="btn sm" data-act="' + aid + '">why</button>';
+        }
+        return '<span class="k">' + esc(pr.name) + "</span><span>" + badge + " " + why + more
+             + ' <span class="hint">' + pr.ms + " ms</span></span>";
+      }).join("");
+      var reid = regAction(function(){ forget("machine"); render(); });
+      mach = panel("This machine",
+        (md.ready ? '<span class="badge b-ok">' + ICON.ok + " ready</span>"
+                  : '<span class="badge b-warn">' + ICON.warn + " partial</span>"),
+        '<div class="kv">' + probes
+        + '<span class="k">data</span><span class="mono">' + esc(md.data_root) + "</span>"
+        + '<span class="k">pmukit</span><span class="mono">' + esc(md.pmukit) + " &middot; python "
+        + esc(md.python) + "</span></div>"
+        + '<div style="margin-top:10px"><button class="btn sm" data-act="' + reid + '">'
+        + ICON.retry + " Probe again</button></div>", { style: "flex:none" });
+    }
+    var selp = (pd && pd.projects || []).filter(function(p){ return p.name === S.sel.project; })[0];
+    var sel = panel("Selected", selp ? esc(selp.name) : "nothing selected",
+      selp ? '<div class="kv"><span class="k">DUT</span><span class="mono">' + esc(selp.dut) + "</span>"
+           + '<span class="k">Where</span><span>' + esc(selp.screen) + "</span>"
+           + '<span class="k">Deliverables</span><span class="num">' + selp.deliverables + "</span>"
+           + '<span class="k">Note</span><span class="hint">' + esc(selp.note) + "</span></div>"
+           + '<div class="rowflex" style="margin-top:10px">'
+           + verbButtons("project", { row: selp, root: pd.data_root }, "pri") + "</div>"
+        : '<div class="hint">Click a project row. Right-click it for every verb.</div>',
+      { style: "flex:none" });
+    var diff = panel("Compare two deliverables", "same project, two stamps",
+      '<div class="rowflex"><input class="inp mono" id="diffa" style="width:230px" placeholder="project/stamp" value="'
+      + esc(S.sel.diffA || "") + '"><span class="hint">vs</span>'
+      + '<input class="inp mono" id="diffb" style="width:230px" placeholder="project/stamp" value="'
+      + esc(S.sel.diffB || "") + '">'
+      + '<button class="btn" data-act="' + regAction(function(){
+          var a = el("diffa").value, b = el("diffb").value;
+          S.sel.diffA = a; S.sel.diffB = b;
+          api("/api/deliverables/diff?a=" + encodeURIComponent(a) + "&b=" + encodeURIComponent(b))
+            .then(function(d){ S.sel.diff = d; render(); }, showErr);
+        }) + '">Diff</button></div>'
+      + (S.sel.diff ? '<div class="code wrap" style="margin-top:10px;max-height:200px">'
+          + esc(JSON.stringify(S.sel.diff.diff, null, 1)) + "</div>"
+          : '<div class="hint" style="margin-top:8px">envelope changes, per-cell grade changes, '
+            + "parameter deltas and which runs were re-run</div>"),
+      { style: "flex:none" });
+    return '<div class="col grow">' + errBlock("home") + jobBlock() + left + diff + "</div>"
+         + '<div class="col" style="flex:0 0 380px">' + sel + mach
+         + panel("Recent activity", "", recentActivity(), { style: "flex:1" }) + "</div>";
+  },
+  foot: function(){
+    var id = regAction(function(){ newProject(""); });
+    return '<span class="hint">Home lists every project under PMUKIT_DATA. A project is a folder; '
+         + "delete the folder and it is gone from here.</span>"
+         + '<button class="btn pri" data-act="' + id + '">+ New project</button>';
+  }
+};
+function recentActivity(){
+  if (!S.project) return '<div class="hint">Open a project to see its activity.</div>';
+  var st = need("state", "/api/state/" + P(), "home");
+  if (st === undefined) return loadingBlock("state", "reading state.json");
+  if (!st.recent || !st.recent.length) return '<div class="hint">Nothing has happened yet.</div>';
+  return st.recent.map(function(r){
+    return '<div style="margin-bottom:5px"><span class="hint mono">' + esc(ago(r.at))
+         + "</span> " + esc(r.text) + "</div>";
+  }).join("");
+}
+
+/* ----------------------------------------------------------------- New -- */
+SCREENS.new = {
+  cli: function(){
+    var cfg = (S.data["config"] || {}).config || {};
+    var pins = S.data["pins"] || {};
+    return {
+      netlist: (pins.netlist || {}).path || "",
+      pmu_inst: pins.pmu_inst || cfg.pmu_inst || "",
+      corners: cfg.corners || [], temps: cfg.temps_c || [], vset: cfg.vset_codes || [],
+      loads: cfg.my_load || {}, fmax: cfg.care_up_to_hz || 0,
+      stubs: Object.keys(cfg.ports || {}).filter(function(k){ return cfg.ports[k] === "stub"; }),
+      ignored: Object.keys(cfg.ports || {}).filter(function(k){ return cfg.ports[k] === "ignore"; })
+    };
+  },
+  main: function(){
+    if (!S.project) return noProject();
+    var pins = need("pins", "/api/p/" + P() + "/pins", "new");
+    var cfgd = need("config", "/api/p/" + P() + "/config", "new");
+    var left;
+    if (S.errs.new && !pins){
+      left = panel("Netlist", "one file, exported at the nominal corner", dropZone(), { style:"flex:1" });
+    } else if (S.loading["pins"] || pins === undefined){
+      left = panel("Netlist", "one file, exported at the nominal corner",
+        loadingBlock("pins", "parsing the netlist and resolving the pins"), { style:"flex:1" });
+    } else {
+      left = panel("Netlist", "one file, exported at the nominal corner",
+        netlistBody(pins), { style:"flex:1" });
+    }
+    var right = (cfgd === undefined)
+      ? panel("Three things only you know", "everything else is derived",
+              loadingBlock("config", "reading the project configuration"))
+      : panel("Three things only you know", "everything else is derived", threeQuestions(cfgd, pins));
+    return '<div class="col" style="flex:1 1 640px">' + errBlock("new") + jobBlock() + left + "</div>"
+         + '<div class="col grow">' + right + "</div>";
+  },
+  foot: function(){
+    var pins = S.data["pins"];
+    var ready = !!(pins && pins.pins && pins.pins.length);
+    var id = regAction(function(){ go("plan"); });
+    var sum = pins && pins.summary
+      ? pins.summary.rails + " rails, " + pins.summary.biases + " biases modeled, "
+        + pins.summary.stubs + " stub" + (pins.summary.unclassified.length
+          ? ", " + pins.summary.unclassified.length + " unclassified" : "")
+      : "Load a netlist to continue";
+    return '<span class="hint">' + esc(sum) + "</span>"
+         + '<button class="btn pri" data-act="' + id + '"' + (ready ? "" : " disabled") + ">Build plan "
+         + ICON.arrow + "</button>";
+  }
+};
+function noProject(){
+  return '<div class="col grow">' + panel("No project open", "",
+    emptyBlock("Pick a project first",
+      "Every screen below Home belongs to one project. Open one from Home, or create a new one.",
+      "Go to Home", "home")) + "</div>";
+}
+function dropZone(){
+  var choose = regAction(function(){ pickFile(); });
+  var byPath = regAction(function(){
+    var p = window.prompt("Path of the netlist on this machine:", "");
+    if (p) loadNetlist({ path: p });
+  });
+  return '<div class="drop" id="drop"><span style="color:var(--ink3)">' + ICON.up + "</span>"
+       + '<div style="font-weight:600;color:var(--ink)">Drop <span class="mono">input.scs</span> here</div>'
+       + '<div class="hint">Sources named IL_ / VB_ / VS_ / VEN_ tell pmukit which pin is which. '
+       + "No manifest.</div>"
+       + '<div class="rowflex" style="margin-top:6px"><button class="btn" data-act="' + choose
+       + '">Choose a file</button><button class="btn" data-act="' + byPath + '">By path on this machine</button></div>'
+       + '<input type="file" id="fileinp" style="display:none" accept=".scs,.sp,.cir,.net,.txt"></div>';
+}
+function netlistBody(pins){
+  var nl = pins.netlist || {};
+  var rows = (pins.pins || []).map(function(p){
+    var ctx = regCtx({ row: p });
+    var canModel = p.role === "rail" || p.role === "bias";
+    var tid = regAction(function(){ setPin(p.name, { fate: p.fate === "model" ? "stub" : "model" }); });
+    var fateCls = p.fate === "model" ? "b-acc" : p.fate === "stub" ? "b-ink" : "b-mute";
+    var fateTxt = p.fate === "stub"
+      ? "stub &middot; ideal " + (p.role === "rail" ? "V" : "I") : esc(p.fate);
+    return '<tr class="rc"' + rc("pin", "pin " + p.name, ctx) + ">"
+      + "<td>" + (canModel ? '<input type="checkbox" data-act="' + tid + '"'
+          + (p.fate === "model" ? " checked" : "") + ">" : "") + "</td>"
+      + '<td class="mono">' + esc(p.name) + "</td>"
+      + '<td class="mono" style="color:var(--ink2)">' + esc(p.net) + "</td>"
+      + '<td><span class="badge ' + (p.role === "none" ? "b-warn" : p.is_ground ? "b-mute" : "b-acc")
+      + '">' + esc(p.is_ground ? "ground" : p.role) + "</span></td>"
+      + '<td class="mono">' + esc(p.src || "-") + "</td>"
+      + "<td>" + (p.dc === null || p.dc === undefined ? "-"
+          : esc(eng(p.dc, p.role === "rail" ? "A" : "V"))) + "</td>"
+      + '<td><span class="badge ' + fateCls + '">' + fateTxt + "</span></td></tr>";
+  }).join("");
+  var unc = (pins.summary || {}).unclassified || [];
+  return '<div class="kv" style="margin-bottom:12px">'
+    + '<span class="k">File</span><span class="mono">' + esc(nl.path) + " &middot; "
+    + Math.round((nl.bytes || 0) / 1024) + " KB &middot; sha " + esc((nl.sha || "").slice(0, 8)) + "</span>"
+    + '<span class="k">PMU instance</span><span><span class="mono">' + esc(pins.pmu_inst)
+    + '</span> &middot; cell <span class="mono">' + esc(pins.pmu_master) + "</span> &middot; "
+    + (pins.pins || []).length + " pins</span>"
+    + '<span class="k">PDK includes</span><span class="mono">'
+    + esc(Object.keys(pins.sections || {}).map(function(k){ return k + " section=" + pins.sections[k]; }).join(" &middot; ") || "-")
+    + "</span>"
+    + '<span class="k">Parameters</span><span class="mono">'
+    + esc(Object.keys(pins.params || {}).map(function(k){ return k + "=" + pins.params[k]; }).join(" ") || "-") + "</span>"
+    + '<span class="k">Analyses in file</span><span>' + (pins.analyses || []).length
+    + " found &middot; stripped, pmukit writes its own</span></div>"
+    + '<table class="t"><thead><tr><th style="width:26px" title="Model this port? Unticked rails and biases become stubs.">Model</th>'
+    + "<th>Pin</th><th>Net</th><th>Role</th><th>From source</th><th>DC</th><th>Fate</th></tr></thead>"
+    + "<tbody>" + rows + "</tbody></table>"
+    + (unc.length ? '<div class="callout warn" style="margin-top:10px">' + ICON.warn + " <b>"
+        + esc(unc.join(", ")) + "</b> " + (unc.length > 1 ? "have" : "has")
+        + " no IL_ / VB_ / VS_ / VEN_ source, so no role, and "
+        + (unc.length > 1 ? "are" : "is") + " left exactly as wired. Right-click the pin to set a "
+        + "role; pmukit writes the named source into the netlist for you.</div>" : "")
+    + '<div class="callout" style="margin-top:8px">' + ICON.ok
+    + " <b>You decide which ports get modeled.</b> Ticked = characterized and fitted. Unticked "
+    + "rail or bias = <b>stub</b>: the pin stays on the symbol, emitted as an ideal source at its "
+    + "DC value, zero runs.</div>";
+}
+function threeQuestions(cfgd, pins){
+  var cfg = cfgd.config;
+  if (!cfg){
+    return emptyBlock("No configuration yet",
+      "Load a netlist first: pmukit seeds the three answers from what the deck already says.",
+      "", "");
+  }
+  S.undoable = cfgd.undoable || "";
+  var corners = (cfg.corners instanceof Array) ? cfg.corners : Object.keys(cfg.corners || {});
+  var chips = function(list, all, key){
+    return list.map(function(v){
+      var on = all.indexOf(v) >= 0;
+      var ctx = regCtx({ row: { name: v },
+        only: function(){ patchConfig(key, [v]); },
+        all: function(){ patchConfig(key, list); },
+        remove: function(){ patchConfig(key, all.filter(function(x){ return x !== v; })); } });
+      var id = regAction(function(){
+        patchConfig(key, on ? all.filter(function(x){ return x !== v; }) : all.concat([v]));
+      });
+      return '<button class="chip rc' + (on ? " on" : "") + '" data-act="' + id + '"'
+           + rc("corner", key + " " + v, ctx) + ">" + esc(v) + "</button>";
+    }).join(" ");
+  };
+  var railRows = Object.keys(cfg.my_load || {}).map(function(r){
+    var ld = cfg.my_load[r];
+    var ctx = regCtx({ row: { name: r, on_a: ld.on_a, switches: ld.switches } });
+    var sw = regAction(function(){ toggleSwitch(r); });
+    return '<tr class="rc"' + rc("rail", "rail " + r, ctx) + ">"
+      + '<td class="mono">' + esc(r) + "</td>"
+      + '<td><input class="inp mono" style="width:92px;height:24px" data-load="' + esc(r)
+      + '" data-k="on_a" value="' + esc(eng(ld.on_a, "A")) + '"></td>'
+      + '<td><input class="inp mono" style="width:92px;height:24px" data-load="' + esc(r)
+      + '" data-k="off_a" value="' + esc(eng(ld.off_a, "A")) + '"></td>'
+      + '<td><input type="checkbox" data-act="' + sw + '"' + (ld.switches ? " checked" : "")
+      + '> <span class="hint">' + (ld.switches ? "load-EN characterized" : "static load only")
+      + "</span></td>"
+      + "<td>" + verbButtons("rail", CTXS[ctx]) + "</td></tr>";
+  }).join("");
+  var save = regAction(function(){ saveLoadsFromInputs(); });
+  var undo = regAction(function(){ doUndo(); });
+  var known = ["tt","ss","ff","fs","sf"];
+  var kt = [-40, 0, 25, 85, 125];
+  return '<div style="display:flex;flex-direction:column;gap:16px">'
+    + '<div class="field"><span class="lbl">1 &middot; Corners, temperatures and VSET codes'
+    + '<span class="q" title="pmukit rewrites the PDK include section= per corner and sets options temp= per temperature. Temperature is continuous inside the model.">?</span></span>'
+    + '<div class="rowflex"><span class="hint" style="width:66px">corners</span>'
+    + chips(known.concat(corners.filter(function(c){ return known.indexOf(c) < 0; })), corners, "corners") + "</div>"
+    + '<div class="rowflex"><span class="hint" style="width:66px">temp C</span>'
+    + chips(kt.concat(cfg.temps_c.filter(function(t){ return kt.indexOf(t) < 0; })).map(String),
+            cfg.temps_c.map(String), "temps_c") + "</div>"
+    + '<div class="rowflex"><span class="hint" style="width:66px">VSET</span>'
+    + '<input class="inp mono" id="vsetinp" style="width:92px" value="' + esc(cfg.vset_codes.join(",")) + '">'
+    + '<button class="btn sm" data-act="' + regAction(function(){
+        patchConfig("vset_codes", el("vsetinp").value.split(",").map(function(s){
+          return parseInt(s.trim(), 10); }).filter(function(n){ return !isNaN(n); }));
+      }) + '">Set</button>'
+    + '<span class="hint">from <span class="mono">parameters VSET=</span></span></div></div>'
+    + '<div class="field"><span class="lbl">2 &middot; What your block draws from each rail'
+    + '<span class="q" title="On/off currents set the characterization grid (off, 0.2x on, on, 2x on). Switches = your block turns on and off during simulation.">?</span></span>'
+    + (railRows ? '<table class="t"><thead><tr><th>Rail</th><th>On</th><th>Off</th>'
+        + "<th>Switches on/off</th><th></th></tr></thead><tbody>" + railRows + "</tbody></table>"
+        + '<div class="rowflex"><button class="btn sm" data-act="' + save + '">Save the load numbers</button>'
+        + '<span class="hint">Only ports ticked Model appear here.</span></div>'
+      : '<div class="hint">No rail is set to Model yet. Tick one in the pin table.</div>')
+    + "</div>"
+    + '<div class="field"><span class="lbl">3 &middot; Highest frequency you care about'
+    + '<span class="q" title="Zout and PSRR are characterized up to this frequency and never extrapolated past it.">?</span></span>'
+    + '<div class="rowflex"><input class="inp mono" id="fmaxinp" style="width:120px" value="'
+    + esc(eng(cfg.care_up_to_hz, "Hz")) + '">'
+    + '<button class="btn sm" data-act="' + regAction(function(){
+        var v = parseEng(el("fmaxinp").value);
+        if (v) patchConfig("care_up_to_hz", v);
+      }) + '">Set</button>'
+    + '<span class="hint">Zout and PSRR are characterized up to here and never extrapolated past it.</span>'
+    + "</div></div>"
+    + '<div class="rowflex"><button class="btn sm" data-act="' + undo + '"'
+    + (cfgd.undoable ? "" : " disabled") + ">" + ICON.retry + " Undo (Ctrl Z)</button>"
+    + '<button class="btn sm" data-act="' + regAction(function(){
+        S.sel.showDerived = !S.sel.showDerived;
+        if (S.sel.showDerived) need("derived", "/api/p/" + P() + "/config/derived", "new");
+        render(); }) + '">'
+    + (S.sel.showDerived ? "Hide" : "Show") + " derived settings (pmukit decided these)</button>"
+    + '<span class="hint mono">config sha ' + esc((cfgd.sha || "").slice(0, 8)) + "</span></div>"
+    + (S.sel.showDerived ? derivedBlock() : "")
+    + "</div>";
+}
+function derivedBlock(){
+  var d = S.data["derived"];
+  if (d === undefined) return skeleton(4, "deriving the characterization settings");
+  return '<div class="code wrap" style="max-height:260px">' + esc(JSON.stringify(d.derived, null, 1)) + "</div>";
+}
+function parseEng(text){
+  var m = String(text || "").trim().match(/^([-+0-9.eE]+)\s*([TGMkmunpf]?)/);
+  if (!m) return 0;
+  var mult = { T:1e12, G:1e9, M:1e6, k:1e3, "":1, m:1e-3, u:1e-6, n:1e-9, p:1e-12, f:1e-15 };
+  return parseFloat(m[1]) * (mult[m[2]] === undefined ? 1 : mult[m[2]]);
+}
+function pickFile(){
+  var inp = el("fileinp");
+  if (!inp) return;
+  inp.onchange = function(){
+    var f = inp.files && inp.files[0];
+    if (!f) return;
+    var rd = new FileReader();
+    rd.onload = function(){ loadNetlist({ text: String(rd.result), name: f.name }); };
+    rd.readAsText(f);
+  };
+  inp.click();
+}
+function loadNetlist(body){
+  startJob(api("/api/p/" + P() + "/netlist", { method:"POST", body: body }),
+           "parsing the netlist",
+           function(){ forget("pins"); forget("config"); forget("derived"); forget("plan"); render(); });
+}
+function setPin(pin, body){
+  api("/api/p/" + P() + "/pins/" + encodeURIComponent(pin), { method:"PUT", body: body })
+    .then(function(){ forget("pins"); forget("config"); forget("derived"); forget("plan"); render(); },
+          showErr);
+}
+function askRole(pin, role){
+  var unit = role === "rail" ? "A (typical load current)" : "V (compliance / level)";
+  var v = window.prompt("DC value for " + pin.name + " as " + role + ", in " + unit + ":",
+                        role === "rail" ? "500u" : "0.4");
+  if (v === null) return;
+  setPin(pin.name, { role: role, dc: parseEng(v) });
+}
+function patchConfig(key, value){
+  var cur = (S.data["config"] || {}).config;
+  if (!cur) return;
+  var next = JSON.parse(JSON.stringify(cur));
+  if (key === "temps_c") value = value.map(Number);
+  next[key] = value;
+  putConfig(next, key + " changed");
+}
+function toggleSwitch(rail){
+  var cur = (S.data["config"] || {}).config;
+  if (!cur || !cur.my_load[rail]) return;
+  var next = JSON.parse(JSON.stringify(cur));
+  next.my_load[rail].switches = !next.my_load[rail].switches;
+  putConfig(next, rail + " load-EN toggled");
+}
+function saveLoadsFromInputs(){
+  var cur = (S.data["config"] || {}).config;
+  if (!cur) return;
+  var next = JSON.parse(JSON.stringify(cur));
+  document.querySelectorAll("[data-load]").forEach(function(n){
+    var rail = n.getAttribute("data-load"), k = n.getAttribute("data-k");
+    var v = parseEng(n.value);
+    if (next.my_load[rail] && v) next.my_load[rail][k] = v;
+  });
+  putConfig(next, "load numbers edited");
+}
+function putConfig(cfg, note){
+  api("/api/p/" + P() + "/config", { method:"PUT", body:{ config: cfg, note: note } })
+    .then(function(d){
+      S.data["config"] = { exists:true, config:d.config, sha:d.sha, answers:{}, undoable:d.undoable, history:[] };
+      S.undoable = d.undoable;
+      forget("derived"); forget("plan"); forget("consequences");
+      render(); refreshCli();
+    }, showErr);
+}
+function doUndo(){
+  api("/api/p/" + P() + "/config/undo", { method:"POST", body:{} }).then(function(d){
+    forget("config"); forget("derived"); forget("plan"); forget("consequences"); forget("pins");
+    S.undoable = d.undoable || "";
+    S.toast = "undone: " + d.kind;
+    render(); setTimeout(function(){ S.toast = ""; render(); }, 1400);
+  }, showErr);
+}
+function measureLoad(){
+  api("/api/p/" + P() + "/measure-load", { method:"POST", body:{} }).then(function(d){
+    var cur = (S.data["config"] || {}).config;
+    if (!cur) return;
+    var next = JSON.parse(JSON.stringify(cur));
+    Object.keys(d.rails || {}).forEach(function(r){
+      if (!next.my_load[r]) next.my_load[r] = { on_a: 0, off_a: 0, switches: true };
+      next.my_load[r].on_a = d.rails[r].on_a;
+      if (!next.my_load[r].off_a) next.my_load[r].off_a = d.rails[r].off_a_suggested;
+    });
+    putConfig(next, "loads measured from the netlist");
+  }, showErr);
+}
+
+/* ---------------------------------------------------------------- Plan -- */
+SCREENS.plan = {
+  cli: function(){
+    var p = S.data["plan"] || {};
+    return { ticks: p.ticks || {}, engine: "" };
+  },
+  main: function(){
+    if (!S.project) return noProject();
+    var pl = need("plan", "/api/p/" + P() + "/plan", "plan");
+    if (S.errs.plan && pl === undefined){
+      return '<div class="col grow">' + errBlock("plan")
+           + panel("What will run, and why", "", emptyBlock("No plan yet",
+               "Finish the three questions on New. The plan is computed from them and from the "
+               + "model spec; there is nothing to fill in here.", "Go to New", "new")) + "</div>";
+    }
+    if (pl === undefined){
+      return '<div class="col grow">' + panel("What will run, and why", "",
+        loadingBlock("plan", "compiling the plan: merging the runs one simulation can share")) + "</div>";
+    }
+    var cost = pl.cost || {};
+    var stats = '<div class="pb" style="display:flex;padding:12px 16px;flex-wrap:wrap">'
+      + stat(pl.cells, "cells") + stat(cost.runs, "runs")
+      + stat(num(cost.cpu_hours, 1), "CPU-h est.") + stat(pl.cached, "cached")
+      + stat((pl.groups || []).filter(function(g){ return g.enabled; }).length + "/" + (pl.groups || []).length, "groups on")
+      + '<div style="margin-left:auto;align-self:center" class="hint">Groups merge runs by AC '
+      + "superposition; nothing here is simulated twice. Runs already in the ledger are skipped.</div></div>";
+    var rows = (pl.groups || []).map(function(g){
+      var ctx = regCtx({ row: g });
+      var sel = S.sel.group === g.id;
+      var pick = regAction(function(){ S.sel.group = g.id; render(); });
+      var tick = regAction(function(){ setTick(g.id, !g.enabled); });
+      return "<tr" + rc("group", g.id, ctx) + ' class="click rc' + (sel ? " sel" : "") + '">'
+        + '<td><input type="checkbox" data-act="' + tick + '"' + (g.enabled ? " checked" : "") + "></td>"
+        + '<td class="mono" data-act="' + pick + '" style="' + (g.enabled ? "" : "text-decoration:line-through;color:var(--ink3)")
+        + '">' + esc(g.id) + "</td>"
+        + '<td data-act="' + pick + '">' + esc(g.title) + "</td>"
+        + '<td class="mono" style="color:var(--ink2)">' + esc((g.ports || []).join(", ")) + "</td>"
+        + '<td class="num">' + g.runs + "</td>"
+        + '<td class="num">' + (g.cached || 0) + "</td>"
+        + '<td class="mono" style="font-size:11.5px">' + esc((g.observables || []).join(" ")) + "</td>"
+        + '<td class="num">' + num(g.cpu_hours, 1) + "</td></tr>";
+    }).join("");
+    var table = panel("What will run, and why", "click a row for the reason &middot; untick to see what you lose",
+      '<table class="t"><thead><tr><th style="width:26px"></th><th>Group</th><th>Analysis</th>'
+      + '<th>Ports</th><th class="num">Runs</th><th class="num">Cached</th><th>Feeds</th>'
+      + '<th class="num">CPU-h</th></tr></thead><tbody>' + rows + "</tbody></table>", { flush: true });
+    var g = (pl.groups || []).filter(function(x){ return x.id === S.sel.group; })[0] || (pl.groups || [])[0];
+    var detail = g ? planDetail(g) : panel("Select a group", "", '<div class="hint">Click a row.</div>');
+    var cons = planConsequences(pl);
+    return '<div class="col grow">' + errBlock("plan") + jobBlock()
+         + '<div class="panel" style="flex:none">' + stats + "</div>" + table + "</div>"
+         + '<div class="col" style="flex:0 0 460px">' + detail + cons + "</div>";
+  },
+  foot: function(){
+    var pl = S.data["plan"] || {};
+    var n = (pl.cost || {}).runs || 0;
+    var sid = regAction(function(){ doSubmit(); });
+    return '<span class="hint">Resume: runs already in the ledger are skipped. Nothing is '
+         + "submitted until you press this.</span>"
+         + '<div class="rowflex"><button class="btn" data-act="' + regAction(function(){
+             copy(((S.data["plan"] || {}).groups || []).map(function(g){
+               return [g.id, g.analysis, g.runs, g.cpu_hours].join(","); }).join("\n"));
+           }) + '">Export plan (CSV)</button>'
+         + '<button class="btn" title="Write every run into the ledger without submitting one: '
+         + 'the netlists and recipes exist, nothing is queued." data-act="'
+         + regAction(function(){ doSubmit(true); }) + '">Dry run</button>'
+         + '<button class="btn pri" data-act="' + sid + '"' + (n ? "" : " disabled") + ">"
+         + ICON.play + " Submit " + n + " runs</button></div>";
+  }
+};
+function stat(v, l){
+  return '<div class="stat"><span class="v">' + esc(v === undefined || v === null ? "-" : v)
+       + '</span><span class="l">' + esc(l) + "</span></div>";
+}
+function planDetail(g){
+  var tab = S.sel.planTab || "why";
+  var right = '<div class="rowflex"><button class="chip' + (tab === "why" ? " on" : "")
+    + '" data-act="' + regAction(function(){ S.sel.planTab = "why"; render(); }) + '">Why</button>'
+    + '<button class="chip' + (tab === "runs" ? " on" : "") + '" data-act="'
+    + regAction(function(){ S.sel.planTab = "runs"; render(); }) + '">Runs &middot; ' + g.runs + "</button></div>";
+  if (tab === "why"){
+    return panel('<span class="mono">' + esc(g.id) + "</span>", "", '<div style="line-height:1.55;margin-bottom:12px">'
+      + esc(g.why) + "</div>"
+      + '<div class="kv"><span class="k">Feeds</span><span class="mono">' + esc((g.observables || []).join(", "))
+      + '</span><span class="k">Ports</span><span class="mono">' + esc((g.ports || []).join(", "))
+      + '</span><span class="k">Runs</span><span class="mono">' + g.runs + " ("
+      + (g.cached || 0) + ' cached)</span><span class="k">Cost</span><span class="mono">'
+      + num(g.cpu_hours, 1) + " CPU-h</span></div>"
+      + '<div class="lbl" style="margin:14px 0 6px">If you skip it</div>'
+      + '<div class="callout warn">' + esc(consequenceOf(g)) + "</div>"
+      + '<div class="rowflex" style="margin-top:12px">' + verbButtons("group", { row: g }) + "</div>",
+      { right: right });
+  }
+  var runs = need("planruns:" + g.id, "/api/p/" + P() + "/plan/runs?group=" + encodeURIComponent(g.id), "plan");
+  if (runs === undefined) return panel('<span class="mono">' + esc(g.id) + "</span>", "",
+    loadingBlock("planruns:" + g.id, "expanding the group into its runs"), { right: right });
+  var sel = S.sel.planRun || (runs.runs[0] || {}).run_id;
+  var rows = runs.runs.map(function(r){
+    var ctx = regCtx({ row: r });
+    var id = regAction(function(){ S.sel.planRun = r.run_id; forget("recipe:"); render(); });
+    return "<tr" + rc("planrun", "run " + r.run_id, ctx) + ' class="click rc'
+      + (r.run_id === sel ? " sel" : "") + '" data-act="' + id + '">'
+      + '<td class="id">' + esc(r.run_id.slice(0, 10)) + "</td>"
+      + '<td class="mono">' + esc(r.process) + "</td>"
+      + '<td class="num">' + (r.temp_c === null ? "T swept" : num(r.temp_c, 0)) + "</td>"
+      + '<td class="num">' + esc(r.vset) + "</td>"
+      + '<td class="mono">' + esc(r.load_label || r.load_key || "-") + "</td></tr>";
+  }).join("");
+  var rec = sel ? need("recipe:" + sel, "/api/p/" + P() + "/runs/" + encodeURIComponent(sel) + "/recipe", "plan") : undefined;
+  return panel('<span class="mono">' + esc(g.id) + "</span>", "",
+    '<div style="max-height:230px;overflow:auto;border-bottom:1px solid var(--line2);margin:-12px -13px 10px;padding:0">'
+    + '<table class="t"><thead><tr><th>Run</th><th>Corner</th><th class="num">T C</th>'
+    + '<th class="num">VSET</th><th>Load</th></tr></thead><tbody>' + rows + "</tbody></table></div>"
+    + '<div class="lbl" style="margin-bottom:6px">How run <span class="mono" style="text-transform:none">'
+    + esc((sel || "").slice(0, 10)) + "</span> is built and submitted</div>"
+    + (rec === undefined ? skeleton(5, "reading the recipe") : recipeCode(rec))
+    + '<div class="hint" style="margin-top:6px">Lines marked <span class="mono">+</span> are added '
+    + 'by pmukit, <span class="mono">~</span> edited in place (the original is in the comment), '
+    + '<span class="mono">-</span> stripped. Everything else is your netlist, untouched.</div>',
+    { right: right });
+}
+function recipeCode(rec){
+  var body = (rec.lines || []).map(function(l){
+    var cls = l.mark === "+" ? "a" : l.mark === "~" ? "e" : l.mark === "-" ? "d" : l.mark === "#" ? "c" : "";
+    return '<span class="' + cls + '">' + esc(l.text) + "</span>";
+  }).join("\n");
+  return '<div class="code" style="max-height:230px">' + body + "</div>";
+}
+function consequenceOf(g){
+  var cs = (S.data["consequences"] || {}).consequences || [];
+  var hit = cs.filter(function(c){ return (g.ports || []).indexOf(c.port) >= 0; });
+  if (hit.length) return hit.map(function(c){ return c.port + " " + c.block + ": " + c.effect; }).join(" ");
+  return (g.ports || []).join(", ") + " would lose " + (g.observables || []).join(", ")
+       + ", and every block fed by it is reported NOT RUN.";
+}
+function planConsequences(pl){
+  var cs = need("consequences", "/api/p/" + P() + "/plan/consequences", "plan");
+  var body;
+  if (cs === undefined) body = loadingBlock("consequences", "working out what stops being measured");
+  else if (!cs.consequences.length){
+    body = '<div style="display:flex;gap:8px;align-items:center;color:var(--ok)">' + ICON.ok
+         + "<span>Every block in the model spec has its data. Nothing will be reported NOT RUN.</span></div>";
+  } else {
+    body = cs.consequences.map(function(c){
+      return '<div class="callout bad" style="margin-bottom:8px">' + ICON.x + " <b class=\"mono\">"
+           + esc(c.port) + "." + esc(c.block) + "</b> &mdash; " + esc(c.effect) + "</div>";
+    }).join("");
+  }
+  return panel("Consequences of the current selection", "", body, { style: "flex:0 1 auto;max-height:340px" });
+}
+function setTick(id, on){
+  api("/api/p/" + P() + "/plan/groups", { method:"PUT", body:{ id: id, on: on } })
+    .then(function(d){
+      S.data["plan"] = d;
+      S.data["consequences"] = { consequences: d.consequences || [] };
+      S.undoable = d.undoable || "";
+      render(); refreshCli();
+    }, showErr);
+}
+function setTicksAll(fn){
+  var pl = S.data["plan"];
+  if (!pl) return;
+  var ticks = {};
+  pl.groups.forEach(function(g){ ticks[g.id] = !!fn(g); });
+  api("/api/p/" + P() + "/plan/groups", { method:"PUT", body:{ ticks: ticks } })
+    .then(function(d){
+      S.data["plan"] = d;
+      S.data["consequences"] = { consequences: d.consequences || [] };
+      S.undoable = d.undoable || "";
+      render(); refreshCli();
+    }, showErr);
+}
+function doSubmit(commitOnly){
+  startJob(api("/api/p/" + P() + "/submit", { method:"POST", body:{ commit_only: !!commitOnly } }),
+    commitOnly ? "writing the ledger (nothing submitted)" : "submitting the plan",
+    function(){ forget("ledger"); go("run"); });
+}
+
+/* ----------------------------------------------------------------- Run -- */
+SCREENS.run = {
+  cli: function(){ return { filter: S.sel.runFilter || "all", run: S.sel.run || "" }; },
+  main: function(){
+    if (!S.project) return noProject();
+    var f = S.sel.runFilter || "all";
+    var key = "ledger:" + f;
+    var led = need(key, "/api/p/" + P() + "/ledger" + (f === "all" ? "" : "?status=" + f), "run");
+    if (led === undefined && S.errs.run){
+      return '<div class="col grow">' + errBlock("run")
+           + panel("Ledger", "", emptyBlock("No ledger yet",
+             "The ledger is written when the plan is submitted.", "Go to Plan", "plan")) + "</div>";
+    }
+    if (led === undefined){
+      return '<div class="col grow">' + panel("Ledger", "",
+        loadingBlock(key, "reading runs.sqlite")) + "</div>";
+    }
+    if (!led.total){
+      return '<div class="col grow">' + jobBlock() + panel("Ledger", "", emptyBlock("Nothing submitted yet",
+        "Submit the plan and every run appears here as the runner writes it.", "Go to Plan", "plan")) + "</div>";
+    }
+    var c = led.counts || {};
+    var total = led.total || 1;
+    var pct = function(k){ return (100 * (c[k] || 0) / total).toFixed(1); };
+    var head = '<div class="pb" style="padding:12px 16px;display:flex;flex-direction:column;gap:10px">'
+      + '<div style="display:flex;flex-wrap:wrap">'
+      + stat(c.done || 0, "done") + stat(c.running || 0, "running") + stat(c.planned || 0, "planned")
+      + stat(c.failed || 0, "failed") + stat(c.skipped_cached || 0, "cached")
+      + stat(num(led.cpu_hours, 1), "CPU-h used") + stat(led.not_run, "not run")
+      + '<div style="margin-left:auto;align-self:center" class="rowflex">'
+      + '<button class="btn sm" data-act="' + regAction(function(){ forget("ledger:"); render(); })
+      + '">' + ICON.retry + " Refresh</button></div></div>"
+      + '<div class="bar"><div class="seg" style="background:var(--ok);width:' + pct("done") + '%"></div>'
+      + '<div class="seg" style="background:var(--acc);width:' + pct("running") + '%"></div>'
+      + '<div class="seg" style="background:var(--bad);width:' + pct("failed") + '%"></div>'
+      + '<div class="seg" style="background:var(--ink3);width:' + pct("skipped_cached") + '%"></div></div></div>';
+    var filters = ["all","running","failed","planned","done"].map(function(n){
+      return '<button class="chip' + (f === n ? " on" : "") + '" data-act="'
+        + regAction(function(){ S.sel.runFilter = n; render(); refreshCli(); }) + '">' + n + "</button>";
+    }).join(" ");
+    var rows = (led.rows || []).map(function(r){
+      var ctx = regCtx({ row: r });
+      var id = regAction(function(){ S.sel.run = r.run_id; forget("run:"); render(); refreshCli(); });
+      var bcls = { done:"b-ok", running:"b-acc", failed:"b-bad", planned:"b-mute",
+                   submitted:"b-acc", skipped_cached:"b-mute", imported:"b-ok" }[r.status] || "b-mute";
+      return "<tr" + rc("run", "run " + r.run_id + " &middot; " + r.status, ctx)
+        + ' class="click rc' + (S.sel.run === r.run_id ? " sel" : "") + '" data-act="' + id + '">'
+        + '<td class="id">' + esc(r.run_id.slice(0, 10)) + "</td>"
+        + '<td class="mono" style="font-size:11.5px">' + esc(r.cell_text || "") + "</td>"
+        + "<td>" + esc(r.analysis) + " " + '<span class="hint mono">' + esc(r.stimulus || "") + "</span></td>"
+        + '<td><span class="badge ' + bcls + '">' + esc(r.status) + "</span></td>"
+        + '<td class="num">' + num((r.cpu_seconds || 0) / 60, 1) + "</td>"
+        + "<td>" + verbButton("run", CTXS[ctx], "retry") + "</td></tr>";
+    }).join("");
+    var table = panel("Ledger", "",
+      '<table class="t"><thead><tr><th>Run</th><th>Cell</th><th>Analysis</th><th>Status</th>'
+      + '<th class="num">CPU min</th><th></th></tr></thead><tbody>' + rows + "</tbody></table>",
+      { flush: true, right: '<div class="rowflex">' + filters + "</div>" });
+    return '<div class="col grow">' + errBlock("run") + jobBlock()
+         + '<div class="panel" style="flex:none">' + head + "</div>" + table + "</div>"
+         + '<div class="col" style="flex:0 0 430px">' + runDetail() + "</div>";
+  },
+  foot: function(){
+    var led = S.data["ledger:" + (S.sel.runFilter || "all")] || {};
+    var c = led.counts || {};
+    var busy = (c.running || 0) + (c.planned || 0) + (c.submitted || 0);
+    var fid = regAction(function(){ doFit(); });
+    return '<span class="hint">Runs are written to <span class="mono">runs.sqlite</span>. '
+         + "Closing this page does not stop the queue.</span>"
+         + '<div class="rowflex"><button class="btn" title="The failure logs and the netlist diff '
+         + 'are one block of the digest" data-act="' + regAction(function(){ go("digest"); })
+         + '">' + ICON.copy + " Failure bundle for the desk " + ICON.arrow + "</button>"
+         + '<button class="btn pri" data-act="' + fid + '"' + (busy ? "" : "") + ">Fit model "
+         + ICON.arrow + "</button></div>";
+  }
+};
+function runDetail(){
+  if (!S.sel.run) return panel("Run", "", '<div class="hint">Click a row in the ledger. '
+    + "Right-click it for retry, skip, kill, log and the recipe.</div>", { style: "flex:1" });
+  var key = "run:" + S.sel.run;
+  var d = need(key, "/api/p/" + P() + "/runs/" + encodeURIComponent(S.sel.run), "run");
+  if (d === undefined) return panel("Run", "", loadingBlock(key, "reading the run and its log"),
+                                    { style: "flex:1" });
+  var r = d.run;
+  var ctx = regCtx({ row: r });
+  var bcls = { done:"b-ok", running:"b-acc", failed:"b-bad" }[r.status] || "b-mute";
+  return panel('Run <span class="id">' + esc(r.run_id.slice(0, 12)) + "</span>",
+    "", '<div class="kv" style="margin-bottom:10px">'
+    + '<span class="k">Cell</span><span class="mono">' + esc(r.cell_text || "") + "</span>"
+    + '<span class="k">Analysis</span><span>' + esc(r.analysis) + " &middot; "
+    + esc(r.stimulus || "-") + "</span>"
+    + '<span class="k">Feeds</span><span class="mono">' + esc((r.reads || []).join(", ") || "-") + "</span>"
+    + '<span class="k">Engine</span><span class="mono">' + esc(r.engine || "-") + " " + esc(r.job_id || "") + "</span>"
+    + '<span class="k">Netlist</span><span class="mono">' + esc(r.netlist_path || "-") + "</span>"
+    + '<span class="k">PSF</span><span class="mono">' + esc(r.psf_path || "-") + "</span></div>"
+    + '<div class="rowflex" style="margin-bottom:10px">' + verbButtons("run", CTXS[ctx]) + "</div>"
+    + '<div class="lbl" style="margin-bottom:6px">How it ran</div>'
+    + '<div class="code" style="max-height:170px">' + esc(r.recipe || "(no recipe)") + "</div>"
+    + '<div class="lbl" style="margin:10px 0 6px">Log tail</div>'
+    + '<div class="code" style="max-height:200px">' + esc(d.log || "") + "</div>"
+    + (r.error ? '<div class="callout bad" style="margin-top:10px">' + esc(r.error) + "</div>" : "")
+    + (d.why ? '<div class="hint" style="margin-top:8px">' + esc(d.why) + "</div>" : ""),
+    { style: "flex:1", right: '<span class="badge ' + bcls + '">' + esc(r.status) + "</span>" });
+}
+function runAction(id, action){
+  api("/api/p/" + P() + "/runs/" + encodeURIComponent(id) + "/" + action, { method:"POST", body:{} })
+    .then(function(){ forget("ledger:"); forget("run:"); render(); refreshCli(); }, showErr);
+}
+function doFit(){
+  startJob(api("/api/p/" + P() + "/fit", { method:"POST", body:{} }), "fitting the model",
+    function(j){ if (j.status === "done"){ forget("model"); go("model"); } });
+}
+
+/* --------------------------------------------------------------- Model -- */
+SCREENS.model = {
+  cli: function(){
+    return { port: S.sel.port || "", cell: S.sel.cell || "", block: S.sel.block || "" };
+  },
+  main: function(){
+    if (!S.project) return noProject();
+    var sum = need("model:summary", "/api/p/" + P() + "/model/summary", "model");
+    var gr = need("model:grades", "/api/p/" + P() + "/model/grades", "model");
+    if (sum === undefined && S.errs.model){
+      return '<div class="col grow">' + errBlock("model") + "</div>";
+    }
+    if (sum === undefined){
+      return '<div class="col grow">' + panel("Can I trust this model in my simulation?", "",
+        loadingBlock("model:summary", "reading the fit and the grades")) + "</div>";
+    }
+    if (!sum.fitted){
+      return '<div class="col grow">' + errBlock("model") + jobBlock()
+        + panel("Model", "", '<div class="empty"><div class="t">Model not fitted yet</div>'
+          + "<div>" + sum.done + " of " + sum.total + " runs have results. The fit needs every DC "
+          + "and AC group complete; noise and transients can arrive later and refine it.</div>"
+          + '<div class="hint">You can fit early with what is there: blocks without data are '
+          + "marked NOT RUN, and a re-fit is one click when the rest lands.</div>"
+          + '<button class="btn" style="margin-top:8px" data-act="' + regAction(function(){ doFit(); })
+          + '">Fit with what is done</button></div>')
+        + (sum.not_run && sum.not_run.length ? panel("Not run", "", sum.not_run.map(function(n){
+            return '<div class="callout bad" style="margin-bottom:6px"><b class="mono">' + esc(n.item)
+                 + "</b> " + esc(n.note || "") + "</div>"; }).join(""), { style: "flex:none" }) : "")
+        + "</div>";
+    }
+    var trust = panel("Can I trust this model in my simulation?", "the same text opens report.md",
+      '<div class="trust">'
+      + '<div class="box"><div class="h">Valid range</div><div class="kv" style="grid-template-columns:86px 1fr">'
+      + Object.keys(sum.valid || {}).map(function(k){
+          return '<span class="k">' + esc(k) + '</span><span class="mono">' + esc(sum.valid[k]) + "</span>";
+        }).join("") + "</div></div>"
+      + '<div class="box"><div class="h">Usable, not sign-off</div>'
+      + ((sum.usable_not_signoff || []).length ? sum.usable_not_signoff.map(function(u){
+          return '<div><span class="badge b-warn">' + ICON.warn + " " + esc(u.item || u)
+               + '</span><div class="hint">' + esc(u.note || "") + "</div></div>"; }).join("")
+        : '<span class="badge b-ok">' + ICON.ok + " nothing held back</span>") + "</div>"
+      + '<div class="box"><div class="h">Not run</div>'
+      + ((sum.not_run || []).length ? sum.not_run.map(function(u){
+          return '<div><span class="badge b-bad">' + ICON.x + " " + esc(u.item || u)
+               + '</span><div class="hint">' + esc(u.note || "") + "</div></div>"; }).join("")
+        : '<span class="badge b-ok">' + ICON.ok + " everything was run</span>") + "</div>"
+      + '<div class="box"><div class="h">HB health check</div>'
+      + (sum.hb ? '<span class="badge b-' + (sum.hb.ok ? "ok" : "bad") + '">'
+          + (sum.hb.ok ? ICON.ok : ICON.x) + " " + esc(sum.hb.detail || "") + "</span>"
+          + '<div class="hint">' + esc(sum.hb.note || "") + "</div>"
+        : '<span class="badge b-mute">not checked</span><div class="hint">Run verify to drive the '
+          + 'model through HB with every large-signal term toggled one at a time.</div>'
+          + '<button class="btn sm" style="margin-top:6px" data-act="'
+          + regAction(function(){ doVerify(); }) + '">Run the HB health check</button>')
+      + "</div></div>", { style: "flex:none" });
+    var grid = gradesGrid(gr);
+    var right = cellDetail();
+    return '<div class="col grow">' + errBlock("model") + jobBlock() + trust + grid + "</div>"
+         + '<div class="col" style="flex:0 0 520px">' + right + "</div>";
+  },
+  foot: function(){
+    return '<span class="hint">The model curve is computed from the fitted parameters; drawing it '
+         + "never launches a simulator.</span>"
+         + '<div class="rowflex"><button class="btn" data-act="' + regAction(function(){ go("digest"); })
+         + '">' + ICON.copy + " Copy for desk</button>"
+         + '<button class="btn" data-act="' + regAction(function(){ doVerify(); }) + '">Verify (HB health)</button>'
+         + '<button class="btn pri" data-act="' + regAction(function(){ doDeliver(); }) + '">Deliver '
+         + ICON.arrow + "</button></div>";
+  }
+};
+function gradesGrid(gr){
+  if (gr === undefined) return panel("Grade per port and cell", "",
+    loadingBlock("model:grades", "grading every block against its limit"));
+  if (!gr.rows || !gr.rows.length) return panel("Grade per port and cell", "",
+    emptyBlock("No grades yet", gr.why || "Run verify after the fit to grade every block.",
+      "", ""));
+  var head = '<div class="cell c-head"></div>' + gr.cells.map(function(c){
+    return '<div class="cell c-head">' + esc(c.label) + "</div>"; }).join("");
+  var body = gr.rows.map(function(r){
+    return '<div class="cell c-head" style="justify-content:flex-start;font-family:var(--mono);font-size:11.5px;color:var(--ink)">'
+      + esc(r.port) + "</div>"
+      + r.cells.map(function(c){
+          var sel = S.sel.port === r.port && S.sel.corner === c.corner && String(S.sel.temp) === String(c.temp_c);
+          var ctx = regCtx({ port: r.port, corner: c.corner, temp: c.temp_c });
+          var id = regAction(function(){ pickCell(r.port, c.corner, c.temp_c); });
+          return '<div class="cell rc c-' + gradeCls(c.grade) + (sel ? " sel" : "")
+               + '" data-act="' + id + '"' + rc("cell", r.port + " " + c.corner + " " + c.temp_c, ctx)
+                  + ">" + gradeLabel(c.grade) + "</div>";
+        }).join("");
+  }).join("");
+  return panel("Grade per port and cell", "worst block in the cell &middot; click a cell",
+    '<div class="grid" style="grid-template-columns:120px repeat(' + gr.cells.length
+    + ',minmax(0,1fr))">' + head + body + "</div>"
+    + '<div class="legend" style="margin-top:12px">'
+    + '<span><span class="badge b-ok">OK</span> every block within tolerance</span>'
+    + '<span><span class="badge b-warn">MARG</span> one block near its limit</span>'
+    + '<span><span class="badge b-bad">FAIL</span> block outside tolerance</span>'
+    + '<span><span class="badge b-acc">FIT</span> fitted, not yet judged</span>'
+    + '<span><span class="badge b-mute">N/R</span> the data behind it was never run</span></div>'
+    + (gr.why ? '<div class="callout warn" style="margin-top:10px">' + ICON.warn + " "
+        + esc(gr.why) + (gr.graded_by === "fit"
+          ? ' <button class="btn sm" style="margin-left:8px" data-act="'
+            + regAction(function(){ doVerify(); }) + '">Run verify</button>' : "") + "</div>" : ""));
+}
+function pickCell(port, corner, temp){
+  S.sel.port = port; S.sel.corner = corner;
+  S.sel.temp = (temp === null || temp === undefined) ? "" : temp;
+  S.sel.cell = corner + (S.sel.temp === "" ? "" : "/" + S.sel.temp + "C");
+  S.sel.block = null;
+  forget("cell:"); forget("curve:");
+  render(); refreshCli();
+}
+function cellDetail(){
+  if (!S.sel.port) return panel("Pick a cell", "",
+    '<div class="hint">Click a grade cell to see every block and the model-versus-measurement '
+    + "curve. Right-click it for the runs behind it.</div>", { style: "flex:1" });
+  var key = "cell:" + S.sel.port + S.sel.corner + S.sel.temp;
+  var temp = (S.sel.temp === null || S.sel.temp === undefined) ? "" : S.sel.temp;
+  var d = need(key, "/api/p/" + P() + "/model/cell?port=" + encodeURIComponent(S.sel.port)
+    + "&corner=" + encodeURIComponent(S.sel.corner || "")
+    + "&temp=" + encodeURIComponent(temp), "model");
+  if (d === undefined) return panel("Cell", "", loadingBlock(key, "collecting the block scores"),
+    { style: "flex:1" });
+  var block = S.sel.block || (d.blocks[0] || {}).name || "zout";
+  var blockRow = (d.blocks || []).filter(function(b){ return b.name === block; })[0]
+              || (d.blocks || [])[0] || {};
+  var rows = (d.blocks || []).map(function(b){
+    var ctx = regCtx({ row: b });
+    var id = regAction(function(){ S.sel.block = b.name; forget("curve:"); render(); refreshCli(); });
+    return "<tr" + rc("block", "block " + b.name, ctx) + ' class="click rc'
+      + (b.name === block ? " sel" : "") + '" data-act="' + id + '">'
+      + '<td class="mono">' + esc(b.name)
+      + (b.load ? ' <span class="hint">@ ' + esc(b.load) + "</span>" : "") + "</td>"
+      + '<td class="hint">' + esc(b.metric) + "</td>"
+      + '<td class="num">' + esc(b.value) + "</td>"
+      + '<td class="num" style="color:var(--ink3)">' + esc(b.limit) + "</td>"
+      + '<td><span class="badge b-' + gradeCls(b.grade) + '">' + gradeLabel(b.grade) + "</span></td></tr>";
+  }).join("");
+  return panel('<span class="mono">' + esc(S.sel.port) + "</span> &middot; " + esc(S.sel.corner)
+    + " / " + esc(S.sel.temp) + " C",
+    "", '<table class="t"><thead><tr><th>Block</th><th>Metric</th><th class="num">Model vs GT</th>'
+    + '<th class="num">Limit</th><th>Grade</th></tr></thead><tbody>' + rows + "</tbody></table>"
+    + curveBlock(blockRow),
+    { style: "flex:1", right: '<span class="badge b-' + gradeCls(d.grade) + '">'
+      + gradeLabel(d.grade) + "</span>" });
+}
+function curveBlock(row){
+  var block = row.name || "zout";
+  if (!block) return "";
+  if (row.missing){
+    return '<div class="callout warn" style="margin-top:12px">' + ICON.warn + " <b>" + esc(block)
+         + "</b> has no curve: the measurement behind it was never run"
+         + ((row.notes || []).length ? " -- " + esc(row.notes[0]) : "") + ".</div>";
+  }
+  var cell = row.cell_key || S.sel.cell || "";
+  var key = "curve:" + S.sel.port + cell + block;
+  var c = need(key, "/api/p/" + P() + "/model/curve?port=" + encodeURIComponent(S.sel.port)
+    + "&cell=" + encodeURIComponent(cell) + "&block=" + encodeURIComponent(block), "model");
+  if (S.errs.model && c === undefined && S.errs.model.key === key){
+    return '<div style="margin-top:12px">' + errBlock("model") + "</div>";
+  }
+  if (c === undefined) return '<div style="margin-top:12px">' + skeleton(4, S.slow[key]
+    ? "evaluating the fitted model at the measurement frequencies" : "") + "</div>";
+  var ctx = regCtx({ curve: c });
+  var head = '<div class="rowflex" style="margin-top:14px;justify-content:space-between">'
+    + "<b>" + esc(c.label) + " &middot; " + esc(c.unit) + "</b>"
+    + '<div class="rowflex">'
+    + (c.metric ? '<span class="hint mono">' + esc(c.metric) + " " + num(c.score, 3) + "</span>" : "")
+    + verbButtons("chart", CTXS[ctx]) + "</div></div>";
+  if (S.sel.curveView === "table"){
+    var n = c.x.length, step = Math.max(1, Math.floor(n / 14));
+    var rows = "";
+    for (var i = 0; i < n; i += step){
+      var g = c.gt.mag[i], m = c.model.mag[i];
+      var d = (g && m) ? (20 * Math.log10(m / g)) : NaN;
+      rows += "<tr><td class=\"mono\">"
+            + (c.x_log === false ? num(c.x[i], 1) : eng(c.x[i], "Hz")) + '</td><td class="num">'
+            + (g === null ? "-" : g.toPrecision(4)) + '</td><td class="num">'
+            + (m === null ? "-" : m.toPrecision(4)) + '</td><td class="num">' + num(d, 2) + "</td></tr>";
+    }
+    return head + '<table class="t" style="margin-top:8px"><thead><tr><th>'
+      + esc(c.x_label || "x") + '</th>'
+      + '<th class="num">GT</th><th class="num">Model</th><th class="num">delta dB</th></tr></thead><tbody>'
+      + rows + "</tbody></table>";
+  }
+  return head + '<div class="rc" data-chart="' + ctx + '"' + rc("chart", "chart " + c.label, ctx)
+     + ' style="position:relative;margin-top:8px">' + chartSvg(c) + "</div>"
+    + '<div class="legend" style="margin-top:8px">'
+    + '<span><span class="sw" style="background:var(--gt)"></span>ground truth (transistor PMU)</span>'
+    + '<span><span class="sw" style="background:var(--acc)"></span>model (.va)</span>'
+    + '<span class="hint">' + c.points + " points, the same ones on both sides"
+    + (c.source ? " &middot; " + esc(c.source) : "") + " &middot; hover for values</span></div>";
+}
+/* Hand-rolled SVG: magnitude above, phase below. Log x, log y for magnitude, linear phase. */
+function chartSvg(c){
+  var W = 520, H = 210, PH = (c.complex && S.sel.showPhase !== false) ? 92 : 0;
+  var X0 = 52, X1 = W - 8, Y0 = 12, Y1 = H - 26;
+  var xs = c.x, gm = c.gt.mag, mm = c.model.mag;
+  var lo = Infinity, hi = -Infinity;
+  [gm, mm].forEach(function(a){ a.forEach(function(v){
+    if (v !== null && v > 0 && isFinite(v)){ if (v < lo) lo = v; if (v > hi) hi = v; } }); });
+  if (!isFinite(lo) || !isFinite(hi) || lo <= 0){ lo = 1e-3; hi = 1; }
+  lo = Math.pow(10, Math.floor(Math.log10(lo))); hi = Math.pow(10, Math.ceil(Math.log10(hi)));
+  if (hi <= lo) hi = lo * 10;
+  var logx = c.x_log !== false;
+  var fx0 = logx ? Math.log10(Math.max(xs[0], 1e-12)) : xs[0];
+  var fx1 = logx ? Math.log10(Math.max(xs[xs.length - 1], 1e-11)) : xs[xs.length - 1];
+  if (fx1 === fx0) fx1 = fx0 + 1;
+  var X = function(f){
+    var v = logx ? Math.log10(Math.max(f, 1e-12)) : f;
+    return X0 + (X1 - X0) * (v - fx0) / (fx1 - fx0);
+  };
+  var Y = function(v){
+    if (v === null || !isFinite(v) || v <= 0) v = lo;
+    return Y1 - (Y1 - Y0) * (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo));
+  };
+  var path = function(arr){
+    var d = "", started = false;
+    for (var i = 0; i < xs.length; i++){
+      var v = arr[i];
+      if (v === null || !isFinite(v)) continue;
+      d += (started ? "L" : "M") + X(xs[i]).toFixed(1) + " " + Y(v).toFixed(1) + " ";
+      started = true;
+    }
+    return d;
+  };
+  var vg = "", ticks = [];
+  if (logx){
+    for (var dec = Math.floor(fx0); dec <= Math.ceil(fx1); dec++){
+      var f = Math.pow(10, dec);
+      if (f >= xs[0] * 0.999 && f <= xs[xs.length - 1] * 1.001) ticks.push([f, eng(f, "")]);
+    }
+  } else {
+    for (var k2 = 0; k2 <= 5; k2++){
+      var v2 = fx0 + (fx1 - fx0) * k2 / 5;
+      ticks.push([v2, num(v2, 0)]);
+    }
+  }
+  ticks.forEach(function(tk){
+    vg += '<line x1="' + X(tk[0]).toFixed(1) + '" x2="' + X(tk[0]).toFixed(1) + '" y1="' + Y0
+        + '" y2="' + (Y1 + PH) + '" stroke="var(--line2)"/>'
+        + '<text x="' + X(tk[0]).toFixed(1) + '" y="' + (Y1 + PH + 16)
+        + '" text-anchor="middle" fill="var(--ink3)">' + tk[1] + "</text>";
+  });
+  var hg = "";
+  for (var p = Math.log10(lo); p <= Math.log10(hi) + 1e-9; p += 1){
+    var v = Math.pow(10, p);
+    hg += '<line x1="' + X0 + '" x2="' + X1 + '" y1="' + Y(v).toFixed(1) + '" y2="' + Y(v).toFixed(1)
+       + '" stroke="var(--line2)"/><text x="' + (X0 - 6) + '" y="' + (Y(v) + 3.5).toFixed(1)
+       + '" text-anchor="end" fill="var(--ink3)">1e' + Math.round(p) + "</text>";
+  }
+  var phase = "";
+  if (PH){
+    var PY0 = Y1 + 16, PY1 = Y1 + PH;
+    var YP = function(d){ return PY1 - (PY1 - PY0) * (Math.max(-180, Math.min(180, d)) + 180) / 360; };
+    var pp = function(arr){
+      var d = "", st = false;
+      for (var i = 0; i < xs.length; i++){
+        if (arr[i] === null || !isFinite(arr[i])) continue;
+        d += (st ? "L" : "M") + X(xs[i]).toFixed(1) + " " + YP(arr[i]).toFixed(1) + " "; st = true;
+      }
+      return d;
+    };
+    phase = "";
+    [-180, -90, 0, 90, 180].forEach(function(d){
+      phase += '<line x1="' + X0 + '" x2="' + X1 + '" y1="' + YP(d).toFixed(1) + '" y2="' + YP(d).toFixed(1)
+            + '" stroke="var(--line2)"/><text x="' + (X0 - 6) + '" y="' + (YP(d) + 3.5).toFixed(1)
+            + '" text-anchor="end" fill="var(--ink3)">' + d + "</text>";
+    });
+    phase += '<path d="' + pp(c.gt.phase_deg) + '" fill="none" stroke="var(--gt)" stroke-width="1.6"/>'
+          + '<path d="' + pp(c.model.phase_deg) + '" fill="none" stroke="var(--acc)" stroke-width="1.6"/>'
+          + '<text x="' + (X0 + 4) + '" y="' + (PY0 + 11) + '" fill="var(--ink3)">phase, degrees</text>';
+  }
+  return '<svg class="chart" viewBox="0 0 ' + W + " " + (H + PH) + '" preserveAspectRatio="xMidYMid meet">'
+    + vg + hg
+    + '<line x1="' + X0 + '" x2="' + X1 + '" y1="' + Y1 + '" y2="' + Y1 + '" stroke="var(--line3)"/>'
+    + '<path d="' + path(gm) + '" fill="none" stroke="var(--gt)" stroke-width="2" stroke-linejoin="round"/>'
+    + '<path d="' + path(mm) + '" fill="none" stroke="var(--acc)" stroke-width="2" stroke-linejoin="round"/>'
+    + '<text x="' + (X0 + 4) + '" y="' + (Y0 + 10) + '" fill="var(--ink3)">' + esc(c.unit) + "</text>"
+    + phase
+    + '<g class="hov"></g></svg>'
+    + '<div class="hovbox" style="position:absolute;top:4px;left:60px;background:var(--code-bg);'
+    + 'color:var(--code-ink);padding:5px 8px;border-radius:4px;font-family:var(--mono);font-size:11px;'
+    + 'white-space:nowrap;pointer-events:none;display:none"></div>';
+}
+function hoverChart(node){
+  var svg = node.querySelector("svg");
+  var box = node.querySelector(".hovbox");
+  var ctx = CTXS[node.getAttribute("data-chart")];
+  if (!svg || !ctx) return;
+  var c = ctx.curve;
+  svg.onmousemove = function(e){
+    var r = svg.getBoundingClientRect();
+    var frac = (e.clientX - r.left) / r.width;
+    var W = 520, X0 = 52, X1 = W - 8;
+    var px = frac * W;
+    var t = (px - X0) / (X1 - X0);
+    if (t < 0 || t > 1){ box.style.display = "none"; svg.querySelector(".hov").innerHTML = ""; return; }
+    var lg = c.x_log !== false;
+    var f0 = lg ? Math.log10(c.x[0]) : c.x[0];
+    var f1 = lg ? Math.log10(c.x[c.x.length - 1]) : c.x[c.x.length - 1];
+    var target = f0 + t * (f1 - f0);
+    var i = 0, best = Infinity;
+    for (var k = 0; k < c.x.length; k++){
+      var dd = Math.abs((lg ? Math.log10(c.x[k]) : c.x[k]) - target);
+      if (dd < best){ best = dd; i = k; }
+    }
+    var g = c.gt.mag[i], m = c.model.mag[i];
+    var db = (g && m) ? (20 * Math.log10(m / g)).toFixed(2) : "-";
+    box.style.display = "block";
+    box.style.left = Math.min(Math.max(8, e.clientX - r.left + 10), r.width - 230) + "px";
+    box.textContent = (lg ? eng(c.x[i], "Hz") : num(c.x[i], 1) + " " + (c.x_label || ""))
+      + "   GT " + (g === null ? "-" : g.toPrecision(4))
+      + "   model " + (m === null ? "-" : m.toPrecision(4)) + "   " + db + " dB";
+    var xv = X0 + (X1 - X0) * ((lg ? Math.log10(c.x[i]) : c.x[i]) - f0) / (f1 - f0);
+    svg.querySelector(".hov").innerHTML = '<line x1="' + xv.toFixed(1) + '" x2="' + xv.toFixed(1)
+      + '" y1="12" y2="184" stroke="var(--ink3)" stroke-dasharray="3 3"/>';
+  };
+  svg.onmouseleave = function(){ box.style.display = "none"; svg.querySelector(".hov").innerHTML = ""; };
+}
+function curveCsv(c){
+  var out = ["f_hz,gt_mag,gt_phase_deg,model_mag,model_phase_deg"];
+  for (var i = 0; i < c.x.length; i++){
+    out.push([c.x[i], c.gt.mag[i], c.gt.phase_deg[i], c.model.mag[i], c.model.phase_deg[i]].join(","));
+  }
+  return out.join("\n");
+}
+function doVerify(){
+  startJob(api("/api/p/" + P() + "/verify", { method:"POST", body:{} }), "HB health check",
+    function(){ forget("model"); forget("cell:"); forget("curve:"); render(); });
+}
+function doDeliver(){
+  startJob(api("/api/p/" + P() + "/deliver", { method:"POST", body:{} }), "writing the deliverable",
+    function(j){ forget("deliverables"); if (j.status !== "failed") go("deliver"); });
+}
+
+/* ------------------------------------------------------------- Deliver -- */
+SCREENS.deliver = {
+  cli: function(){ return { file: S.sel.file || "" }; },
+  main: function(){
+    if (!S.project) return noProject();
+    var d = need("deliverables", "/api/p/" + P() + "/deliverables", "deliver");
+    if (d === undefined && S.errs.deliver) return '<div class="col grow">' + errBlock("deliver") + "</div>";
+    if (d === undefined) return '<div class="col grow">' + panel("Deliverable", "",
+      loadingBlock("deliverables", "listing the stamped deliverable folders")) + "</div>";
+    if (!d.deliverables.length){
+      return '<div class="col grow">' + jobBlock() + panel("Deliverable", "",
+        emptyBlock("Nothing delivered yet",
+          "Deliver writes one stamped folder: a .scs library with one section per corner, one .va "
+          + "per corner, the validity envelope, the report and the provenance.",
+          "Go to Model", "model")) + "</div>";
+    }
+    var dv = d.deliverables[S.sel.deliv || 0];
+    var file = S.sel.file || (dv.files[0] || {}).name;
+    var rows = dv.files.map(function(f){
+      var ctx = regCtx({ row: f, stampPath: dv.path });
+      var id = regAction(function(){ S.sel.file = f.name; forget("dfile:"); render(); refreshCli(); });
+      return "<tr" + rc("file", f.name, ctx) + ' class="click rc' + (f.name === file ? " sel" : "")
+        + '" data-act="' + id + '">'
+        + '<td style="color:var(--ink3);width:18px">' + ICON.file + "</td>"
+        + '<td class="mono">' + esc(f.name) + "</td>"
+        + "<td><div>" + esc(f.kind) + '</div><div class="hint">' + esc(f.desc) + "</div></td>"
+        + '<td class="num">' + Math.max(1, Math.round(f.bytes / 1024)) + " KB</td>"
+        + '<td class="id" style="color:var(--ink3)">' + esc((f.sha || "").slice(0, 8)) + "</td></tr>";
+    }).join("");
+    var stamps = d.deliverables.map(function(x, i){
+      return '<button class="chip' + ((S.sel.deliv || 0) === i ? " on" : "") + '" data-act="'
+        + regAction(function(){ S.sel.deliv = i; S.sel.file = null; forget("dfile:"); render(); })
+        + '">' + esc(x.stamp) + "</button>";
+    }).join(" ");
+    var left = panel("Deliverable", '<span class="mono">' + esc(dv.path) + "</span>",
+      '<table class="t"><thead><tr><th></th><th>File</th><th>What</th><th class="num">Size</th>'
+      + "<th>sha</th></tr></thead><tbody>" + rows + "</tbody></table>",
+      { flush: true, right: '<div class="rowflex">' + stamps + "</div>" });
+    var incl = 'include "' + dv.path + "/" + (dv.files.filter(function(f){
+        return /\.scs$/.test(f.name); })[0] || {}).name + '" section=' +
+      ((dv.envelope.corners || ["tt"])[0]);
+    var use = panel("Use it in your testbench", "",
+      '<div class="code wrap">' + esc(incl) + "\n\n"
+      + esc("// instance: the same pins as your PMU, plus the per-rail switches\n"
+            + "PMU_TOP (...) " + (dv.files[0] || {}).name.replace(/\.scs$/, "") + "  vset=3")
+      + "</div>"
+      + '<div class="rowflex" style="margin-top:8px"><button class="btn sm" data-act="'
+      + regAction(function(){ copy(incl); }) + '">' + ICON.copy + " Copy the include line</button>"
+      + '<span class="hint">Temperature comes from your <span class="mono">options temp=</span>. '
+      + "Anything outside envelope.json is reported, never silently extrapolated.</span></div>",
+      { style: "flex:none" });
+    var body;
+    if (file){
+      var key = "dfile:" + dv.stamp + file;
+      var fd = need(key, "/api/p/" + P() + "/deliverables/" + encodeURIComponent(dv.stamp)
+        + "/files/" + encodeURIComponent(file), "deliver");
+      body = fd === undefined ? skeleton(8, "reading the file")
+        : '<div class="code" style="max-height:52vh">' + esc(fd.text) + "</div>";
+    } else body = '<div class="hint">Pick a file.</div>';
+    var prov = panel("Provenance", '<span class="badge b-ok">' + ICON.ok + " reproducible</span>",
+      '<div class="kv">' + Object.keys(dv.provenance || {}).map(function(k){
+        return '<span class="k">' + esc(k) + '</span><span class="mono">' + esc(dv.provenance[k]) + "</span>";
+      }).join("") + "</div>", { style: "flex:none" });
+    return '<div class="col" style="flex:0 0 560px">' + errBlock("deliver") + jobBlock() + left + use + "</div>"
+         + '<div class="col grow">' + panel('<span class="mono">' + esc(file || "") + "</span>", "", body)
+         + prov + "</div>";
+  },
+  foot: function(){
+    return '<span class="hint">Nothing in this folder enters git. report.md carries numbers only.</span>'
+         + '<div class="rowflex"><button class="btn" data-act="' + regAction(function(){ go("digest"); })
+         + '">' + ICON.copy + " Copy for desk</button>"
+         + '<button class="btn pri" data-act="' + regAction(function(){ doDeliver(); })
+         + '">Deliver again</button></div>';
+  }
+};
+
+/* -------------------------------------------------------------- Digest -- */
+SCREENS.digest = {
+  cli: function(){
+    return { budget: S.sel.budget || 64000,
+             blocks: Object.keys(S.sel.dblocks || {}).filter(function(k){ return S.sel.dblocks[k]; }) };
+  },
+  main: function(){
+    if (!S.project) return noProject();
+    var d = need("digest", "/api/p/" + P() + "/digest/blocks", "digest");
+    if (d === undefined && S.errs.digest) return '<div class="col grow">' + errBlock("digest") + "</div>";
+    if (d === undefined) return '<div class="col grow">' + panel("What goes across", "",
+      loadingBlock("digest", "rendering every block to measure it")) + "</div>";
+    if (!d.blocks.length) return '<div class="col grow">' + panel("What goes across", "",
+      emptyBlock("Nothing to send yet", "A digest carries the ledger, the parameters and the "
+        + "curves. This project has none of them yet.", "Go to Run", "run")) + "</div>";
+    if (!S.sel.dblocks){
+      S.sel.dblocks = {};
+      d.blocks.forEach(function(b){ S.sel.dblocks[b.id] = !!b.included_by_default; });
+    }
+    var budget = S.sel.budget || (d.budgets || [64000])[1] || 64000;
+    var chosen = d.blocks.filter(function(b){ return S.sel.dblocks[b.id]; })
+      .slice().sort(function(a, b){ return a.priority - b.priority; });
+    var acc = 0, kept = {};
+    chosen.forEach(function(b){ if (acc + b.bytes <= budget){ acc += b.bytes; kept[b.id] = true; } });
+    var totalSel = chosen.reduce(function(a, b){ return a + b.bytes; }, 0);
+    var dropped = chosen.filter(function(b){ return !kept[b.id]; });
+    var rows = d.blocks.map(function(b){
+      var on = !!S.sel.dblocks[b.id];
+      var fate = !on ? "off" : kept[b.id] ? "kept" : "dropped";
+      var ctx = regCtx({ row: b,
+        only: function(){ var o = {}; d.blocks.forEach(function(x){ o[x.id] = x.priority <= 1 || x.id === b.id; });
+                          S.sel.dblocks = o; forget("digesttext"); render(); },
+        all: function(){ var o = {}; d.blocks.forEach(function(x){ o[x.id] = true; });
+                         S.sel.dblocks = o; forget("digesttext"); render(); } });
+      var id = regAction(function(){
+        S.sel.dblocks[b.id] = !on; forget("digesttext"); render(); refreshCli(); });
+      return '<tr class="rc"' + rc("digest", b.title, ctx) + ">"
+        + '<td><input type="checkbox" data-act="' + id + '"' + (on ? " checked" : "") + "></td>"
+        + '<td style="' + (on ? "" : "color:var(--ink3)") + '"><div class="mono">' + esc(b.id)
+        + "</div><div>" + esc(b.title) + "</div></td>"
+        + '<td class="num">' + (b.bytes / 1000).toFixed(1) + "</td>"
+        + '<td><span class="badge b-' + (fate === "kept" ? "ok" : fate === "dropped" ? "warn" : "mute")
+        + '">' + fate + "</span></td></tr>";
+    }).join("");
+    var budgets = (d.budgets || []).map(function(b){
+      return '<button class="chip' + (budget === b ? " on" : "") + '" data-act="'
+        + regAction(function(){ S.sel.budget = b; forget("digesttext"); render(); refreshCli(); })
+        + '">' + Math.round(b / 1000) + " KB</button>";
+    }).join(" ");
+    var left = panel("What goes across", "",
+      '<table class="t"><thead><tr><th style="width:26px"></th><th>Block</th>'
+      + '<th class="num">KB</th><th>Fate</th></tr></thead><tbody>' + rows + "</tbody></table>"
+      + '<div style="padding:10px 13px;border-top:1px solid var(--line2)">'
+      + '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px">'
+      + '<span><b class="mono">' + (totalSel / 1000).toFixed(1) + ' KB</b> selected &middot; <b class="mono">'
+      + (acc / 1000).toFixed(1) + " KB</b> fits in " + Math.round(budget / 1000) + " KB</span>"
+      + '<span class="hint">' + (acc > 32000 ? "split into " + Math.ceil(acc / 32000) + " parts" : "one paste")
+      + "</span></div>"
+      + '<div class="bar"><div class="seg" style="background:var(--acc);width:'
+      + (100 * acc / Math.max(totalSel, 1)).toFixed(1) + '%"></div>'
+      + '<div class="seg" style="background:var(--warn);width:'
+      + (100 * (totalSel - acc) / Math.max(totalSel, 1)).toFixed(1) + '%"></div></div>'
+      + '<div class="hint" style="margin-top:6px">Over budget, the lowest-priority blocks drop first '
+      + "and are <b>named in the trailer</b>. Never a silent cut.</div></div>",
+      { flush: true, right: '<div class="rowflex"><span class="hint">budget</span>' + budgets + "</div>" });
+    var txt = S.data["digesttext"];
+    var gen = regAction(function(){
+      api("/api/p/" + P() + "/digest", { method:"POST", body:{
+        budget: budget, blocks: Object.keys(S.sel.dblocks).filter(function(k){ return S.sel.dblocks[k]; }) } })
+        .then(function(r){ S.data["digesttext"] = r; render(); }, showErr);
+    });
+    var right = panel("Preview", "",
+      txt ? '<div class="code" style="max-height:48vh">' + esc(txt.text) + "</div>"
+          + '<div class="hint" style="margin-top:8px">' + txt.parts.length + " part(s), " + txt.bytes
+          + " bytes" + (txt.dropped.length ? " &middot; dropped: " + esc(txt.dropped.join(", ")) : "")
+          + "</div>"
+        : '<div class="empty"><div class="t">Nothing rendered yet</div>'
+          + "<div>Pick the blocks and a budget, then render the text you will paste.</div>"
+          + '<button class="btn" style="margin-top:6px" data-act="' + gen + '">Render the digest</button></div>',
+      { right: txt ? '<div class="rowflex"><button class="btn sm" data-act="'
+          + regAction(function(){ copy(txt.text); }) + '">' + ICON.copy + " Copy</button>"
+          + '<button class="btn sm" data-act="' + gen + '">Re-render</button></div>' : "" });
+    var imp = panel("On the desk", "the other half of this feature",
+      '<div class="code wrap">' + esc(
+        "pmukit digest import digest_" + S.project + ".txt   # rebuilds a dataset subset + params\n"
+        + "pmukit reproduce " + S.project + " --from-digest      # refits and diffs every number\n"
+        + "pmukit report " + S.project + " --cell ss/25c         # the same report text as the box")
+      + "</div>"
+      + '<div class="rowflex" style="margin-top:8px"><textarea class="inp" id="impbox" '
+      + 'style="height:64px;width:100%;font-family:var(--mono);padding:6px" '
+      + 'placeholder="paste a digest here to import it"></textarea></div>'
+      + '<button class="btn sm" style="margin-top:6px" data-act="' + regAction(function(){
+          var t = el("impbox").value;
+          api("/api/digest/import", { method:"POST", body:{ text: t } })
+            .then(function(r){ S.sel.imported = r; render(); }, showErr);
+        }) + '">Import this digest</button>'
+      + (S.sel.imported ? '<div class="code wrap" style="margin-top:8px;max-height:150px">'
+          + esc(JSON.stringify(S.sel.imported, null, 1)) + "</div>" : ""),
+      { style: "flex:none" });
+    return '<div class="col" style="flex:0 0 600px">' + errBlock("digest") + jobBlock()
+         + panel("Copy for desk", "",
+             '<div class="hint">The box has no agent and no network. This packs what a desk debugger '
+             + "needs into <b>plain text you paste through the relay</b>. Numbers are lossless; "
+             + "curves are resampled and say so. Nothing crosses git.</div>", { style: "flex:none" })
+         + left + "</div>"
+         + '<div class="col grow">' + right + imp + "</div>";
+  },
+  foot: function(){
+    var txt = S.data["digesttext"];
+    return '<span class="hint">Digests live under PMUKIT_DATA/&lt;project&gt;/digest on both '
+         + "machines, never in git.</span>"
+         + '<button class="btn pri"' + (txt ? ' data-act="' + regAction(function(){ copy(txt.text); }) + '"' : " disabled")
+         + ">" + ICON.copy + " Copy the digest</button>";
+  }
+};
+
+/* -------------------------------------------------------------- States -- */
+SCREENS.states = {
+  cli: function(){ return {}; },
+  main: function(){
+    var demoErr = { what: "Netlist rejected: 2 pins have no role.",
+      why: "pmukit tells rails from biases only by the source-name prefix; it never guesses.",
+      do: ["Rename the sources (IL_VDD0P8_A, VB_IB_PTAT) and export again",
+           "Or right-click the pin and set its role by hand"],
+      where: "tb/input.scs lines 41, 57" };
+    var eid = regAction(function(){});
+    return '<div class="col grow" style="min-width:100%"><div style="display:grid;'
+      + 'grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px">'
+      + panel("New &middot; error state", "", (function(){
+          var saved = S.errs.states;
+          S.errs.states = { status: 400, error: demoErr, retry: function(){} };
+          var html = errBlock("states");
+          S.errs.states = saved;
+          return html + '<div class="hint">Four parts, always: what happened, why, what to do, '
+               + "where to look. The pin table stays on screen so the fix is one right-click away.</div>";
+        })())
+      + panel("New &middot; loading state", '<span class="badge b-acc">parsing</span>',
+          '<div class="hint">Parsing <span class="mono">tb/input.scs</span>, 41 KB, resolving 10 pins</div>'
+          + skeleton(4, "") + '<div class="hint">Skeleton rows in the shape of the table that will '
+          + "appear; no spinner-only screens. Anything longer than 2 s says what it is doing.</div>")
+      + panel("Plan &middot; empty state", '<span class="badge b-mute">nothing to plan</span>',
+          emptyBlock("No plan yet", "Finish the three questions on New. The plan is computed from "
+            + "them and from the model spec; there is nothing to fill in here.", "Go to New", "new"))
+      + panel("Run &middot; error state", '<span class="badge b-bad">queue unreachable</span>',
+          '<div class="callout bad"><b>Cannot submit: dsub is not answering.</b> The planned runs '
+          + "are written to disk but none was submitted. <span class=\"mono\">dsub --json</span> "
+          + "timed out after 30 s. Retry when the scheduler is back; the ledger resumes exactly "
+          + "where it stopped.</div>"
+          + '<div class="hint" style="margin-top:8px">Sibling errors with the same shape: licence '
+          + "not found, PDK directory missing, ahdl compile failed, disk full.</div>")
+      + panel("Model &middot; empty state", '<span class="badge b-mute">not fitted</span>',
+          '<div class="empty"><div class="t">Model not fitted yet</div><div>191 of 282 runs are '
+          + "done. The fit needs every DC and AC group complete; noise and transients can arrive "
+          + "later and refine it.</div></div>")
+      + panel("Deliver &middot; partial state", '<span class="badge b-warn">with reservations</span>',
+          '<div class="callout warn"><b>This deliverable carries 1 NOT RUN block and 1 MARG cell.</b> '
+          + "Both are printed in report.md and in every .va header. Deliver anyway, or go back and "
+          + "retry the missing run.</div>"
+          + '<div class="hint" style="margin-top:8px">Nothing is blocked silently; nothing is '
+          + "hidden. The user decides, the report remembers.</div>")
+      + "</div></div>";
+  },
+  foot: function(){
+    return '<span class="hint">State sheet: how each screen looks when empty, loading, failing or '
+         + "partial. The message grammar is fixed: what, why, do, where.</span>"
+         + '<span class="hint">not a step &middot; reference for the build</span>';
+  }
+};
+
+/* ------------------------------------------------------ command palette -- */
+function paletteCommands(){
+  var cmds = STEPS.map(function(s){
+    return { label: "Go to " + s[1], hint: "key " + s[0], run: function(){ go(s[2]); } };
+  });
+  cmds.push({ label: "Copy for desk (digest)", hint: "4b", run: function(){ go("digest"); } });
+  cmds.push({ label: "Screen states reference", hint: "states", run: function(){ go("states"); } });
+  cmds.push({ label: "Help for this screen", hint: "?", run: function(){ openHelp(); } });
+  cmds.push({ label: "Undo the last configuration change", hint: "Ctrl Z", run: function(){ doUndo(); } });
+  cmds.push({ label: "Copy the command echo", hint: "$", run: function(){ copy(S.cli); } });
+  cmds.push({ label: "Reload everything from the server", hint: "cache", run: function(){
+    S.data = {}; S.loading = {}; render(); } });
+  if (S.project){
+    cmds.push({ label: "Fit the model", hint: S.project, run: function(){ doFit(); } });
+    cmds.push({ label: "Verify (HB health check)", hint: S.project, run: function(){ doVerify(); } });
+    cmds.push({ label: "Write the deliverable", hint: S.project, run: function(){ doDeliver(); } });
+    cmds.push({ label: "Submit the plan", hint: S.project, run: function(){ doSubmit(); } });
+  }
+  var q = (S.paletteQ || "").trim();
+  if (/^[0-9a-f]{6,}$/i.test(q)){
+    cmds.unshift({ label: "Open run " + q, hint: "run id", run: function(){
+      S.sel.run = q; forget("run:"); go("run"); } });
+  }
+  return cmds;
+}
+
+/* --------------------------------------------------------------- keys --- */
+document.addEventListener("keydown", function(e){
+  var tag = (e.target && e.target.tagName) || "";
+  var typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  if (e.key === "Escape"){
+    if (S.palette){ S.palette = false; S.paletteQ = ""; render(); return; }
+    if (S.menu){ S.menu = null; render(); return; }
+    if (S.help){ S.help = null; render(); return; }
+    if (S.errs[S.screen]){ delete S.errs[S.screen]; render(); return; }
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")){
+    e.preventDefault(); S.palette = true; S.paletteQ = ""; render(); return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter"){
+    e.preventDefault(); primary(); return;
+  }
+  if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")){
+    if (typing) return;
+    e.preventDefault();
+    if (S.project) doUndo();
+    return;
+  }
+  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "?"){ e.preventDefault(); openHelp(); return; }
+  if (e.key >= "0" && e.key <= "5"){
+    var s = STEPS[Number(e.key)];
+    if (s){ e.preventDefault(); go(s[2]); }
+    return;
+  }
+});
+function primary(){
+  if (S.screen === "new") return go("plan");
+  if (S.screen === "plan") return doSubmit();
+  if (S.screen === "run") return doFit();
+  if (S.screen === "model") return doDeliver();
+  if (S.screen === "deliver") return doDeliver();
+  if (S.screen === "digest"){
+    var t = S.data["digesttext"];
+    if (t) return copy(t.text);
+  }
+  if (S.screen === "home") return newProject("");
+}
+document.addEventListener("click", function(){ if (S.menu){ S.menu = null; render(); } });
+document.addEventListener("contextmenu", function(e){
+  /* Objects opt in through data-menu; anywhere else keeps the browser's own menu suppressed
+     inside the app frame so a stray right-click does not look like a dead zone. */
+  if (e.target && e.target.closest && e.target.closest("[data-menu]")) return;
+  if (e.target && e.target.closest && e.target.closest(".app")) e.preventDefault();
+});
+/* drag and drop a netlist anywhere on the New screen */
+document.addEventListener("dragover", function(e){
+  if (S.screen !== "new") return;
+  e.preventDefault();
+  var d = el("drop"); if (d) d.classList.add("over");
+});
+document.addEventListener("dragleave", function(){ var d = el("drop"); if (d) d.classList.remove("over"); });
+document.addEventListener("drop", function(e){
+  if (S.screen !== "new" || !S.project) return;
+  e.preventDefault();
+  var d = el("drop"); if (d) d.classList.remove("over");
+  var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (!f) return;
+  var rd = new FileReader();
+  rd.onload = function(){ loadNetlist({ text: String(rd.result), name: f.name }); };
+  rd.readAsText(f);
+});
+
+/* ---------------------------------------------------------------- boot -- */
+function boot(){
+  var q = new URLSearchParams(window.location.search);
+  if (q.get("project")) S.project = q.get("project");
+  if (q.get("screen")) S.screen = q.get("screen");
+  render();
+  refreshCli();
+  api("/api/projects").then(function(d){
+    S.demo = !!d.demo;
+    S.data["projects"] = d;
+    if (!S.project && d.projects && d.projects.length){
+      S.sel.project = d.projects[0].name;
+      S.project = d.projects[0].name;
+    }
+    render();
+    refreshCli();
+  }, function(){ render(); });
+  setInterval(function(){
+    if (S.screen === "run" && !S.job){ forget("ledger:"); render(); }
+  }, 6000);
+}
+boot();
+</script>
+</body>
+</html>

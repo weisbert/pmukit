@@ -38,14 +38,35 @@ __all__ = ["FakeBackend", "MODEL", "write_psfascii"]
 
 #: The analytic model.  Read this instead of reverse-engineering the code.
 MODEL = {
-    "zout": {"r_ohm": 5.0, "l_h": 1.0e-6, "c_f": 1.0e-9},     # peak at 1/(2*pi*sqrt(LC)) ~ 5.03 MHz
-    "psrr": {"h0": 1.0e-3, "fp_hz": 1.0e4},                   # -60 dB, one pole
+    # Branch A (R_dc + jwL) in parallel with the output cap (esr + 1/jwC). This is the shape the
+    # spec's rail `zout` block describes, and -- crucially -- it is PHYSICALLY CONSISTENT with the
+    # PSRR below: Zout(DC) is FINITE, so i_c = H_psrr/Zout is finite too. A parallel RLC (the
+    # first version here) had Zout -> 0 at DC while PSRR stayed flat, which demands an integrator
+    # in i_c that no rational bank can represent -- every fit against fake data scored ~20 dB and
+    # looked like a fitter bug. It was the DUT that was unphysical.
+    "zout": {"r_dc_ohm": 5.0, "l_h": 1.0e-6, "c_f": 1.0e-9, "esr_ohm": 0.3},
+    # PSRR is the model's own form: H = i_c * Zout with i_c a single pole (METHODOLOGY,
+    # "PSRR = Y_couple * Zout * vin"). ic0 * R_dc = 2e-4 * 5 = 1e-3, i.e. -60 dB at DC, the level
+    # this model always had. Emitting H as a bare single pole instead left i_c with an
+    # ANTI-resonance at the Zout peak -- representable only by the hardest complex section, and
+    # for no physical reason.
+    "psrr": {"ic0_s": 2.0e-4, "fp_hz": 1.0e4},
     "gdd": {"a_per_v": 5.0e-7, "fp_hz": 1.0e5},               # supply -> bias current
     "yout": {"g0_s": 1.0e-6, "cp_f": 5.0e-14},
-    "noise_v": {"white_v_rthz": 1.0e-8, "corner_hz": 1.0e4},
+    # The rail's OUTPUT noise is a Norton current at vout SHAPED BY Zout: Sv = |Zout| * In, with
+    # In = white * sqrt(1 + fc/f). Emitting a bare white+1/f voltage instead (the first version
+    # here) made In = Sv/|Zout| carry a deep NOTCH at the Zout resonance, which no positive
+    # white + Lorentzian bank can produce -- again an unphysical DUT masquerading as a bad fit.
+    # white_i_rthz * R_dc = 2e-9 * 5 = 1e-8 V/sqrt(Hz) at DC, the level this model always had.
+    "noise_v": {"white_i_rthz": 2.0e-9, "corner_hz": 1.0e4},
     "noise_i": {"white_a_rthz": 1.0e-13, "corner_hz": 1.0e4},
     "dc": {"v0_v": 0.8, "rload_ohm": 50.0, "tc_per_c": -1.0e-4},
     "iv": {"i0_a": 1.0e-5, "g0_s": 1.0e-6, "tc_per_c": 3.3e-3},
+    # NOT consistent with _zout(), on purpose: the load-step response here is a plain damped
+    # exponential, while the load_en fitter solves the branch-A ODE through the fitted ladder. The
+    # two disagree by ~18 % on the droop, which is a property of this stand-in, not a defect. The
+    # transient path is exercised for PLUMBING; its accuracy is judged against analytic ground
+    # truth in tests/test_fit_largesignal.py and against real Spectre transients.
     "tran": {"dv_v": 0.02, "tau_s": 2.0e-7, "ring_hz": 5.03e6, "points": 801},
 }
 
@@ -324,10 +345,19 @@ class FakeBackend:
         k = self._cell_factor(job)
         current = "oprobe" in an                      # a bias current-noise run
         m = MODEL["noise_i"] if current else MODEL["noise_v"]
-        white = (m["white_a_rthz"] if current else m["white_v_rthz"]) * k
         fc = m["corner_hz"]
-        unit = "A/sqrt(Hz)" if current else "V/sqrt(Hz)"
-        traces = {"out": [white * math.sqrt(1.0 + fc / f) for f in xs]}
+        if current:
+            # A bias output-current noise: nothing shapes it, it IS the output quantity.
+            white = m["white_a_rthz"] * k
+            unit = "A/sqrt(Hz)"
+            traces = {"out": [white * math.sqrt(1.0 + fc / f) for f in xs]}
+        else:
+            # A rail output-voltage noise: a Norton current at vout, shaped by Zout. Keeping this
+            # consistent with _zout() is what lets the fitter's In = Sv/|Zout| round-trip recover
+            # the planted numbers instead of chasing a notch that physics would never make.
+            white = m["white_i_rthz"] * k
+            unit = "V/sqrt(Hz)"
+            traces = {"out": [abs(_zout(f, k)) * white * math.sqrt(1.0 + fc / f) for f in xs]}
         # The unit is written into the TRACE type, exactly where the importer looks for it.
         return xs, traces, "freq", "Hz", {"out": unit}
 
@@ -380,16 +410,30 @@ def _signal_types(traces: dict) -> dict:
 
 # --------------------------------------------------------------------------- the analytic model
 def _zout(f: float, k: float) -> complex:
-    """Parallel RLC: a resistive floor with one resonance -- the shape a real rail has."""
+    """(R_dc + jwL) || (esr + 1/jwC): a DC floor, one resonance, an ESR floor above it.
+
+    The shape a real rail has, and the shape the fitter's ladder is built for: finite at DC (the
+    loop gain is finite), peaked near 1/(2*pi*sqrt(LC)), and flattening onto the output cap's ESR
+    above it. Finite at DC is the load-bearing part -- see MODEL["zout"].
+    """
     m = MODEL["zout"]
-    w = 2.0 * math.pi * f
-    y = 1.0 / (m["r_ohm"] * k) + 1.0 / (1j * w * m["l_h"]) + 1j * w * m["c_f"]
-    return 1.0 / y
+    w = 2.0 * math.pi * max(f, 1e-12)
+    za = m["r_dc_ohm"] * k + 1j * w * m["l_h"]
+    zc = m["esr_ohm"] + 1.0 / (1j * w * m["c_f"])
+    return za * zc / (za + zc)
 
 
 def _psrr(f: float, k: float) -> complex:
+    """i_c(f) * Zout(f) -- the same factorisation the fitter identifies.
+
+    Keeping the fake DUT inside the model's own form is deliberate: this backend exists so the
+    PIPELINE can be exercised without a simulator, so a residual here should mean a pipeline bug,
+    not a modelling limit. Fitter quality is judged against analytic ground truth (tests/test_fit_*)
+    and against real Spectre data, not against this.
+    """
     m = MODEL["psrr"]
-    return (m["h0"] * k) / (1.0 + 1j * f / m["fp_hz"])
+    ic = (m["ic0_s"] * k) / (1.0 + 1j * f / m["fp_hz"])
+    return ic * _zout(f, k)
 
 
 def _gdd(f: float, k: float) -> complex:
@@ -434,11 +478,22 @@ def _ramp(t: float, t0: float, base: float) -> float:
 
 def selftest() -> None:
     """Sanity: the model is the shape its docstring claims (used by tests/test_runner.py)."""
-    peak = 1.0 / (2 * math.pi * math.sqrt(MODEL["zout"]["l_h"] * MODEL["zout"]["c_f"]))
-    if abs(abs(_zout(peak, 1.0)) - MODEL["zout"]["r_ohm"]) > 1e-6:
+    m = MODEL["zout"]
+    peak = 1.0 / (2 * math.pi * math.sqrt(m["l_h"] * m["c_f"]))
+    z_dc, z_pk, z_hf = abs(_zout(1e-3, 1.0)), abs(_zout(peak, 1.0)), abs(_zout(1e9, 1.0))
+    if abs(z_dc - m["r_dc_ohm"]) > 1e-3 * m["r_dc_ohm"]:
         raise PmuError(
-            what="The fake backend's Zout does not peak at its own resonance.",
-            why="A parallel RLC must read exactly R at 1/(2*pi*sqrt(LC)); it did not, so MODEL "
-                "and _zout() have drifted apart.",
+            what=f"The fake backend's Zout is {z_dc:.4g} ohm at DC, not its R_dc "
+                 f"{m['r_dc_ohm']:.4g}.",
+            why="Zout(DC) must be FINITE and equal to R_dc, or i_c = H_psrr/Zout needs a pole at "
+                "DC and no rational bank can fit it -- the DUT would be unphysical, not the fit.",
+            do=["Fix _zout() or MODEL['zout'] in pmukit/backends/fake.py."],
+            where="pmukit/backends/fake.py")
+    if not (z_pk > 3 * z_dc and z_hf < z_dc):
+        raise PmuError(
+            what=f"The fake backend's Zout is not peaked: DC {z_dc:.4g}, peak {z_pk:.4g}, "
+                 f"HF {z_hf:.4g} ohm.",
+            why="The rail is meant to exercise the fitter's ladder: a DC floor, a resonance well "
+                "above it, and an ESR floor below the DC value.",
             do=["Fix _zout() or MODEL['zout'] in pmukit/backends/fake.py."],
             where="pmukit/backends/fake.py")

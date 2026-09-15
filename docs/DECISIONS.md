@@ -70,3 +70,15 @@
 | D63 | M6 | 识别性除了搬来的列范数 `unidentifiable`，新增 `poorly_determined`，且 `sigma` 用**截断**伪逆 | 不截断的话，一个死旋钮会把整块都报成不可辨识 | 易 |
 | D64 | M2 | 反接的约定源照样归类，但记 `src_reversed` 并在 notes 说明极性反转；一条网两个约定源则报错 | 人手画很容易把 `(0 pin)` 画成 `(pin 0)` 的反面；认不出来比认出来再说明极性更糟 | 易 |
 | D65 | M4 | 简单角写法只改**真有这个 section** 的 include；读不到的照契约改但标注"未验证"，并报告每个角落到哪几个文件 | 字面执行契约会把 RC skew 文件也改成 `tt`，Spectre 直接报 `No section found with name 'tt'` —— 这是 M5 真跑时撞出来的 | 中（偏离了契约字面，但契约本意是"设工艺角"） |
+| D66 | M10 | `GET …/plan` 是**同步**的（带 config/derived/netlist sha 的缓存），不走后台 job | 编译计划是 0.5 秒的纯算术；一个时而返回 job 时而返回数据的 GET 会让契约含糊 | 易 |
+| D67 | M10 | "跳过"= 台账 `planned` + 理由写进 `error`；"杀掉" = `failed` + "killed from the Run screen" | 契约把状态集合钉死了，不能为了界面加新状态；`not_run()` 本来就会把它报出来 | 中 |
+| D68 | M10 | 拟合了但还没被 `verify` 判过的块，给一个**单独的**等级 `fitted`（中性蓝），不给 `green` | "有数字"不等于"能信"；默认成绿色正是这个工具要消灭的那种乐观 | 易 |
+| D69 | M10 | 种子配置把电源脚和 EN 脚设成 `model` 而不是 `ignore` | `derive()` 会丢掉 `ignore` 的脚，于是整组 PSRR 注入和 EN 斜坡**静默消失** | 易 |
+| D70 | M10 | Windows 上关掉 `allow_reuse_address` | Windows 的 SO_REUSEADDR 意思是"抢占一个正在监听的端口"；第二个 `pmukit ui` 会劫持而不是自动换端口 | 易 |
+| D71 | M10 | 绑 loopback 时拒绝 Host 不是 loopback 的请求（403） | DNS rebinding 防护；`--host` 显式放开 | 易 |
+| D72 | 全局 | `.tmpdata/`、`pmukit_data/`、`*_data/` 按**名字**加进 `.gitignore` | 这些目录一旦指向真台子就装着真测量；公开仓不能靠"希望没人建" | 难（数据规矩） |
+| D73 | 全局 | `pyproject.toml` 补 `[tool.setuptools.package-data] "pmukit.web" = ["index.html"]` | 不补的话装出来的 wheel 没有页面，`pmukit ui` 在盒子上是空白的 | 易 |
+| D74 | M4/M11 | 网表里**相对** include 的顶层目录随每个 run 目录一起送到远端 | 台子相对 include PDK，run 目录在别处 → `SFE-868 Can not open input file`。绝对路径不动（拷整个 PDK 更糟） | 易 |
+| D75 | M4 | 只声明一个温度时**不生成**扫温 run，并明说"读它的参数会被报成 NOT RUN" | Spectre 拒绝 start==stop 的扫描；而编一段用户没要求的温度范围是更坏的答案 | 易 |
+| D76 | M1/M4 | 没声明 `--load` 的轨，负载扫描量程取 **0 .. 2× 台子自己的典型负载** | 负载调整率/dropout/限流仍然要测；这个量程来自网表，不是猜用户的模块 | 易 |
+| D77 | M5 | `fake` 后端的 DUT 改成**物理自洽**：Zout 在 DC 有限（R_dc+jωL ∥ esr+1/jωC）、PSRR = i_c·Zout、轨噪声 = Zout 整形的 Norton 电流 | 原来 Zout 在 DC → 0 而 PSRR 平坦，等于要求 i_c 有个 DC 极点，任何有理式都拟不出来 —— 每次拟合都得 ~20 dB，看着像拟合器的 bug，其实是**假件不物理**。改完 PSRR 30 dB→0.024 dB、噪声 5.5 dB→0.0069 dB | 中 |
