@@ -1,0 +1,5 @@
+# pmukit runtime: stdlib + numpy/scipy only (glibc-2.17 manylinux2014 wheels for the box; see deploy notes)
+numpy>=1.26,<3
+scipy>=1.11,<2
+# dev / test
+pytest>=8
