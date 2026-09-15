@@ -145,5 +145,5 @@
 ## 8. 开工单
 
 - **阶段 0（设计稿）：完成。** 八块画板在 Claude Design 画布上；源码 `design/gen_screens.py`。
-- **阶段 1 + 2 + 3（整夜 ultracode 会话）：** 见 `docs/OVERNIGHT_BRIEF.md`。范围 = 不依赖仿真器的全部；九个里程碑各有验收；决定写 `DECISIONS.md`，进展写 `BUILD_REPORT.md`。
-- **阶段 4 起（VM 上，白天）：** 拟合器、发射器、合成 LDO 回归、HB 体检门。开工单待写。
+- **阶段 1 到 5（整夜 ultracode 会话，在 VM 上，本地 Spectre 真跑）：** 见 `docs/OVERNIGHT_BRIEF.md`。十四个里程碑各有验收，目标是明天到公司就能对真 PMU 建模。决定写 `DECISIONS.md`，进展写 `BUILD_REPORT.md`。
+- **明天在公司：** 按 `BUILD_REPORT.md` 的首跑清单，在盒子上跑 Donau 提交和真网表识别。
