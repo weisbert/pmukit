@@ -489,14 +489,39 @@ def cmd_digest(a) -> int:
     if a.project == "import":
         if not a.file:
             raise PmuError(what="`digest import` needs the pasted text file.",
-                           why="The desk rebuilds a dataset subset from the digest text.",
+                           why="The desk rebuilds a contract-2 dataset subset from the digest.",
                            do=[f"{PROG} digest import <file.txt>"], where="command line")
+        rp = _need("reproduce", "digest import")
         payload = dgmod.parse(pathlib.Path(a.file).read_text(encoding="utf-8"))
-        target = paths.ensure_project(payload.get("meta", {}).get("project") or "from_digest")
+        name = (payload.get("meta") or {}).get("project") or "from_digest"
+        target = paths.ensure_project(name)
         jsonio.write(target / "digest_payload.json", payload)
-        print(f"imported -> {target / 'digest_payload.json'}")
-        for name in payload.get("dropped", []):
-            print(f"  missing block (dropped by budget on the box): {name}")
+        ds = rp.rebuild_dataset(payload, target / "digest" / "dataset")
+        info = {"project": name, "path": str(target), "variables": ds.variables(),
+                "coverage": {v: ds.coverage(v) for v in ds.variables()},
+                "missing": ds.missing(), "dropped": payload.get("dropped") or []}
+        ds.close()
+        if a.json:
+            _out(info, True)
+            return 0
+        print(f"imported -> {target}")
+        print(f"  {len(info['variables'])} variable(s) rebuilt into "
+              f"{target / 'digest' / 'dataset'}")
+        if not info["variables"]:
+            print("  This digest carried no curve or transient block -- either the box had not "
+                  "characterized")
+            print("  anything yet, or those blocks were not selected. The ledger and any fitted "
+                  "parameters")
+            print("  it did carry are in digest_payload.json.")
+        for var in info["variables"]:
+            cov = info["coverage"][var]
+            print(f"    {var:<28s} filled {cov['filled']}  missing {cov['missing']}  "
+                  f"never run {cov['never_run']}")
+        for blk in info["dropped"]:
+            print(f"  the box dropped block {blk} to fit its budget -- registered as missing, "
+                  "not guessed")
+        print()
+        print(f"  Next:  {PROG} reproduce --from-digest {a.file}")
         return 0
     cfg, _der, d = _load(a.project)
     payload = _digest_payload(a.project, d)
@@ -535,18 +560,10 @@ def _digest_payload(project: str, d: pathlib.Path) -> dict:
 
 def cmd_reproduce(a) -> int:
     dgmod = _need("digest", "reproduce")
-    fitmod = _need("fit", "reproduce")
+    rp = _need("reproduce", "reproduce")
     payload = dgmod.parse(pathlib.Path(a.from_digest).read_text(encoding="utf-8"))
-    out = fitmod.reproduce(payload) if hasattr(fitmod, "reproduce") else None
-    if out is None:
-        raise PmuError(
-            what="`reproduce` needs pmukit.fit.reproduce, which this build does not have.",
-            why="Re-fitting at the desk compares the box's numbers against a fresh fit of the "
-                "same digest.",
-            do=["Compare by hand for now: the box's parameters are in the digest's D2 block.",
-                f"`{PROG} digest import {a.from_digest}` writes them to digest_payload.json."],
-            where="pmukit.fit")
-    _out(out, True)
+    out = rp.reproduce(payload, workdir=a.workdir)
+    _out(out, a.json, rp.summary(out))
     return 0
 
 
@@ -662,6 +679,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("reproduce", help="refit a digest at the desk and compare")
     p.add_argument("--from-digest", required=True)
+    p.add_argument("--workdir", help="where to rebuild the dataset (default: ./reproduce)")
     p.set_defaults(fn=cmd_reproduce)
 
     p = sub.add_parser("open", help="open a project in the web shell")
