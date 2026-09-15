@@ -128,20 +128,21 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
         <sc-if value="{{ loaded }}" hint-placeholder-val="{{ false }}">
           <div class="kv" style="margin-bottom:12px">
             <span class="k">File</span><span class="mono">tb/input.scs · 41 KB · sha 9c1e…b7</span>
-            <span class="k">PMU instance</span><span><span class="mono">PMU_TOP</span> · cell <span class="mono">PMU_DEMO</span> · 10 pins</span>
+            <span class="k">PMU instance</span><span><span class="mono">PMU_TOP</span> · cell <span class="mono">PMU_DEMO</span> · 11 pins · <b>{{ portSummary }}</b></span>
             <span class="k">PDK include lines</span><span>2 with <span class="mono">section=tt</span> (toplevel.scs, rc.scs) · rewritten per corner</span>
             <span class="k">VSET parameter</span><span><span class="mono">parameters VSET=3</span> found · rewritten per code</span>
             <span class="k">Analyses in file</span><span>2 found · stripped, pmukit writes its own</span>
           </div>
           <table class="t">
-            <thead><tr><th>Pin</th><th>Net</th><th>Role</th><th>From source</th><th>DC</th><th>Status</th></tr></thead>
+            <thead><tr><th style="width:26px" title="Model this port? Unticked rails/biases become stubs: the pin stays, an ideal source at its DC value, no simulations.">Model</th><th>Pin</th><th>Net</th><th>Role</th><th>From source</th><th>DC</th><th>Fate</th></tr></thead>
             <tbody>
               <sc-for list="{{ pins }}" as="p" hint-placeholder-count="6">
-                <tr class="rc" onContextMenu="{{ p.menu }}"><td class="mono">{{ p.pin }}</td><td class="mono" style="color:#5d5a53">{{ p.net }}</td><td><span class="badge {{ p.roleCls }}">{{ p.role }}</span></td><td class="mono">{{ p.src }}</td><td class="num" style="text-align:left">{{ p.dc }}</td><td><span class="badge {{ p.stCls }}">{{ p.st }}</span></td></tr>
+                <tr class="rc" onContextMenu="{{ p.menu }}"><td><sc-if value="{{ p.canModel }}" hint-placeholder-val="{{ true }}"><input type="checkbox" checked="{{ p.isModel }}" onChange="{{ p.toggleModel }}"></sc-if></td><td class="mono">{{ p.pin }}</td><td class="mono" style="color:#5d5a53">{{ p.net }}</td><td><span class="badge {{ p.roleCls }}">{{ p.role }}</span></td><td class="mono">{{ p.src }}</td><td class="num" style="text-align:left">{{ p.dc }}</td><td><span class="badge {{ p.fateCls }}">{{ p.fateText }}</span></td></tr>
               </sc-for>
             </tbody>
           </table>
-          <div class="callout warn" style="margin-top:12px;display:flex;gap:8px;align-items:flex-start"><span style="color:#b7791f;margin-top:2px"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5l6 11H2z"></path><path d="M8 7v3"></path><path d="M8 12.2v.1"></path></svg></span><div><b>TESTMODE</b> has no IL_/VB_/VS_/VEN_ source, so it gets no role. It is left exactly as wired. If it is a rail or bias, add the named source and reload.</div></div>
+          <div class="callout" style="margin-top:12px;display:flex;gap:8px;align-items:flex-start"><span style="color:#1f6f9f;margin-top:2px"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg></span><div><b>You decide which ports get modeled.</b> Tick = characterized and fitted. Untick a rail or bias you do not use = <b>stub</b>: the pin stays on the symbol, emitted as an ideal source at its DC value, zero runs. VDD0P8_C is a stub here because this block never draws from it.</div></div>
+          <div class="callout warn" style="margin-top:8px;display:flex;gap:8px;align-items:flex-start"><span style="color:#b7791f;margin-top:2px"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5l6 11H2z"></path><path d="M8 7v3"></path><path d="M8 12.2v.1"></path></svg></span><div><b>TESTMODE</b> has no IL_/VB_/VS_/VEN_ source, so it gets no role and is left exactly as wired. If it is a rail or bias, right-click → set role; pmukit inserts the named source for you.</div></div>
         </sc-if>
       </div>
     </div>
@@ -170,7 +171,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
               </sc-for>
             </tbody>
           </table>
-          <span class="hint">On/Off defaults come from the IL_ source's dc. "Switches" adds the load-EN on/off transient, the one large-signal event that is modeled.</span>
+          <span class="hint">Only ports ticked "Model" appear here. On/Off defaults come from the IL_ source's dc. "Switches" adds the load-EN on/off transient, the one large-signal event that is modeled.</span>
         </div>
         <div class="field"><span class="lbl">3 · Highest frequency you care about<span class="q" title="Zout and PSRR are characterized up to this frequency and never extrapolated past it. Default = the HB fundamental × harmonics found in your netlist.">?</span></span>
           <div style="display:flex;gap:8px;align-items:center"><input class="inp mono" style="width:120px" value="20 GHz"><span class="hint">default from the netlist's HB: fund 5.0 GHz × 4 harmonics. Zout/PSRR are characterized up to here and never extrapolated past it.</span></div>
@@ -250,7 +251,7 @@ class CtxLogic extends DCLogic {
 
 
 class Component extends CtxLogic {
-  constructor(p){ super(p); this.state = { loaded: false, adv: false,
+  constructor(p){ super(p); this.state = { loaded: false, adv: false, fate: { VDD0P8_C: 'stub' },
     corners: ['tt','ss','ff'], cornersOn: {tt:true, ss:true, ff:true},
     temps: ['-40','25','125'], tempsOn: {'-40':true,'25':true,'125':true},
     sw: {VDD0P8_A: true, VDD0P8_B: true} }; }
@@ -260,14 +261,20 @@ class Component extends CtxLogic {
       {pin:'AVDD1P0', net:'AVDD1P0', role:'supply', roleCls:'b-ink', src:'VS_AVDD1P0', dc:'1.00 V', st:'ok', stCls:'b-ok'},
       {pin:'VDD0P8_A', net:'VDD0P8_A', role:'rail', roleCls:'b-acc', src:'IL_VDD0P8_A', dc:'500 µA', st:'ok', stCls:'b-ok'},
       {pin:'VDD0P8_B', net:'VDD0P8_B', role:'rail', roleCls:'b-acc', src:'IL_VDD0P8_B', dc:'2.0 mA', st:'ok', stCls:'b-ok'},
+      {pin:'VDD0P8_C', net:'VDD0P8_C', role:'rail', roleCls:'b-acc', src:'IL_VDD0P8_C', dc:'50 µA', st:'ok', stCls:'b-ok'},
       {pin:'IB_PTAT', net:'ib_ptat', role:'bias', roleCls:'b-acc', src:'VB_IB_PTAT', dc:'0.667 V', st:'ok', stCls:'b-ok'},
       {pin:'IB_CONST', net:'ib_const', role:'bias', roleCls:'b-acc', src:'VB_IB_CONST', dc:'1.28 V', st:'ok', stCls:'b-ok'},
       {pin:'EN', net:'en', role:'enable', roleCls:'b-ink', src:'VEN_EN', dc:'0 → 1 V', st:'ok', stCls:'b-ok'},
       {pin:'VSS_A · VSS_B · AGND', net:'(3 grounds)', role:'ground', roleCls:'b-mute', src:'from wiring', dc:'—', st:'ok', stCls:'b-ok'},
       {pin:'TESTMODE', net:'testmode', role:'none', roleCls:'b-warn', src:'—', dc:'—', st:'unclassified', stCls:'b-warn'},
-    ].map(p => ({ ...p, menu: (e) => this.openMenu(e, 'pin ' + p.pin, [
+    ].map(p => { const fate = s.fate[p.pin] || (p.role === 'none' ? 'ignore' : p.role === 'ground' || p.role === 'supply' || p.role === 'enable' ? 'wired' : 'model');
+      const setFate = f => () => { const o = Object.assign({}, s.fate); o[p.pin] = f; this.setState({fate: o}); };
+      return { ...p, fate, fateCls: fate === 'model' ? 'b-acc' : fate === 'stub' ? 'b-ink' : 'b-mute', fateText: fate === 'model' ? 'model' : fate === 'stub' ? 'stub · ideal ' + (p.role === 'rail' ? 'V' : 'I') : fate === 'wired' ? 'wired' : 'ignore',
+      canModel: p.role === 'rail' || p.role === 'bias', isModel: fate === 'model', toggleModel: () => setFate(fate === 'model' ? 'stub' : 'model')(),
+      menu: (e) => this.openMenu(e, 'pin ' + p.pin, [
+      { label: 'Model this port', disabled: !(p.role === 'rail' || p.role === 'bias'), action: setFate('model') }, { label: 'Stub: keep the pin, ideal source at its DC value, no runs', disabled: !(p.role === 'rail' || p.role === 'bias'), action: setFate('stub') }, { label: 'Ignore (leave wired as-is)', action: setFate('ignore') }, '-',
       { label: 'Set role: rail', action: () => {} }, { label: 'Set role: bias' }, { label: 'Set role: supply' }, { label: 'Set role: enable' }, { label: 'Ignore this pin' }, '-',
-      { label: 'Show in netlist', key: 'line ' + (40 + p.pin.length) }, { label: 'Copy pin name' }, { label: 'Copy net name' } ]) }));
+      { label: 'Show in netlist', key: 'line ' + (40 + p.pin.length) }, { label: 'Copy pin name' }, { label: 'Copy net name' } ]) }; });
     const chips = (names, on, key) => names.map(n => ({ name:n, cls: on[n] ? 'on' : '',
       toggle: () => { const o = Object.assign({}, on); o[n] = !o[n]; this.setState({[key]: o}); },
       menu: (e) => this.openMenu(e, (key === 'cornersOn' ? 'corner ' : 'temp ') + n, [
@@ -284,14 +291,17 @@ class Component extends CtxLogic {
         { label: 'Show the IL_ source line' } ]) }));
     const nc = s.corners.filter(c => s.cornersOn[c]).length, nt = s.temps.filter(t => s.tempsOn[t]).length;
     const onC = s.corners.filter(c => s.cornersOn[c]).join(','), onT = s.temps.filter(t => s.tempsOn[t]).join(',');
+    const nR = pins.filter(p => p.role === 'rail' && p.fate === 'model').length, nB = pins.filter(p => p.role === 'bias' && p.fate === 'model').length, nS = pins.filter(p => p.fate === 'stub').length;
+    const portSummary = nR + ' rails · ' + nB + ' biases modeled · ' + nS + ' stub';
+    const stubs = pins.filter(p => p.fate === 'stub').map(p => p.pin).join(',');
     return { ...this.menuVals(),
-      ...this.helpVals('New project', ['Bring one Spectre netlist exported at the nominal corner. Sources named IL_ / VB_ / VS_ / VEN_ tell pmukit which pin is which; nothing else is needed.', 'Answer three things only you know. Everything under "derived settings" is decided by pmukit and can be overridden later.', 'Nothing runs yet. Build plan shows what would run and what it costs before anything is submitted.'], [{k:'Ctrl O', d:'choose a netlist file'}, {k:'Ctrl Enter', d:'Build plan'}, {k:'A', d:'show / hide derived settings'}]),
-      ...this.cliVals(s.loaded ? `pmukit new demo_pmu --netlist tb/input.scs --pmu PMU_TOP --corners ${onC} --temps ${onT} --vset 3 --load VDD0P8_A=500u/2u${s.sw.VDD0P8_A ? '/switch' : ''} --load VDD0P8_B=2m/20u${s.sw.VDD0P8_B ? '/switch' : ''} --fmax 20G` : 'pmukit new demo_pmu --netlist <input.scs>'),
-      loaded: s.loaded, notLoaded: !s.loaded, adv: s.adv,
+      ...this.helpVals('New project', ['Bring one Spectre netlist exported at the nominal corner. Sources named IL_ / VB_ / VS_ / VEN_ tell pmukit which pin is which; nothing else is needed.', 'You choose which ports get modeled (the Model column). Unticked rails and biases become stubs: pin kept, ideal source at its DC value, no runs. That is the minimal simulation set.', 'Answer three things only you know. Everything under "derived settings" is decided by pmukit and can be overridden later.', 'Nothing runs yet. Build plan shows what would run and what it costs before anything is submitted.'], [{k:'Ctrl O', d:'choose a netlist file'}, {k:'Ctrl Enter', d:'Build plan'}, {k:'A', d:'show / hide derived settings'}]),
+      ...this.cliVals(s.loaded ? `pmukit new demo_pmu --netlist tb/input.scs --pmu PMU_TOP --corners ${onC} --temps ${onT} --vset 3 --load VDD0P8_A=500u/2u${s.sw.VDD0P8_A ? '/switch' : ''} --load VDD0P8_B=2m/20u${s.sw.VDD0P8_B ? '/switch' : ''}${stubs ? ' --stub ' + stubs : ''} --fmax 20G` : 'pmukit new demo_pmu --netlist <input.scs>'),
+      portSummary, loaded: s.loaded, notLoaded: !s.loaded, adv: s.adv,
       advLabel: s.adv ? 'Hide derived settings' : 'Show derived settings (pmukit decided these)',
       load: () => this.setState({loaded:true}), toggleAdv: (e) => { if (e && e.preventDefault) e.preventDefault(); this.setState({adv: !s.adv}); },
       pins, rails, corners: chips(s.corners, s.cornersOn, 'cornersOn'), temps: chips(s.temps, s.tempsOn, 'tempsOn'),
-      footText: s.loaded ? `${nc} corners × ${nt} temps × 1 VSET = ${nc*nt} cells · 2 rails · 2 biases · EN` : 'Load a netlist to continue',
+      footText: s.loaded ? `${nc} corners × ${nt} temps × 1 VSET = ${nc*nt} cells · ${portSummary} · EN` : 'Load a netlist to continue',
       cellsText: `${nc} corners × ${nt} temps × 1 VSET = ${nc*nt}`,
     };
   }

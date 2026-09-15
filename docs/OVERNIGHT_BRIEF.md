@@ -27,13 +27,13 @@
 | # | 里程碑 | 验收 |
 |---|---|---|
 | M0 | 包骨架 `pmukit/`、venv、`pytest` 空跑、`tools/guard.py` + pre-commit 安装、黑名单生成 | 提交闸用合成词自测能拦；黑名单文件存在且 git-ignored |
-| M1 | 五份契约落成代码：`config.py`（0a 三问 + 0b 推导）、`spec.py`（契约 1 表）、`dataset.py`（契约 2）、`ledger.py`（契约 3，含 `recipe` 列）、`deliverable.py`（契约 4）、`digest.py`（契约 5 导出/导入）| 每份 schema 校验 + round-trip 测试 |
+| M1 | 五份契约落成代码：`config.py`（0a 三问 + 0b 推导 + `ports` 的 model/stub/ignore）、`spec.py`（契约 1 表）、`dataset.py`（契约 2）、`ledger.py`（契约 3，含 `recipe` 列）、`deliverable.py`（契约 4）、`digest.py`（契约 5 导出/导入）| 每份 schema 校验 + round-trip 测试 |
 | M2 | `netlist.py`：老仓 `netlist_augment` 搬入 + 前缀识别 + `section=` / `parameters VSET=` / `options temp=` 改写 + 剥分析 + 配方文本 | 合成 PMU 网表 `tests/fixtures/pmu_demo/input.scs`（两轨、两偏置、EN、一个无角色引脚）全部认出；未分类引脚报错不猜 |
 | M3 | **合成 PMU 真件**：用老仓 `ground_truth/ldo_gt.lib` 类电路搭一个 Spectre 语法的 `PMU_DEMO`（两条 LDO 轨 + 两个电流镜偏置含 PTAT + EN），BSIM3 level 49；老仓 14 个合成 LDO 转 Spectre 语法进 `tests/fixtures/` | 本地 Spectre 跑 DC/AC/noise 各一遍通过 |
 | M4 | `plan.py`：规格 × 配置 → 计划，AC 叠加合并，每条 run 带 `feeds` + `recipe`，成本估计可插拔 | PMU_DEMO 配置得到完整计划；去掉一组能列出 NOT RUN 的块 |
 | M5 | `runner.py`：一个接口，后端 `spectre_local`（真）、`dry_run`、`fake`、`donau_alps`（搬 `cluster/`，dry-run）；按 run_id 缓存 resume；写台账；PSF 读取搬 `binpsf.py`/`psf.py` | PMU_DEMO 全计划在本地 Spectre 跑完落成契约 2 数据集；重跑全部 `skipped_cached`；台账每条有 `consumes` |
 | M6 | 拟合器 `fit/`：从老仓搬 dc 表、Zout 梯（AAA 种子 + 最小二乘）、PSRR 实/复极点段、噪声（白 + 1/f + Lorentzian）、偏置 idc(T)/PTAT、yout、电流噪声、电流 PSRR、load-EN assist（`fit_iassist` 的 ODE 路径）、EN 上升；**每个工艺角分开拟合，温度在角内连续**（DC 量用扫温表，AC/noise 按离散温度点，参数随 T 插值只在单调量上做）| PMU_DEMO 每角每块有分数；识别性门（cond/σ）能报出不可辨识参数 |
-| M7 | 发射器 `emit/`：单一 `.va` 发射器（搬 `emit_pmu_model` 的 HB 安全原语 + 分地 + `hb_robust` 默认开），每角一份 `.va` + `.scs` section 库，温度连续，`vset` / `load_en_*` 实例参数，溯源头，`envelope.json`，`report.md`；**数值条件 lint**：每个元件在 `f_max`（配置的 care_up_to_hz）处的导纳动态范围超 1e6 报警 | 三个角的 `.va` 本地 Spectre 编译 0 error；AC 对比拟合值 ≤ 0.01 dB |
+| M7 | 发射器 `emit/`：单一 `.va` 发射器（stub 端口发成直流值理想源并在头部列出）（搬 `emit_pmu_model` 的 HB 安全原语 + 分地 + `hb_robust` 默认开），每角一份 `.va` + `.scs` section 库，温度连续，`vset` / `load_en_*` 实例参数，溯源头，`envelope.json`，`report.md`；**数值条件 lint**：每个元件在 `f_max`（配置的 care_up_to_hz）处的导纳动态范围超 1e6 报警 | 三个角的 `.va` 本地 Spectre 编译 0 error；AC 对比拟合值 ≤ 0.01 dB |
 | M8 | 验证 `verify/`：每角分块分数 → 绿黄红；**HB 体检门**：本地 Spectre 驱动式 HB，逐项开关非线性项，记录首步残差，任一项比全关高 10 倍即不通过；系统级：一个简单振荡器台 + 模型做自治 HB 收敛；合成 LDO 回归：14 个 GT 各跑一遍全流程，分数写进 `tests/regression/baseline.json` | PMU_DEMO 全绿或有解释；HB 体检结果进 report；回归基线文件生成 |
 | M9 | 摘要：导出按优先级裁、丢的点名、分段；`digest import` 重建子集；`reproduce --from-digest` 重拟合并逐数字对比 | 导出→导入→reproduce 全流程在 PMU_DEMO 上 round-trip |
 | M10 | web 壳 `pmukit/server.py` + `web/index.html`：八块画板照 `design/*.dc.html` 重写成普通 HTML/JS；右键菜单、帮助面板、命令回显、四种状态、Ctrl Z；`--demo` 假数据 + 真项目模式 | `python -m pmukit ui` 打开后能从 New 到 Deliver 走通 PMU_DEMO；冒烟测试每条路由 200；node 语法检查通过 |
