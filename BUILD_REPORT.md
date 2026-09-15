@@ -40,7 +40,7 @@ tools/make_denylist.py:  docstring 例子里的真项目码 -> <PROJECT_CODE> <B
 - **契约 0a/0b `config.py` + `site.py`** — `ProjectConfig`（三问 + `ports` 的 model/stub/ignore + 复合角）、
   `ConfigHistory`（Ctrl-Z，压栈 50）、`DerivedConfig` + `derive()`（0b 整张表，每个字段带 provenance）、
   `refine_from_zout()`；`SiteConfig`（engine/queue/cpus，装机一次，不进项目）。**77 个测试**。
-- **契约 1 `spec.py`** — 11 个块 / 51 个参数的固定物理清单，`SPEC_SHA=959eb3dbdce8`；
+- **契约 1 `spec.py`** — 11 个块 / 51 个参数的固定物理清单，`SPEC_SHA`；
   `requirements()` 把「参数 ← 观测量 ← 轴」反过来给计划器；`explain()` 是帮助面板和 CLI 的同一段文字；
   `NOT_MODELED` 把 REFACTOR_PLAN 6.2 明确不建的东西写进代码，防止有人手滑加回来。**32 个测试**。
 - **契约 2 `dataset.py`** — 目录 + `index.json` + 每变量一个 `.npy`；维度序固定 `process, temp_c, vset, [load_a], [扫描坐标]`，
@@ -434,3 +434,30 @@ $ pmukit fit demo
 轨 B（ESR 平台型）Zout 1.82 dB —— 平台型本来就更难，是已知的代表性难例。
 **`IB_PTAT.psrr = 21.8 dB` 是一条明确的待查项**（PTAT 的电源→电流传递很小，可能是量本身接近噪声，
 也可能是拟合问题）——写在这里，明早值得看一眼，不假装它是好的。
+
+## 一个被真 Spectre 数据揪出来的**模型形状**缺口（不是拟合 bug）
+
+上面那条 `IB_PTAT.psrr = 21.8 dB` 追下去了。实测的电源→偏置电流传递：
+
+| f | \|gdd\| | 相位 |
+|---|---|---|
+| 10 Hz | 3.569e-07 S | 0.0° |
+| 1 kHz | 3.570e-07 S | 1.3° |
+| 100 kHz | 9.298e-07 S | 60.0° |
+| 10 MHz | 7.812e-06 S | 20.1° |
+| **1 GHz** | **1.733e-04 S** | **87.5°** |
+
+它**不是**下降，是**上升 500 倍**，且相位趋近 +90° —— 典型的 `jωC` 馈通（1.733e-4/2π/1e9 = **28 fF**，
+器件交叠电容的量级）。而契约 1 的偏置 `psrr` 块只有 `gdd` + `psrr_pole_hz`，是个**只会下降**的形状。
+**拿下降形去拟合上升曲线，再好的拟合器也只能拿 20 多 dB。**
+
+这不是学术问题：REFACTOR_PLAN 6.1 把"电源→偏置电流传递"的用户写成 **VCO 杂散 / AM-FM**，
+而真件的 `care_up_to_hz` 是 2e10 —— 上升那一段正是会主导的那一段。
+
+**已修**：给偏置 `psrr` 加 `c_ft`，按 METHODOLOGY 的 keep-best 规矩做成**可选**自由度
+（平坦的传递买不到这个旋钮，有测试锁住）。**21.8 → 9.49 dB。**
+
+**剩下的 9.49 dB 如实记在这里**：实测曲线在 100 kHz 附近还有一个零极点对（+60° 的鼓包），
+`gdd/(1+s/wp) + jωC` 仍然跟不上。要做到轨那种零点几 dB，得把轨 PSRR 的有理式机制
+（SK 拟合 + 复极点段）也用到偏置传递上 —— 那是个更大的改动，**没有在凌晨做**。
+明早如果真件的偏置 PSRR 是关键量，这是第一件该做的事。

@@ -122,12 +122,23 @@ def predict_noise(params: dict, f) -> np.ndarray:
 
 
 def predict_psrr(params: dict, f) -> np.ndarray:
-    """Supply-to-output-current transfer dI/dVsup [S], signed, with its optional pole."""
+    """Supply-to-output-current transfer dI/dVsup [S], signed: a pole term plus a feedthrough.
+
+        gdd(s) = gdd / (1 + s/(2 pi psrr_pole_hz))  +  s * c_ft
+
+    The second term is what a falling-only form cannot do: above the pole, a real mirror's
+    supply coupling climbs through device overlap capacitance. See `_fit_gdd`.
+    """
     f = np.asarray(f, float)
     pole = params.get("psrr_pole_hz")
     if pole:
-        return float(params["gdd"]) / (1.0 + 1j * f / float(pole))
-    return np.full(f.shape, complex(float(params["gdd"])))
+        out = float(params["gdd"]) / (1.0 + 1j * f / float(pole))
+    else:
+        out = np.full(f.shape, complex(float(params["gdd"])))
+    c_ft = params.get("c_ft")
+    if c_ft:
+        out = out + 1j * 2.0 * np.pi * f * float(c_ft)
+    return out
 
 
 def predict(params: dict, **kwargs) -> np.ndarray:
@@ -357,11 +368,24 @@ def _fit_noise_law(f, In):
     return {"white": iw, "flicker": float(np.sqrt(kf))}
 
 
+# A new degree of freedom is adopted only when it beats the baseline by this much (dB RMS).
+# METHODOLOGY's keep-best rule: below the margin the fit falls back byte-identically, so an extra
+# knob can never be bought with noise.
+KEEP_BEST_DB = 1.0
+
+
 def _fit_gdd(f, g):
-    """Signed low-frequency `gdd` plus an optional single pole when the transfer rolls in band.
+    """Signed low-frequency `gdd`, an optional in-band pole, and an optional feedthrough cap.
 
     The magnitude is NEVER collapsed: the sign and the phase matter when several references
     share one bias and their ripple currents superpose.
+
+    `c_ft` is a KEEP-BEST degree of freedom (METHODOLOGY: adopt a new DOF only when it beats the
+    baseline by a margin, else fall back byte-identically). It exists because a real mirror's
+    supply coupling does not only roll off -- above the pole it RISES as j*w*c_ft through device
+    overlap capacitance. Measured on the synthetic PMU's PTAT reference: flat at 357 nS to
+    ~10 kHz, then 500x up to 173 uS at 1 GHz, i.e. 28 fF. Fitting a falling form to that costs
+    ~22 dB, and it is the band that makes VCO spurs.
     """
     f = np.asarray(f, float)
     g = np.asarray(g)
@@ -370,7 +394,38 @@ def _fit_gdd(f, g):
     pole = None
     if mag[0] > 0 and mag[-1] < mag[0] / np.sqrt(2):
         pole = float(np.interp(mag[0] / np.sqrt(2), mag[::-1], f[::-1]))
-    return {"gdd": gdd, "psrr_pole_hz": pole}
+    base = {"gdd": gdd, "psrr_pole_hz": pole, "c_ft": None}
+    if len(f) < 4 or mag[0] <= 0:
+        return base
+
+    # The feedthrough is read where it dominates: the top of the band, after removing the
+    # low-frequency term. A least-squares slope on Im(g - g_lf) vs w is robust to the few points
+    # where the two terms are comparable.
+    top = f >= f[-1] / 10.0
+    if top.sum() < 2:
+        return base
+    w = 2.0 * np.pi * f[top]
+    resid = g[top] - _gdd_lf(base, f[top])
+    c_ft = float(np.dot(w, np.imag(resid)) / max(np.dot(w, w), 1e-300))
+    if not np.isfinite(c_ft) or c_ft <= 0:
+        return base
+    cand = dict(base, c_ft=c_ft)
+    if _gdd_resid(cand, f, g) < _gdd_resid(base, f, g) - KEEP_BEST_DB:
+        return cand
+    return base
+
+
+def _gdd_lf(params: dict, f) -> np.ndarray:
+    """The pole-only part of the transfer -- what the block was before `c_ft` existed."""
+    f = np.asarray(f, float)
+    pole = params.get("psrr_pole_hz")
+    if pole:
+        return float(params["gdd"]) / (1.0 + 1j * f / float(pole))
+    return np.full(f.shape, complex(float(params["gdd"])))
+
+
+def _gdd_resid(params: dict, f, g) -> float:
+    return db_rms(predict_psrr(params, f), g)
 
 
 # --------------------------------------------------------------------------- dataset access
@@ -594,14 +649,18 @@ def fit_psrr(dataset, port: str, cell: dict, derived=None) -> BlockFit:
     params = _fit_gdd(f, g)
     params = {"gdd": float(params["gdd"]),
               "psrr_pole_hz": (None if params["psrr_pole_hz"] is None
-                               else float(params["psrr_pole_hz"]))}
+                               else float(params["psrr_pole_hz"])),
+              "c_ft": (None if params.get("c_ft") is None else float(params["c_ft"]))}
     score = db_rms(predict_psrr(params, f), g)
     notes = ["the sign is KEPT: collapsing this to a magnitude loses the phase that matters "
              "when several references share one bias and their ripple currents superpose"]
     if params["psrr_pole_hz"]:
         notes.append(f"the transfer rolls in band: one pole at "
                      f"{params['psrr_pole_hz']:.4g} Hz")
-    names = ["gdd"] + ([] if params["psrr_pole_hz"] is None else ["psrr_pole_hz"])
+    if params["c_ft"]:
+        notes.append(f"supply feedthrough capacitance kept: {params['c_ft'] * 1e15:.3g} fF -- the "
+                     "transfer RISES above the pole, which a falling-only form cannot follow")
+    names = ["gdd"] + ([] if params["psrr_pole_hz"] is None else ["psrr_pole_hz"])         + ([] if not params["c_ft"] else ["c_ft"])
     vals = [params[n] for n in names]
 
     def gfun(p):

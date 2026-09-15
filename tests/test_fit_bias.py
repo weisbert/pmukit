@@ -209,3 +209,46 @@ def test_unknown_block_name_is_refused(tmp_path):
     ds = build(tmp_path)
     with pytest.raises(KeyError):
         bias.fit(ds, BIAS, CELL_NOLOAD, DERIVED, block="not_a_block")
+
+
+# ------------------------------------------------- supply feedthrough (found on real Spectre)
+def test_supply_feedthrough_is_kept_when_the_transfer_rises():
+    """A real mirror's supply coupling RISES above the pole through overlap capacitance.
+
+    Measured on the synthetic PMU's PTAT reference with real Spectre: flat at 357 nS to ~10 kHz,
+    then 500x up to 173 uS at 1 GHz (28 fF). A falling-only form fitted to that costs ~22 dB, and
+    it is exactly the band that makes VCO spurs -- so `c_ft` exists.
+    """
+    import numpy as np
+    from pmukit.fit.bias import _fit_gdd, predict_psrr
+
+    f = np.logspace(1, 9, 161)
+    gdd, c_ft = 3.57e-7, 2.76e-14
+    g = gdd + 1j * 2 * np.pi * f * c_ft
+    p = _fit_gdd(f, g)
+    assert p["c_ft"] is not None
+    assert p["c_ft"] == pytest.approx(c_ft, rel=0.05)
+    assert p["gdd"] == pytest.approx(gdd, rel=0.05)
+    err = 20 * np.log10(np.abs(predict_psrr(p, f)) / np.abs(g))
+    assert np.max(np.abs(err)) < 0.1
+
+
+def test_a_flat_transfer_does_not_buy_a_feedthrough():
+    """Keep-best: an extra knob must never be bought with noise."""
+    import numpy as np
+    from pmukit.fit.bias import _fit_gdd
+
+    f = np.logspace(1, 9, 161)
+    g = np.full(f.shape, 3.8e-5 + 0j)
+    assert _fit_gdd(f, g)["c_ft"] is None
+
+
+def test_a_rolling_transfer_still_finds_its_pole():
+    import numpy as np
+    from pmukit.fit.bias import _fit_gdd
+
+    f = np.logspace(1, 9, 161)
+    g = 1e-6 / (1 + 1j * f / 2e5)
+    p = _fit_gdd(f, g)
+    assert p["psrr_pole_hz"] == pytest.approx(2e5, rel=0.25)
+    assert p["c_ft"] is None
