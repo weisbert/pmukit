@@ -14,15 +14,16 @@
 
 ### 0a. 用户交什么（intake）
 
-**skillbridge / ADE 会话自动读取延后。** 用户交的是**按约定搭好的 Spectre 网表**，一个工艺角一份（VSET 若有多档，每档也各一份）。程序从网表里认出一切能认的，用户只补三样：哪个文件是哪个角、你的模块是什么负载、你在乎到多高频率。
+**skillbridge / ADE 会话自动读取延后。** 用户交**一份**按约定搭好的 Spectre 网表（在标称角导出即可），程序自己改 PDK include 的 `section=` 生成各工艺角、用 `options temp=` 设温度、改 `VSET` 参数设档位。用户只补：跑哪些角和温度、VSET 档、模块负载、在乎到多高频率。
 
 ```json
 {
   "project": "demo_pmu",
-  "netlists": {"tt": "tb_tt/input.scs", "ss": "tb_ss/input.scs", "ff": "tb_ff/input.scs"},
+  "netlist": "tb/input.scs",
   "pmu_inst": "PMU_TOP",
+  "corners": ["tt", "ss", "ff"],
   "temps_c": [-40, 25, 125],
-  "vset": {"tt": 3, "ss": 3, "ff": 3},
+  "vset_codes": [3],
   "state_note": "RX 模式，寄存器 0x12=0x03",
   "my_load": {
     "VDD0P8_PLL": {"on_a": 5e-4, "off_a": 2e-6, "switches": true}
@@ -30,6 +31,8 @@
   "care_up_to_hz": 2e10
 }
 ```
+
+`corners` 的高级写法：复合角按 include 文件分别指定 section，例如 `{"MOSff_RCss": {"toplevel.scs": "ff", "rc.scs": "ss"}}`。简单写法 `["tt","ss"]` 时所有带 `section=` 的 include 行统一替换。
 
 **网表约定（这就是用户和工具之间的接口）**：
 
@@ -40,15 +43,16 @@
 | 每个偏置引脚上一个电压源 | `VB_<引脚名>`，dc = 该脚工作电压 | 这是电流偏置；顺从电压 |
 | 每个电源引脚上一个电压源 | `VS_<引脚名>`，dc = 标称电源 | 这是电源；标称值 |
 | EN 引脚上一个电压源（若有） | `VEN_<引脚名>` | 有 EN；要表征上电 |
+| 输出档位 | 设计变量 `parameters VSET=<n>` | 程序按 `vset_codes` 逐档改写 |
+| PDK include 行 | 带 `section=<角>` | 程序按 `corners` 改写生成各角网表 |
 | 地 | 每个引脚接的地网直接从连线读 | 分地 |
-| PDK include 行 | 该文件对应的工艺角 | 不改动，一文件一角 |
 | 分析语句 | 可有可无 | 程序全部剥掉，自己写 |
 
 规则：
 - 角色**只靠源的名字前缀**认（`IL_`/`VB_`/`VS_`/`VEN_`），没有第二套 manifest。前缀对不上就报"此引脚无法归类"，不猜。
 - 没在 `my_load` 里出现的轨：典型负载取 `IL_` 源的 dc，不表征负载 EN 事件，报告写"未跑"。
-- 温度由程序用 `options temp=` 逐点设，不需要用户按温度导网表。
-- 老仓 `netlist_augment.py` 的网表扫描、源探测、改 mag/dc/pwl、剥分析、加 save 全部复用，只把"按 manifest 找源"换成"按前缀找源"。
+- 老仓 `netlist_augment.py` 的网表扫描、源探测、改 mag/dc/pwl、剥分析、加 save 全部复用，只把"按 manifest 找源"换成"按前缀找源"，再加 `section=` 和 `VSET` 两处改写。
+- **配套一个 schematic 模板**方便用户套：一个 SKILL 脚本，给定 PMU 的 cell，生成带上述命名源的测试台 schematic（老仓 `pmu_top_symbol.il` / `ldo_cellview.il` 是先例）；另附一份文本网表样例。这是阶段 0 的交付之一。
 
 ### 0b. 程序推导的表征配置（internal，"高级"里可看可改，默认不展示）
 
@@ -56,9 +60,9 @@
 
 | 项 | 怎么定 |
 |---|---|
-| 工艺轴 | `netlists` 的键 |
+| 工艺轴 | `corners`；逐角改写 include 的 `section=` |
 | 离散温度点 | `temps_c`；DC 量另加连续扫温 |
-| VSET 档 | `vset` |
+| VSET 档 | `vset_codes`；逐档改写 `parameters VSET=` |
 | 电源 | `VS_` 源的 dc；默认只在标称点，扫范围是高级选项 |
 | 轨/偏置引脚、地 | 按 `IL_`/`VB_` 前缀 + 连线 |
 | 负载表征网格 | `[off, 0.2·on, on, 2·on]` 裁到 PMU 的限流以内 |
@@ -174,9 +178,9 @@ $PMUKIT_DATA/<project>/deliver/<stamp>/
 - 交付目录不进 git；`report.md` 里只有数字，没有客户网名，才允许摘录进仓库文档。
 - 工艺角选择靠 Spectre `section`，和 PDK 的角变量同名，消费者的 corner 设置里加一行就能切。
 
-## 待你确认的
+## 已确认（2026-09-15）
 
-1. 交付形式：你们的 corner 设置是靠模型文件的 `section` 切工艺角吗？是就按契约 4 的 `.scs` 库形式。
-2. `vset` 写档位号还是目标电压？
-3. 网表约定的源前缀 `IL_`/`VB_`/`VS_`/`VEN_` 你接受吗？要换成别的命名也行，但必须是前缀可认的。
-4. 一个工艺角一份网表（用户在 ADE 里按角导出），还是让工具改 PDK include 行？我推荐前者：跨 PDK 稳，用户导网表本来就是按角导。
+1. 交付形式：corner 设置靠模型文件的 `section` 切工艺角 → 契约 4 的 `.scs` 库形式成立。
+2. `vset` 用档位号；网表里由设计变量 `VSET` 控制输出电压，程序直接改写。
+3. 源前缀 `IL_`/`VB_`/`VS_`/`VEN_` 接受；配 schematic 模板。
+4. 工艺角由工具改 PDK include 行生成；用户只导一份网表。
