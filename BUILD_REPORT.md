@@ -89,3 +89,41 @@ tools/make_denylist.py:  docstring 例子里的真项目码 -> <PROJECT_CODE> <B
 ```
   `ac:VS_VDDA_1V0` 一条 run 的 reads = `ac_psrr.a, ac_psrr.b, ac_psrr.ptat, ac_psrr.poly` —— 叠加合并生效。
   重新计划 → run_id 全部相同；提交两次 → 第二次 `cached == 全部`。**32 个测试**。
+
+## M12 — 盒子打包 `deploy/`（去 Qt）
+
+从老仓 `deploy/ @ d2c5b80` 搬：`package.py`、`audit_wheels.py`、`apply`、`update.sh`、
+`dryrun_manylinux2014.sh`、`package.ps1`；新增 `README.md`（英文操作页）、`postinstall_check.py`。
+**全程无 Qt**（有测试断言 `pyqt5` / `QT_QPA_PLATFORM` / `requirements-gui` 在任何 deploy 文件里都不出现）。
+
+**轮子审计（真 `pip download`，不是模拟）**：
+```
+  numpy-2.2.6-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl   PASS (glibc 2.17)
+  scipy-1.16.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl  PASS (glibc 2.17)
+  + 6 个纯 python 轮子                                                      PASS
+  8/8 PASS   target glibc 2.17 / x86_64        AUDIT PASS
+```
+**REJECT 路径也验过**（把真 scipy 轮子改名成 `_2_28`、加一个 cp312 轮子）：
+```
+  badpin-2.0-cp312-...whl                      REJECT (python tag 'cp312', need cp311/py3/...)
+  scipy-...-manylinux_2_28_x86_64.whl          REJECT (needs glibc 2.28 > 2.17)
+  2/4 PASS   AUDIT FAIL      audit exit = 1
+```
+**LF + 校验和**：`shipped text files containing a CR` → **0**；`sha256sum -c SHA256SUMS`（Git Bash）
+42 个文件 **0 failures**；`bash -n` 通过 `apply` / `update.sh` / `dryrun_manylinux2014.sh`；
+MANIFEST 键里 `backslash keys: 0`。**34 个测试**。
+
+**在真 Linux 上端到端跑通**（`ssh ewave-vm`，Rocky 8.10 / glibc 2.28 / python3.11.13，和盒子同族）：
+- `bash apply`：sha256 → 解包 → 模式判定 → 完整性（41 文件）→ 装源码 → 建 venv →
+  **离线 `pip install --no-index`** 装上 manylinux2014 的 numpy/scipy → 原子装启动器 →
+  装后自检 **5/5** → 打印 tcsh 的 `setenv` 行。
+- 增量包 → 交给 `update.sh` → `removed 1 deleted file(s)`，`$PMUKIT_DATA` 和 venv 都没动。
+- 改掉交付文件的一个字节 → `apply` 拒绝并点名是哪个文件。
+- `dryrun_manylinux2014.sh` 在没有 docker 时走静态路径；`--deep` 扫 ELF 确认 numpy/scipy
+  真的只引用 `GLIBC_2.17`（文件名和二进制一致）。
+- `package.ps1` **真的跑了一遍**（不是只做语法检查）；UTF-8 带 BOM、LF。
+  PowerShell 吞双引号那条坑当场复现了一次 —— 记录仍然有效。
+
+**需要明天在盒子上验的 / 没做到的**：docker 不在本机，glibc-2.17 容器彩排只走了静态路径；
+`tcsh` 本身没被执行过（`apply` 是 bash，只**打印** `setenv` 行，要人手贴进 `~/.cshrc`）；
+盒子真实 `$PMUKIT_PREFIX` 的配额 / NFS / `noexec` 未知。
