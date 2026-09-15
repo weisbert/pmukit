@@ -120,7 +120,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
     <div class="panel" style="flex:1">
       <div class="ph"><span>Run <span class="id">{{ sel.id }}</span></span><span class="badge {{ sel.bcls }}">{{ sel.status }}</span></div>
       <div class="pb" style="display:flex;flex-direction:column;gap:12px">
-        <div class="kv"><span class="k">Cell</span><span class="mono">{{ sel.cell }}</span><span class="k">Analysis</span><span>{{ sel.an }}</span><span class="k">Feeds</span><span class="mono">{{ sel.feeds }}</span><span class="k">Job</span><span class="mono">donau 48812903 · rf_short · 8 cpu</span><span class="k">Netlist</span><span class="mono">…/ss_125c_v3/{{ sel.id }}/input.scs</span><span class="k">PSF</span><span class="mono">{{ sel.psf }}</span></div>
+        <div class="kv"><span class="k">Cell</span><span class="mono">{{ sel.cell }}</span><span class="k">Analysis</span><span>{{ sel.an }}</span><span class="k">Feeds</span><span class="mono">{{ sel.feeds }}</span><span class="k">Job</span><span class="mono">donau {{ sel.job }} · rf_short · 8 cpu</span><span class="k">Netlist</span><span class="mono">…/{{ sel.cellDir }}/{{ sel.id }}/input.scs</span><span class="k">PSF</span><span class="mono">{{ sel.psf }}</span></div>
         <div><div class="lbl" style="margin-bottom:6px">Log tail</div><div class="code" style="height:300px">{{ sel.log }}</div></div>
         <sc-if value="{{ sel.isFailed }}" hint-placeholder-val="{{ false }}"><div class="callout bad">Failed twice with the same message. If it fails again pmukit stops retrying and the fit proceeds with <b>tran_load_off.B @ ss/125 °C = NOT RUN</b>, flagged in the report.</div></sc-if>
       </div>
@@ -134,29 +134,29 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
 <script data-dc-script data-props='{}'>
 const ROWS = [{"id": "7c3e91a04bd2", "cell": "tt / 25 \u00b0C / 3", "an": "noise VDD0P8_A \u00b7 500 \u00b5", "status": "done", "el": "4m 12s", "cpu": "0.56"}, {"id": "b19f0c72e4a8", "cell": "ss / 125 \u00b0C / 3", "an": "ac \u00b7 inject AVDD1P0 \u00b7 2 m", "status": "running", "el": "1m 03s", "cpu": "\u2014"}, {"id": "e4d27a5c1f90", "cell": "ss / 125 \u00b0C / 3", "an": "tran \u00b7 load-EN B \u00b7 off", "status": "failed", "el": "12m 40s", "cpu": "1.69"}, {"id": "02aa8e6b7d31", "cell": "ff / \u221240 \u00b0C / 3", "an": "noise IB_CONST", "status": "running", "el": "0m 41s", "cpu": "\u2014"}, {"id": "5f6c1d9e2ab7", "cell": "tt / 25 \u00b0C / 3", "an": "dc_load VDD0P8_B", "status": "cached", "el": "\u2014", "cpu": "0.00"}, {"id": "a8e05b3c9d14", "cell": "ss / 25 \u00b0C / 3", "an": "ac \u00b7 inject VDD0P8_A \u00b7 100 \u00b5", "status": "done", "el": "3m 08s", "cpu": "0.42"}, {"id": "c73b2f8e6a05", "cell": "ff / 125 \u00b0C / 3", "an": "tran \u00b7 EN", "status": "queued", "el": "\u2014", "cpu": "\u2014"}, {"id": "d1e94a7f0c26", "cell": "tt / 125 \u00b0C / 3", "an": "noise VDD0P8_B \u00b7 4 m", "status": "done", "el": "5m 51s", "cpu": "0.78"}, {"id": "39f8c6b1e2d7", "cell": "ss / \u221240 \u00b0C / 3", "an": "dc_iv IB_PTAT", "status": "done", "el": "0m 22s", "cpu": "0.05"}, {"id": "6b2d0e9a4c83", "cell": "ff / 25 \u00b0C / 3", "an": "tran \u00b7 load-EN A \u00b7 on", "status": "queued", "el": "\u2014", "cpu": "\u2014"}, {"id": "f0a7c4d2b8e1", "cell": "ss / 125 \u00b0C / 3", "an": "tran \u00b7 load-EN B \u00b7 on", "status": "failed", "el": "12m 38s", "cpu": "1.68"}, {"id": "8e1b5f3a7d09", "cell": "tt / \u221240 \u00b0C / 3", "an": "dc_temp", "status": "done", "el": "1m 47s", "cpu": "0.24"}];
 const LOGS = {
-  failed: `alps 2026.03.hf1  -mt 8  -format ps
-tran: tstop=10u  step=2n (load-EN off, 2 m -> 20 u)
+  failed: (r) => `alps 2026.03.hf1  -mt 8  -format ps
+tran: tstop=10u  step=2n (${r.an.endsWith('off') ? 'load-EN off, 2 m -> 20 u' : 'load-EN on, 20 u -> 2 m'})
   t=1.9998e-06  step reduced 128x at VDD0P8_B (dV/dt)
   t=2.0011e-06  ERROR: timestep too small (1.2e-19)
   convergence failure near IL_VDD0P8_B edge
-job FAILED  rc=1  12m 38s  peak mem 1.9 GB`,
-  running: `alps 2026.03.hf1  -mt 8  -format ps
+job FAILED  rc=1  ${r.el}  peak mem 1.9 GB`,
+  running: (r) => `alps 2026.03.hf1  -mt 8  -format ps
 ac: 10 Hz -> 20 GHz  20 pts/dec  (acm_VS_AVDD1P0=1)
   dc op converged in 214 iterations
   ac sweep 41% ... 63% ... 78%`,
-  done: `alps 2026.03.hf1  -mt 8  -format ps
+  done: (r) => `alps 2026.03.hf1  -mt 8  -format ps
 noise: 10 Hz -> 100 MHz  oprobe=VDD0P8_A
   dc op converged in 190 iterations
   noise sweep complete (161 pts)
   wrote psf/noise.noise  .simDone
-job DONE  rc=0  4m 12s  peak mem 1.4 GB`,
-  queued: `waiting for a rf_short slot (71 ahead)`,
-  cached: `identical run_id already in ledger (2026-09-14 18:02) -> reused`,
+job DONE  rc=0  ${r.el}  peak mem 1.4 GB`,
+  queued: (r, c) => `waiting for a rf_short slot (${c.queued} ahead)`,
+  cached: (r) => `identical run_id already in ledger (2026-09-14 18:02) -> reused`,
 };
 const BCLS = { done:'b-ok', running:'b-acc', failed:'b-bad', queued:'b-mute', cached:'b-mute' };
 class Component extends DCLogic {
   constructor(p){ super(p); this.state = { rows: ROWS.map(r => ({...r})), sel: 'e4d27a5c1f90', filter: 'All', counts: {done:191, running:8, queued:71, failed:2, cached:10} }; }
-  componentDidMount(){ this.timer = setInterval(() => { const c = Object.assign({}, this.state.counts); if (c.queued > 0) { c.queued -= 1; c.done += 1; this.setState({counts:c}); } }, 1800); }
+  componentDidMount(){ this.timer = setInterval(() => { const c = Object.assign({}, this.state.counts); if (c.running > 0) { c.running -= 1; c.done += 1; } if (c.queued > 0) { c.queued -= 1; c.running += 1; } if (c.running !== this.state.counts.running || c.queued !== this.state.counts.queued) this.setState({counts:c}); }, 1800); }
   componentWillUnmount(){ clearInterval(this.timer); }
   renderVals(){
     const s = this.state, c = s.counts, total = 282;
@@ -166,11 +166,11 @@ class Component extends DCLogic {
       select: () => this.setState({sel: r.id}),
       retry: (e) => { if (e && e.stopPropagation) e.stopPropagation(); const rows = s.rows.map(x => x.id === r.id ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.failed = Math.max(0, cc.failed - 1); cc.queued += 1; this.setState({rows, counts: cc}); } }));
     const selRow = s.rows.find(r => r.id === s.sel) || s.rows[0];
-    const sel = { ...selRow, bcls: BCLS[selRow.status], isFailed: selRow.status === 'failed', log: LOGS[selRow.status],
+    const sel = { ...selRow, bcls: BCLS[selRow.status], isFailed: selRow.status === 'failed', log: LOGS[selRow.status](selRow, c), cellDir: selRow.cell.replace(/ \/ /g, '_').replace(' °C', 'c').replace('−', 'm'), job: '4881' + parseInt(selRow.id.slice(0,4), 16).toString().slice(0,4),
       feeds: selRow.an.startsWith('noise') ? 'noise block' : selRow.an.startsWith('ac') ? 'zout / psrr blocks' : selRow.an.startsWith('tran') ? 'load_en (large-signal)' : 'dc tables',
       psf: selRow.status === 'done' || selRow.status === 'cached' ? '…/psf/' + selRow.id + '/' : '—' };
     const filters = ['All','Running','Failed','Queued'].map(n => ({ name:n, cls: s.filter === n ? 'on' : '', pick: () => this.setState({filter:n}) }));
-    const cpuh = (c.done * 0.052).toFixed(1);
+    const cpuh = (c.done * 0.58).toFixed(1);
     return { c: { ...c, cpuh, eta: c.queued > 0 ? Math.ceil(c.queued * 4.2 / 8) + ' min' : 'done' }, w: { done: pct('done'), running: pct('running'), failed: pct('failed'), cached: pct('cached') },
       rows, sel, filters, notDone: c.queued > 0 || c.running > 0,
       retryAll: () => { const rows = s.rows.map(x => x.status === 'failed' ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.queued += cc.failed; cc.failed = 0; this.setState({rows, counts: cc}); } };

@@ -99,12 +99,12 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
     </div>
     <div class="panel" style="flex:none">
       <div class="ph"><span>Use it in your testbench</span><button class="btn sm" onClick="{{ copy }}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5.5" y="5.5" width="8" height="8" rx="1"></rect><path d="M10.5 5.5v-3h-8v8h3"></path></svg> {{ copyLabel }}</button></div>
-      <div class="pb"><div class="code">// model setup — pick the section with the same corner variable as the PDK
+      <div class="pb"><div class="code" style="white-space:pre-wrap">// model setup — pick the section with the same corner variable as the PDK
 include "~/pmukit_data/demo_pmu/deliver/2026-09-15T14-02/PMU_demo_pmu.scs" section=tt
 
 // instance — same pins as PMU_DEMO, plus per-rail switches
-PMU_TOP (AVDD1P0 VDD0P8_A VDD0P8_B IB_PTAT IB_CONST EN VSS_A VSS_B AGND) PMU_demo_pmu \
-    vset=3  load_en_A=1  load_en_B=0</div>
+PMU_TOP (AVDD1P0 VDD0P8_A VDD0P8_B IB_PTAT IB_CONST EN TESTMODE VSS_A VSS_B AGND) PMU_demo_pmu \
+    vset=3  load_en_A=1  load_en_B=1</div>
         <div class="hint" style="margin-top:8px">Temperature comes from your <span class="mono">options temp=</span>. Anything outside envelope.json is reported, never silently extrapolated.</div>
       </div>
     </div>
@@ -116,7 +116,7 @@ PMU_TOP (AVDD1P0 VDD0P8_A VDD0P8_B IB_PTAT IB_CONST EN VSS_A VSS_B AGND) PMU_dem
     </div>
     <div class="panel" style="flex:none">
       <div class="ph"><span>Provenance</span><span class="badge b-ok"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg> reproducible</span></div>
-      <div class="pb"><div class="kv"><span class="k">Config</span><span class="mono">demo_pmu.json · sha 5d8c…a1</span><span class="k">Dataset</span><span class="mono">a91f…c3 · 271 runs consumed · 2026-09-15</span><span class="k">pmukit</span><span class="mono">0.1.0 · emitter hb_safe</span><span class="k">TB state</span><span>RX mode, register 0x12 = 0x03 (as characterized)</span><span class="k">Header</span><span class="hint">every .va repeats this block in its first 12 lines</span></div></div>
+      <div class="pb"><div class="kv"><span class="k">Config</span><span class="mono">demo_pmu.json · sha 5d8c…a1</span><span class="k">Dataset</span><span class="mono">a91f…c3 · 280 runs consumed · 2026-09-15</span><span class="k">pmukit</span><span class="mono">0.1.0 · emitter hb_safe</span><span class="k">TB state</span><span>RX mode, register 0x12 = 0x03 (as characterized)</span><span class="k">Header</span><span class="hint">every .va repeats this block in its first 12 lines</span></div></div>
     </div>
   </div>
 </div>
@@ -144,9 +144,9 @@ endlibrary PMU_demo_pmu`,
 // valid: load_A 2u..1m  load_B 20u..4m  temp -40..125  f<=20G  vset 3
 // large-signal: load_en_A ON (HB check 7.7e-3)  load_en_B OFF (default)  en_ramp usable-only
 \`include "disciplines.vams"
-module PMU_demo_pmu(AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, VSS_A, VSS_B, AGND);
-  inout AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, VSS_A, VSS_B, AGND;
-  electrical AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, VSS_A, VSS_B, AGND;
+module PMU_demo_pmu(AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND);
+  inout AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND;  // TESTMODE: pass-through, no role
+  electrical AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND;
   parameter integer vset = 3;
   parameter integer load_en_A = 1, load_en_B = 0;
   // ---- rail A: dc table(T) · zout ladder · psrr gm-C biquad · noise · load_en (opt-in)
@@ -157,7 +157,7 @@ module PMU_demo_pmu(AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, VSS_A, V
   "freq_hz_max": 2e10,
   "corners": ["tt", "ss", "ff"],
   "vset": [3],
-  "large_signal_default_on": {"load_en_A": true, "load_en_B": false},
+  "large_signal_default_on": {"load_en_A": true, "load_en_B": true},
   "usable_not_signoff": ["en_ramp"],
   "not_run": [["tran_load_off.B", "ss", 125, 3]]
 }`,
@@ -169,13 +169,14 @@ Not run: tran_load_off.B @ ss / 125 °C (failed twice)
 HB health: first-step residual 7.7e-3, all large-signal terms individually checked
 
 | port | tt −40 | tt 25 | tt 125 | ss −40 | ss 25 | ss 125 | ff −40 | ff 25 | ff 125 |
+|---|---|---|---|---|---|---|---|---|---|
 | VDD0P8_A | OK | OK | OK | OK | OK | MARG | OK | OK | OK |
 ...`,
   'provenance.json': `{
   "pmukit": "0.1.0",
   "config_sha": "5d8c…a1",
   "dataset_sha": "a91f…c3",
-  "runs_consumed": 271,
+  "runs_consumed": 280,
   "tb_state": "RX mode, register 0x12 = 0x03",
   "created": "2026-09-15T14:02:11"
 }`,
@@ -186,7 +187,8 @@ class Component extends DCLogic {
     const s = this.state;
     const files = FILES.map(f => ({ ...f, cls: f.name === s.sel ? 'sel' : '', pick: () => this.setState({sel: f.name}) }));
     const f = FILES.find(x => x.name === s.sel);
-    return { files, sel: { ...f, body: BODIES[f.name] || BODIES['PMU_demo_pmu_tt.va'] }, copyLabel: s.copied ? 'Copied' : 'Copy',
+    const body = BODIES[f.name] || BODIES['PMU_demo_pmu_tt.va'].replace(/corner tt/, 'corner ' + f.name.slice(-5, -3)).replace('HB check 7.7e-3', f.name.includes('_ss') ? 'HB check 9.1e-3' : 'HB check 6.4e-3');
+    return { files, sel: { ...f, body }, copyLabel: s.copied ? 'Copied' : 'Copy',
       copy: () => { this.setState({copied:true}); setTimeout(() => this.setState({copied:false}), 1500); } };
   }
 }

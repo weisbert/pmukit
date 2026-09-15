@@ -160,7 +160,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
               <span class="k">DC temp sweep</span><span class="mono">−40 → 125 °C step 5 (continuous T inside each corner)</span>
               <span class="k">Bias I-V sweep</span><span class="mono">0 → 1.0 V, 21 pts (compliance from VB_ dc)</span>
               <span class="k">Load-EN edge</span><span class="mono">2 ns (measured) · tstop set after the Zout fit</span>
-              <span class="k">Cells</span><span class="mono">3 corners × 3 temps × 1 VSET = 9</span>
+              <span class="k">Cells</span><span class="mono">{{ cellsText }}</span>
             </div>
           </sc-if>
         </div>
@@ -178,7 +178,7 @@ class Component extends DCLogic {
   constructor(p){ super(p); this.state = { loaded: false, adv: false,
     corners: ['tt','ss','ff'], cornersOn: {tt:true, ss:true, ff:true},
     temps: ['-40','25','125'], tempsOn: {'-40':true,'25':true,'125':true},
-    sw: {VDD0P8_A: true, VDD0P8_B: false} }; }
+    sw: {VDD0P8_A: true, VDD0P8_B: true} }; }
   renderVals(){
     const s = this.state;
     const pins = [
@@ -205,6 +205,7 @@ class Component extends DCLogic {
       load: () => this.setState({loaded:true}), toggleAdv: (e) => { if (e && e.preventDefault) e.preventDefault(); this.setState({adv: !s.adv}); },
       pins, rails, corners: chips(s.corners, s.cornersOn, 'cornersOn'), temps: chips(s.temps, s.tempsOn, 'tempsOn'),
       footText: s.loaded ? `${nc} corners × ${nt} temps × 1 VSET = ${nc*nt} cells · 2 rails · 2 biases · EN` : 'Load a netlist to continue',
+      cellsText: `${nc} corners × ${nt} temps × 1 VSET = ${nc*nt}`,
     };
   }
 }

@@ -141,17 +141,17 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
             </svg>
             <sc-if value="{{ hov.on }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:{{ hov.tx }}px;top:8px;background:#1c1b18;color:#e9e6de;padding:6px 8px;border-radius:4px;font-size:11px;white-space:nowrap;pointer-events:none" class="mono">{{ hov.text }}</div></sc-if>
           </div>
-          <div class="legend"><span><span class="sw" style="background:#b45309"></span>ground truth (transistor PMU)</span><span><span class="sw" style="background:#1f6f9f"></span>model (.va)</span><span class="hint">|Zout| in Ω vs frequency · log–log · hover for values</span></div>
+          <div class="legend"><span><span class="sw" style="background:#b45309"></span>ground truth (transistor PMU)</span><span><span class="sw" style="background:#1f6f9f"></span>model (.va)</span><span class="hint">{{ chartNote }}</span></div>
         </sc-if>
         <sc-if value="{{ isTable }}" hint-placeholder-val="{{ false }}">
-          <table class="t"><thead><tr><th>Frequency</th><th class="num" style="text-align:right">GT |Z| Ω</th><th class="num" style="text-align:right">Model |Z| Ω</th><th class="num" style="text-align:right">Δ dB</th></tr></thead>
+          <table class="t"><thead><tr><th>Frequency</th><th class="num" style="text-align:right">GT ({{ unit }})</th><th class="num" style="text-align:right">Model ({{ unit }})</th><th class="num" style="text-align:right">Δ dB</th></tr></thead>
           <tbody><sc-for list="{{ tableRows }}" as="t" hint-placeholder-count="8"><tr><td class="mono">{{ t.f }}</td><td class="num">{{ t.g }}</td><td class="num">{{ t.m }}</td><td class="num">{{ t.d }}</td></tr></sc-for></tbody></table>
         </sc-if>
       </div>
     </div>
   </div>
 </div>
-<div class="foot"><span class="hint">Fit from dataset <span class="mono">a91f…c3</span> · 271 of 282 runs consumed · 11 cached</span><div style="display:flex;gap:8px"><button class="btn">Open report.md</button><button class="btn pri">Deliver <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"></path></svg></button></div></div>
+<div class="foot"><span class="hint">Fit from dataset <span class="mono">a91f…c3</span> · 280 of 282 runs consumed (2 failed, marked not run) · 10 reused from the ledger</span><div style="display:flex;gap:8px"><button class="btn">Open report.md</button><button class="btn pri">Deliver <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"></path></svg></button></div></div>
 
 </div>
 </x-dc>
@@ -178,36 +178,46 @@ function blocksFor(port, g){
     {name:'psrr', metric:'|H| RMS', val:'1.0 dB', lim:'2 dB', grade:'ok'},
   ];
 }
-// |Zout| model vs GT: 2nd-order peak + cap roll-off, log axes
-function zGT(f){ const w = f/1.78e6; const peak = 388/Math.sqrt(Math.pow(1-w*w,2)+Math.pow(w/2.6,2)); const lf = 23/Math.sqrt(1+Math.pow(f/4e4,2)); const hf = 1/(2*Math.PI*f*1e-9) + 0.4; return Math.min(peak+lf, 1e4) + (f>3e7 ? 0 : 0) + (f>1e8 ? hf : 0); }
-function zModel(f){ const w = f/1.74e6; const peak = 380/Math.sqrt(Math.pow(1-w*w,2)+Math.pow(w/2.5,2)); const lf = 23.4/Math.sqrt(1+Math.pow(f/4.2e4,2)); const hf = 1/(2*Math.PI*f*1e-9) + 0.4; return Math.min(peak+lf, 1e4) + (f>1e8 ? hf : 0); }
-const FMIN = 1e1, FMAX = 1e10, ZMIN = 0.1, ZMAX = 1e3;
+// |Zout| (rails) and bias current-noise PSD (biases): model vs GT, log axes
+function zPeak(f, f0, q, a){ const w = f/f0; return a/Math.sqrt(Math.pow(1-w*w,2)+Math.pow(w/q,2)); }
+function zRail(f, k){ const lf = 23*k.lf/Math.sqrt(1+Math.pow(f/4e4,2)); const loop = zPeak(f, k.f0, k.q, 388*k.a); const cap = 1/(2*Math.PI*f*1e-9); return Math.sqrt(Math.pow(1/(1/(loop+lf) + 1/cap), 2) + 0.16); }
+function nBias(f, k){ return 1e-24*k.w*(1 + 9e3/f) + 1e-22*k.p/(1+Math.pow(f/2e6,2)); }
+const FMIN = 1e1, FMAX = 1e10;
 const X0 = 48, X1 = 512, Y0 = 14, Y1 = 216;
 const xOf = f => X0 + (X1-X0) * (Math.log10(f)-1)/9;
-const yOf = z => Y1 - (Y1-Y0) * (Math.log10(Math.max(z, ZMIN))-Math.log10(ZMIN))/4;
+function scaleY(lo, hi){ return z => Y1 - (Y1-Y0) * (Math.log10(Math.max(z, lo))-Math.log10(lo))/(Math.log10(hi)-Math.log10(lo)); }
 const FS = []; for (let i = 0; i <= 180; i++) FS.push(Math.pow(10, 1 + i/20));
-const pathOf = fn => FS.map((f,i) => (i?'L':'M') + xOf(f).toFixed(1) + ' ' + yOf(fn(f)).toFixed(1)).join(' ');
+const pathOf = (fn, yOf) => FS.map((f,i) => (i?'L':'M') + xOf(f).toFixed(1) + ' ' + yOf(fn(f)).toFixed(1)).join(' ');
 const fmtF = f => f >= 1e9 ? (f/1e9).toFixed(f>=1e10?0:1)+' GHz' : f >= 1e6 ? (f/1e6).toFixed(0)+' MHz' : f >= 1e3 ? (f/1e3).toFixed(0)+' kHz' : f.toFixed(0)+' Hz';
 class Component extends DCLogic {
-  constructor(p){ super(p); this.state = { port:'VDD0P8_B', corner:'ss', temp:'25', block:'zout', view:'chart', hov:null }; }
+  constructor(p){ super(p); this.state = { port:'VDD0P8_B', corner:'ss', temp:'25', view:'chart', hov:null }; }
   renderVals(){
     const s = this.state;
     const heads = []; CORNERS.forEach(c => TEMPS.forEach(t => heads.push(c + ' ' + t)));
     const rows = PORTS.map(p => ({ name:p, cells: CORNERS.flatMap(c => TEMPS.map(t => { const g = GRADE[p+'|'+c+'|'+t] || 'ok'; const sel = s.port===p && s.corner===c && s.temp===t;
       return { cls: CLS[g] + (sel ? ' sel' : ''), label: LBL[g], pick: () => this.setState({port:p, corner:c, temp:t, hov:null}) }; })) }));
+    const rail = s.port.startsWith('VDD');
+    const kGT = rail ? { f0: 1.78e6, q: 2.6, a: 1, lf: 1 } : { w: 1, p: 1 };
+    const marg = (GRADE[s.port+'|'+s.corner+'|'+s.temp] || 'ok') === 'warn';
+    const kM = rail ? { f0: marg ? 1.56e6 : 1.75e6, q: marg ? 2.1 : 2.5, a: marg ? 0.8 : 0.98, lf: 1.02 } : { w: marg ? 1.35 : 1.05, p: marg ? 0.7 : 0.95 };
+    const gtFn = rail ? (f => zRail(f, kGT)) : (f => nBias(f, kGT)), mFn = rail ? (f => zRail(f, kM)) : (f => nBias(f, kM));
+    const yOf = rail ? scaleY(0.1, 1e4) : scaleY(1e-26, 1e-20);
+    const unit = rail ? 'Ω' : 'A²/Hz';
+    const fmtV = v => rail ? v.toFixed(v < 10 ? 2 : 1) : v.toExponential(2);
     const g = GRADE[s.port+'|'+s.corner+'|'+s.temp] || 'ok';
-    const blocks = blocksFor(s.port, g).map(b => ({ ...b, gcls: BADGE[b.grade], grade: LBL[b.grade], cls: b.name === s.block ? 'sel' : '', pick: () => this.setState({block:b.name}) }));
-    const hov = s.hov ? { on:true, x: s.hov.x, yg: yOf(zGT(s.hov.f)), ym: yOf(zModel(s.hov.f)), tx: Math.min(s.hov.x + 10, 360), text: fmtF(s.hov.f) + '  GT ' + zGT(s.hov.f).toFixed(1) + ' Ω  model ' + zModel(s.hov.f).toFixed(1) + ' Ω' } : { on:false };
+    const chartBlock = rail ? 'zout' : 'noise';
+    const blocks = blocksFor(s.port, g).map(b => ({ ...b, gcls: BADGE[b.grade], grade: LBL[b.grade], cls: b.name === chartBlock ? 'sel' : '', pick: () => {} }));
+    const hov = s.hov ? { on:true, x: s.hov.x.toFixed(1), yg: yOf(gtFn(s.hov.f)).toFixed(1), ym: yOf(mFn(s.hov.f)).toFixed(1), tx: Math.min(s.hov.x + 12, 330).toFixed(0), text: fmtF(s.hov.f) + '  GT ' + fmtV(gtFn(s.hov.f)) + '  model ' + fmtV(mFn(s.hov.f)) + ' ' + unit } : { on:false };
     const gridV = [1e1,1e2,1e3,1e4,1e5,1e6,1e7,1e8,1e9,1e10].map(f => ({ x: xOf(f).toFixed(1), t: f>=1e9 ? (f/1e9)+'G' : f>=1e6 ? (f/1e6)+'M' : f>=1e3 ? (f/1e3)+'k' : f }));
-    const gridH = [0.1,1,10,100,1000].map(z => ({ y: yOf(z).toFixed(1), ty: (yOf(z)+3.5).toFixed(1), t: z>=1 ? z : z }));
-    const tableRows = [1e2,1e4,1e5,1e6,1.78e6,1e7,1e8,1e9,1e10].map(f => { const gv = zGT(f), mv = zModel(f); return { f: fmtF(f), g: gv.toFixed(2), m: mv.toFixed(2), d: (20*Math.log10(mv/gv)).toFixed(2) }; });
+    const gridH = (rail ? [0.1,1,10,100,1e3,1e4] : [1e-26,1e-24,1e-22,1e-20]).map(z => ({ y: yOf(z).toFixed(1), ty: (yOf(z)+3.5).toFixed(1), t: rail ? (z >= 1e3 ? (z/1e3)+'k' : String(z)) : '1e' + Math.round(Math.log10(z)) }));
+    const tableRows = [1e2,1e4,1e5,1e6,1.78e6,1e7,1e8,1e9,1e10].map(f => { const gv = gtFn(f), mv = mFn(f); return { f: fmtF(f), g: fmtV(gv), m: fmtV(mv), d: ((rail ? 20 : 10)*Math.log10(mv/gv)).toFixed(2) }; });
     return { heads, rows, blocks, selPort: s.port, selCell: s.corner + ' / ' + s.temp + ' °C / VSET 3', selGrade: LBL[g], selCls: BADGE[g],
-      chartTitle: s.block === 'zout' ? '|Zout| · load ' + (s.port === 'VDD0P8_A' ? '500 µA' : '2 mA') : s.block + ' · model vs ground truth',
+      chartTitle: rail ? '|Zout| · load ' + (s.port === 'VDD0P8_A' ? '500 µA' : '2 mA') : 'current noise PSD · ' + s.port, chartNote: rail ? '|Zout| in Ω vs frequency · log–log · hover for values' : 'A²/Hz vs frequency · log–log · hover for values', unit,
       isChart: s.view === 'chart', isTable: s.view === 'table', viewChartCls: s.view === 'chart' ? 'on' : '', viewTableCls: s.view === 'table' ? 'on' : '',
       showChart: () => this.setState({view:'chart'}), showTable: () => this.setState({view:'table'}),
-      pathGT: pathOf(zGT), pathModel: pathOf(zModel), lblGT: { x: xOf(3e3).toFixed(0), y: (yOf(zGT(3e3)) - 8).toFixed(0) }, lblM: { x: xOf(2e8).toFixed(0), y: (yOf(zModel(2e8)) + 14).toFixed(0) },
+      pathGT: pathOf(gtFn, yOf), pathModel: pathOf(mFn, yOf), lblGT: { x: xOf(3e3).toFixed(0), y: (yOf(gtFn(3e3)) - 8).toFixed(0) }, lblM: { x: xOf(2e8).toFixed(0), y: (yOf(mFn(2e8)) + 14).toFixed(0) },
       hov, gridV, gridH, tableRows,
-      hover: (e) => { const svg = e.currentTarget, r = svg.getBoundingClientRect(); const x = Math.max(X0, Math.min(X1, e.clientX - r.left)); const f = Math.pow(10, 1 + 9*(x-X0)/(X1-X0)); this.setState({hov:{x: x.toFixed(1), f}}); },
+      hover: (e) => { const svg = e.currentTarget, r = svg.getBoundingClientRect(); const x = Math.max(X0, Math.min(X1, e.clientX - r.left)); const f = Math.pow(10, 1 + 9*(x-X0)/(X1-X0)); this.setState({hov:{x, f}}); },
       unhover: () => this.setState({hov:null}) };
   }
 }
