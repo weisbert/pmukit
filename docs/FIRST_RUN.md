@@ -23,6 +23,18 @@ bash apply                     # 注意是 bash，不是 ./apply —— 盒子�
   如果盒子不能联网，先在桌面跑 `python deploy/package.py --out <dir>` 打一个离线包带过去。
 
 ☐ 装好，`pmukit --help` 有输出
+
+**然后告诉它这台机器能用哪个仿真器**（默认值是**桌面的**默认值，在盒子上是错的）：
+
+```tcsh
+pmukit site                                              # 先看一眼现在是什么
+pmukit site --engine donau_alps --queue short --cpus 8 --account <你的账号>
+```
+
+不设的话默认是 `spectre_ssh` + `ewave-vm` —— 那是桌面往 VM 跑的配置。
+（真在仿真机本机上跑时，`spectre_ssh` 指向自己是错的配置，`/api/machine` 会如实报失败。）
+
+☐ `pmukit site` 显示的 engine 是 `donau_alps`
 ☐ `pmukit ui` 起来，打印 URL，盒子的 Firefox 能打开
 
 > `pmukit ui` 只绑 `127.0.0.1`。要从别的机器看，加 `--host 0.0.0.0`（自己判断网络策略）。
