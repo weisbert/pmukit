@@ -1,0 +1,19 @@
+# pmukit is a TOOL-ONLY public repo. Real designs, measurements, manifests and delivered
+# models NEVER enter git -- they live outside the tree (see README "Data rule").
+data/
+work*/
+runs/
+deliver/
+.venv/
+__pycache__/
+*.pyc
+*.psf
+*.psfbin
+*.raw
+*.log
+*.npz
+!tests/fixtures/**/*.npz
+dist/
+build/
+.pmukit-denylist
+.DS_Store
