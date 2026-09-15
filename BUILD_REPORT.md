@@ -244,3 +244,24 @@ ngspice 0.520381、Spectre 0.52038 —— 两边一致。
 **提交闸在这里咬了一次真的**：vendored 的 `isrc_gt.lib` 头部注释里有两个真客户单元名，已按规矩改文件。
 
 `pytest tests/test_fixtures.py` → 31 passed, 1 skipped（`vm` 标记的那条，靠 `PMUKIT_VM_TESTS=1` 开）。
+
+## M9 — 摘要往返：导出 → 导入 → 重现
+
+- **导出**（`digest.py`，M1 里已落）：按优先级裁，**丢掉的块在 D9 trailer 点名**，超 32 KB 自动分段，
+  乱序也能拼回，缺段 / body sha 对不上都报四段式错误。
+- **导入 + 重现**（`pmukit/reproduce.py`，新）：
+  - `rebuild_dataset(payload, path)` —— 从摘要重建一个**契约 2 格式的数据集子集**。
+    只有摘要真的带了的序列才成为变量；**盒子丢掉的东西登记成 missing 并写明原因，不猜**。
+    整块被丢掉的情况没有变量可挂 `missing` 行 → 另外写一份 `dropped.json` 点名，
+    所以损失在两个地方都看得见，不会隐形。
+  - **只有 ground truth 进数据集**：D4 同时带 GT 和模型，模型是拟合结果，跟着 `params` 走。
+    契约里那句「重采样会改变拟合结果，所以模型数字要随摘要走」在这里被当成规则执行，不是注释。
+  - `compare(box_params, desk_params)` —— **逐个参数**比，不做平均：`same` / `moved`（带相对差）/
+    `only_box` / `only_desk` / `worst`。桌面重拟合**允许**和盒子不一致 —— 不一致本身就是结论
+    （病态轨在盒外重拟合发散是有记录的真实案例）。
+  - `reproduce(payload)` —— 重建 + 重拟合 + 比较；**桌面没装拟合器时不报错**，
+    如实说明并把盒子的参数原样交出（凭 D2 就能重新发射 `.va`）。
+- CLI：`pmukit digest import <txt>` / `pmukit reproduce --from-digest <txt> [--workdir]`。
+- **验收**：export→parse 往返后 D2 参数**逐位相同**（`0.0931234567890123` 原样回来）；
+  每一段都是 ASCII 且不含 `\r`（能过 relay 粘贴）；32 KB 预算下大 payload 的丢弃被 trailer 点名
+  且在 `dropped.json` 里复述。**12 个测试。**
