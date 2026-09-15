@@ -265,3 +265,43 @@ ngspice 0.520381、Spectre 0.52038 —— 两边一致。
 - **验收**：export→parse 往返后 D2 参数**逐位相同**（`0.0931234567890123` 原样回来）；
   每一段都是 ASCII 且不含 `\r`（能过 relay 粘贴）；32 KB 预算下大 payload 的丢弃被 trailer 点名
   且在 `dropped.json` 里复述。**12 个测试。**
+
+## 装机彩排：把当晚的代码打包、装到 Linux 上、跑一遍真流程
+
+不是模拟，是把 `deploy/package.py` 打出来的包 scp 到 `ewave-vm`（Rocky 8.10，
+**python 3.11.13 / numpy 2.2.6 / scipy 1.16.3 —— 和桌面的版本都不一样**，正好当作可移植性检查）：
+
+```
+[1/6] verifying MANIFEST.json + SHA256SUMS ...   integrity OK (73 files)
+[2/6] installing source -> .../app ...
+[3/6] creating venv ...
+[4/6] OFFLINE pip install (--no-index --find-links wheels) ...
+      Successfully installed numpy-2.2.6 scipy-1.16.3 pytest-9.1.1 ...
+[5/6] installing launchers ...
+[6/6] post-install check (headless):
+      PASS 0. runtime stack      numpy 2.2.6, scipy 1.16.3
+      PASS 1. server alive       host=eda py=3.11.13
+      PASS 2. run a command, read its output
+      PASS 3. streaming          first byte 0.01s of 3.01s
+      PASS 4. files (download a .va, upload text back)
+      PASS 5. CLI entry point (python -m pmukit)
+      6/6 checks passed
+```
+
+然后在**装好的那一份**上跑真流程（合成 PMU fixture，3 角 × 3 温度）：
+
+```
+$ pmukit check .../input.scs --pmu-inst PMU_TOP
+  ... no role: TESTMODE ...  2 analysis statement(s) will be stripped
+  Convention OK.
+$ pmukit new demo_pmu ... --corners tt,ss,ff --temps=-40,25,125 --port VDD0P8_C=stub
+  1 pin(s) have no role: TESTMODE
+$ pmukit plan demo_pmu
+  363 runs, 1.28 CPU-hours estimated (4 load states, 19 groups)
+$ pmukit plan demo_pmu --submit && pmukit run demo_pmu --engine fake
+  363 runs, elapsed 3.9 s, 全部落进数据集
+```
+
+⇒ **明早 `git clone` → `bash apply` → `pmukit ui` 这条路在真 Linux 上走通了**，
+而且不依赖桌面的 numpy/scipy 版本。
+（`tests/` 不进包，所以盒子上没有 fixture —— 这是故意的，fixture 将来可能含真测量。）
