@@ -179,6 +179,18 @@ def cmd_new(a) -> int:
             entry["edge_s"] = nums[2]
         my_load[rail] = entry
 
+    stub_dc: dict[str, float] = {}
+    for spec_ in (a.stub or []):
+        pin, _, val = spec_.partition("=")
+        try:
+            stub_dc[pin] = float(val)
+        except ValueError:
+            raise PmuError(
+                what=f"--stub {spec_}: {val!r} is not a number.",
+                why="A stub's DC level is volts for a rail pin and amps for a bias pin.",
+                do=[f"Write it as --stub {pin}=0.8 (a rail) or --stub {pin}=500u -> 5e-4 (a bias)"],
+                where="command line") from None
+
     cfg = cfgmod.ProjectConfig.from_dict({
         "project": a.project,
         "netlist": str(pathlib.Path(a.netlist).resolve()),
@@ -190,6 +202,7 @@ def cmd_new(a) -> int:
         "ports": ports,
         "my_load": my_load,
         "care_up_to_hz": float(a.care_up_to),
+        "stub_dc": stub_dc,
     })
     d = paths.ensure_project(a.project)
     cfg.save(d / "config.json")
@@ -527,7 +540,8 @@ def cmd_report(a) -> int:
 def cmd_deliver(a) -> int:
     cfg, der, d = _load(a.project)
     emod = _need("emit", "deliver")
-    path = emod.deliver(a.project, root=d)
+    # `root` is the $PMUKIT_DATA ROOT -- deliver() appends <project>/deliver/<stamp> itself.
+    path = emod.deliver(a.project, root=paths.data_root(), derived=der)
     print(f"delivered -> {path}")
     print(f"\nAdd to your corner setup:\n  include \"{path}/PMU_{a.project}.scs\" section=<corner>")
     return 0
@@ -659,6 +673,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--load", action="append",
                    help="RAIL=<on_a>,<off_a>[,<edge_s>] -- what YOUR module draws (repeatable)")
     p.add_argument("--port", action="append", help="PIN=model|stub|ignore (repeatable)")
+    p.add_argument("--stub", action="append",
+                   help="PIN=<value> -- the DC level to emit a stub pin at: VOLTS for a rail, "
+                        "AMPS for a bias. Without it the pin is weakly tied, not driven "
+                        "(repeatable)")
     p.add_argument("--note", help="what state the testbench was in (goes into provenance)")
     p.set_defaults(fn=cmd_new)
 

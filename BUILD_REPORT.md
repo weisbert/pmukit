@@ -518,3 +518,31 @@ gm-C 实现 1.5e5 vs R-L-C 2.4e10 —— 判别得干干净净。
 **但默认仍然是 `bank`** —— `.noise` 是线性解，唯一没验的是它在**真正的耦合振荡器 pnoise/hbnoise**
 里、在周期大信号调制下的行为是否和 Lorentzian 组一致。那是唯一还需要盒子的一件事；
 `flicker_mode="native"` 已经实现好了，等那个证据到位再换默认值。
+
+## 交付路径实测（真 Spectre 数据 → `.va` + section 库）
+
+```
+$ pmukit new d2 ... --port VDD0P8_C=stub && pmukit plan d2 --submit
+$ pmukit run d2 --engine spectre_ssh && pmukit fit d2 && pmukit deliver d2
+delivered -> .../deliver/20260915-164914
+  envelope.json  grades.json  hb_check.json  hb_check.txt
+  PMU_d2.scs  PMU_d2_tt.va (46 KB)  provenance.json  report.md
+```
+`report.md` 第一段就是契约 0c 要的四项（有效范围 / 能用不签核 / 没跑 / 每角每轨绿黄红），
+轨表里**不出现内部分数**（分数在旁边的 `grades.json`）。等级表现在写的是
+"no block was graded in this deliverable" —— 因为 M8 还没落地，**如实降级而不是默认绿**。
+
+两个真跑时撞出来的问题（已修）：
+
+- `emit.deliver(root=...)` 收的是 `$PMUKIT_DATA` **根**，CLI 传的却是项目目录 → 路径里项目名重复。
+- **stub 引脚的直流值，网表给不出来**：契约要 stub 发成"该脚直流值的理想源"，
+  但约定源给的是**对偶量**（轨脚挂 `IL_` 是电流、要的是电压；偏置脚挂 `VB_` 是电压、要的是电流），
+  而 stub 按定义不跑仿真。发射器本来就会优雅降级成"弱连并说明"，现在补上了让用户给这个数的路径：
+  契约 0a 加可选键 `stub_dc`，CLI 是 `--stub PIN=值`。实测：
+```
+$ pmukit new d3 ... --port VDD0P8_C=stub --stub VDD0P8_C=0.8
+  derived.stubs.VDD0P8_C = {role: rail, dc_v: 0.8, dc_a: None, dc_source: config.stub_dc}
+$ pmukit deliver d3
+  PMU_d3_tt.va:  //   stub VDD0P8_C: stub, not modeled -- ideal 0.8 V source, ground VSS_B
+```
+  不给就还是弱连 + 报告写明。**工具不编这个值。**

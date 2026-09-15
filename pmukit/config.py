@@ -152,6 +152,12 @@ class ProjectConfig:
     ports: dict[str, str]
     my_load: dict[str, MyLoad]
     care_up_to_hz: float
+    #: Optional. The DC level a `stub` pin should be emitted at: VOLTS for a rail pin, AMPS for a
+    #: bias pin. The convention source gives the DUAL quantity (a rail carries an IL_ current, a
+    #: bias a VB_ voltage), so a stub's own level is the one number the netlist cannot supply and
+    #: a stub is by definition never simulated. Without it the emitter weakly ties the pin and
+    #: says so, rather than driving it at an invented level.
+    stub_dc: dict = field(default_factory=dict)
     state_note: str = ""
 
     # ---------------------------------------------------------------- serialization
@@ -162,7 +168,7 @@ class ProjectConfig:
                        "Contract 0a is a single JSON object with the ten intake keys.",
                        ["Start from the example in docs/CONTRACTS.md section 0a"], where)
         known = {"project", "netlist", "pmu_inst", "corners", "temps_c", "vset_codes",
-                 "ports", "my_load", "care_up_to_hz", "state_note"}
+                 "ports", "my_load", "care_up_to_hz", "state_note", "stub_dc"}
         unknown = set(d) - known
         if unknown:
             raise _err(f"The project config has unknown key(s): {sorted(unknown)}.",
@@ -195,7 +201,8 @@ class ProjectConfig:
                   temps_c=list(d.get("temps_c") or []),
                   vset_codes=list(d.get("vset_codes") or []),
                   ports=ports, my_load=loads, care_up_to_hz=d.get("care_up_to_hz"),
-                  state_note=d.get("state_note", ""))
+                  state_note=d.get("state_note", ""),
+                  stub_dc={str(k): float(v) for k, v in (d.get("stub_dc") or {}).items()})
         cfg.source_path = where
         cfg.validate()
         return cfg
@@ -206,7 +213,7 @@ class ProjectConfig:
                                     for k, v in self.corners.items()}
         else:
             corners = [str(c) for c in self.corners]
-        return {"project": str(self.project), "netlist": str(self.netlist),
+        out = {"project": str(self.project), "netlist": str(self.netlist),
                 "pmu_inst": str(self.pmu_inst), "corners": corners,
                 "temps_c": [float(t) for t in self.temps_c],
                 "vset_codes": [int(v) for v in self.vset_codes],
@@ -214,6 +221,11 @@ class ProjectConfig:
                 "ports": {str(k): str(v) for k, v in self.ports.items()},
                 "my_load": {k: v.to_dict() for k, v in self.my_load.items()},
                 "care_up_to_hz": float(self.care_up_to_hz)}
+        # Omitted when empty, like MyLoad.edge_s: an optional key that is absent should stay
+        # absent, so a config written back out is the config that was read in.
+        if self.stub_dc:
+            out["stub_dc"] = {str(k): float(v) for k, v in self.stub_dc.items()}
+        return out
 
     @classmethod
     def load(cls, path) -> "ProjectConfig":
@@ -684,8 +696,14 @@ def derive(cfg: ProjectConfig, pins=None, site=None) -> DerivedConfig:
         if role == "none":
             continue
         if fate == "stub":
+            level = cfg.stub_dc.get(pin)
             d.stubs[pin] = {"role": role, "net": e.get("net"), "gnd": gnd, "src": e.get("src"),
                             "dc": e.get("dc"),
+                            # Volts for a rail, amps for a bias -- the emitter reads exactly these.
+                            "dc_v": (float(level) if level is not None and role != "bias" else None),
+                            "dc_a": (float(level) if level is not None and role == "bias" else None),
+                            "dc_source": ("config.stub_dc" if level is not None else
+                                          "not given -- the pin will be weakly tied, not driven"),
                             "emit": "isource" if role == "bias" else "vsource",
                             "note": "stub, not modeled",
                             "provenance": f"ports[{pin!r}] = stub -> emitted as an ideal dc "
