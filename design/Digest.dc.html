@@ -91,10 +91,26 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
 .ctx .it .k{color:#8a867d;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11px}
 .ctx .sep{height:1px;background:#ebe8e1;margin:3px 6px}
 .rc{cursor:context-menu}
+.main{padding-bottom:46px}
+.cli{position:absolute;left:0;right:0;bottom:52px;height:30px;display:flex;align-items:center;gap:10px;padding:0 20px;background:#faf9f6;border-top:1px solid #ebe8e1;font-size:12px}
+.cli .d{color:#8a867d;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cli .c{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;color:#1c1b18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:900px}
+.help{position:absolute;z-index:41;right:20px;top:56px;width:460px;max-height:780px;background:#ffffff;border:1px solid #cfccc4;border-radius:4px;box-shadow:0 6px 20px rgba(28,27,24,.14);display:flex;flex-direction:column}
+.help .pb{display:flex;flex-direction:column;gap:12px}
+.keys{display:grid;grid-template-columns:110px 1fr;gap:5px 12px;font-size:12.5px}
+.keys .kb{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11.5px;background:#f3f1ec;border:1px solid #dedbd3;border-radius:3px;padding:1px 6px;display:inline-block}
+.err{border:1px solid #efc2bd;background:#fdeeec;border-radius:4px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+.err .t{font-weight:600;color:#b3362e;display:flex;gap:8px;align-items:center}
+.err .k{color:#5d5a53;width:64px;display:inline-block}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#5d5a53;padding:40px 20px;text-align:center}
+.empty .t{font-weight:600;color:#1c1b18}
+.skel{height:12px;border-radius:3px;background:linear-gradient(90deg,#ebe8e1,#f5f3ee,#ebe8e1);background-size:200% 100%;animation:sk 1.2s infinite}
+@keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.q{display:inline-flex;width:14px;height:14px;border-radius:50%;border:1px solid #cfccc4;color:#8a867d;font-size:10px;align-items:center;justify-content:center;margin-left:6px;cursor:help;font-family:'IBM Plex Sans',system-ui,sans-serif;vertical-align:middle}
 </style>
 </helmet>
 <div class="app" onContextMenu="{{ noNativeMenu }}">
-<div class="nav"><span class="brand">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step done"><span class="n">1</span><span>New</span></div><div class="step done"><span class="n">2</span><span>Plan</span></div><div class="step done"><span class="n">3</span><span>Run</span></div><div class="step cur"><span class="n">4</span><span>Model</span></div><div class="step"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span></div></div>
+<div class="nav"><span class="brand" title="Home: all projects (key 0)">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step done"><span class="n">1</span><span>New</span></div><div class="step done"><span class="n">2</span><span>Plan</span></div><div class="step done"><span class="n">3</span><span>Run</span></div><div class="step cur"><span class="n">4</span><span>Model</span></div><div class="step"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span><button class="btn sm" onClick="{{ help.open }}" title="Help and keyboard shortcuts (?)">? Help</button></div></div>
 
 <div class="main">
   <div class="col" style="flex:0 0 640px">
@@ -138,6 +154,18 @@ pmukit report demo_pmu --cell ss/25c                # same report text as the bo
 </div>
 <div class="foot"><span class="hint">Digests live under <span class="mono">~/pmukit_data/demo_pmu/digest/</span> on both machines · never in git</span><button class="btn pri" onClick="{{ copy }}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5.5" y="5.5" width="8" height="8" rx="1"></rect><path d="M10.5 5.5v-3h-8v8h3"></path></svg> Copy {{ partsBtn }}</button></div>
 
+<div class="cli"><span class="d">$</span><span class="c">{{ cli }}</span><button class="btn sm" style="height:22px" onClick="{{ copyCli }}">{{ copyCliLabel }}</button><span class="hint">every action on this screen has this command · paste it in a script or a cron job</span></div>
+<sc-if value="{{ help.on }}" hint-placeholder-val="{{ false }}">
+  <div class="ctx-veil" onClick="{{ help.close }}"></div>
+  <div class="help"><div class="ph"><span>{{ help.title }}</span><button class="btn sm" onClick="{{ help.close }}">Close · Esc</button></div>
+    <div class="pb">
+      <div><div class="lbl" style="margin-bottom:6px">This screen</div><sc-for list="{{ help.lines }}" as="l" hint-placeholder-count="3"><div style="font-size:12.5px;line-height:1.5;margin-bottom:4px">{{ l }}</div></sc-for></div>
+      <div><div class="lbl" style="margin-bottom:6px">Keys here</div><div class="keys"><sc-for list="{{ help.keys }}" as="k" hint-placeholder-count="4"><span><span class="kb">{{ k.k }}</span></span><span>{{ k.d }}</span></sc-for></div></div>
+      <div><div class="lbl" style="margin-bottom:6px">Everywhere</div><div class="keys"><span><span class="kb">?</span></span><span>this panel</span><span><span class="kb">Ctrl K</span></span><span>command palette: type any action or run id</span><span><span class="kb">0 … 5</span></span><span>go to Home, New, Plan, Run, Model, Deliver</span><span><span class="kb">Ctrl Enter</span></span><span>the screen's primary button</span><span><span class="kb">Ctrl Z</span></span><span>undo the last config change (not a submitted run)</span><span><span class="kb">Esc</span></span><span>close menu / panel</span><span><span class="kb">right-click</span></span><span>all verbs for any row, chip, cell, chart or file</span></div></div>
+      <div class="hint">Docs: <span class="mono">pmukit help &lt;screen&gt;</span> prints this text. Error messages always carry four parts: what happened · why · what to do · where to look.</div>
+    </div>
+  </div>
+</sc-if>
 <sc-if value="{{ menu.on }}" hint-placeholder-val="{{ false }}">
   <div class="ctx-veil" onClick="{{ menu.close }}" onContextMenu="{{ menu.close }}"></div>
   <div class="ctx" style="left:{{ menu.x }}px;top:{{ menu.y }}px">
@@ -161,6 +189,13 @@ class CtxLogic extends DCLogic {
     this.setState({ _menu: { title, items, x: Math.max(0, x), y: Math.max(0, y) } });
   }
   closeMenu(e){ if (e && e.preventDefault) e.preventDefault(); this.setState({ _menu: null }); }
+  helpVals(title, lines, keys){
+    const h = !!this.state._help;
+    return { help: { on: h, title, lines, keys, open: () => this.setState({_help: true}), close: (e) => { if (e && e.preventDefault) e.preventDefault(); this.setState({_help: false}); } } };
+  }
+  cliVals(cmd){
+    return { cli: cmd, copyCliLabel: this.state._cliCopied ? 'Copied' : 'Copy', copyCli: () => { this.setState({_cliCopied: true}); setTimeout(() => this.setState({_cliCopied: false}), 1500); } };
+  }
   menuVals(){
     const m = this.state._menu;
     return { noNativeMenu: (e) => { if (e && e.preventDefault) e.preventDefault(); },
@@ -205,7 +240,10 @@ class Component extends CtxLogic {
     if (kept.has('tran')) lines.push('[D5 tran load-EN VDD0P8_A ss/25c on] t[s] V_gt V_model  (decimated 200 pts; extrema kept exactly: dip 0.7482 V @ 2.0031e-6)', '  …');
     if (kept.has('zpsrr_all')) lines.push('[D4 zout/psrr · 9 cells × 2 rails × 4 loads] …');
     lines.push('[D9 trailer] kept ' + kept.size + '/' + sel.length + ' blocks · ' + acc.toFixed(1) + ' KB' + (dropped.length ? ' · DROPPED (budget): ' + dropped.map(d => d.id).join(', ') : ' · nothing dropped') + ' · sha256 ' + Math.round(acc*7919 % 65536).toString(16).padStart(4,'0') + '…');
-    return { ...this.menuVals(), items, budgets, sizeKb: sizeKb.toFixed(1), keptKb: acc.toFixed(1), budgetKb: s.budget,
+    return { ...this.menuVals(),
+      ...this.helpVals('Copy for desk', ['Plain text for the air gap: paste it through the relay to the desk agent. Numbers are lossless; curves are resampled and say so.', 'Over budget, the lowest-priority blocks drop first and are named in the trailer. Never a silent cut.', 'On the desk: pmukit digest import rebuilds a dataset subset; pmukit reproduce refits and diffs every number against what the box reported.'], [{k:'Ctrl C', d:'copy the digest (or the current part)'}, {k:'1 · 2 · 3', d:'budget 32 / 64 / 128 KB'}, {k:'N', d:'next part'}]),
+      ...this.cliVals('pmukit digest demo_pmu --budget ' + s.budget + ' --blocks ' + ITEMS.filter(i => s.on[i.id]).map(i => i.id).join(',') + ' > digest_demo_pmu.txt'),
+      items, budgets, sizeKb: sizeKb.toFixed(1), keptKb: acc.toFixed(1), budgetKb: s.budget,
       barKept: Math.min(100, 100 * acc / Math.max(sizeKb, 0.1)).toFixed(1), barDrop: Math.min(100, 100 * (sizeKb - acc) / Math.max(sizeKb, 0.1)).toFixed(1),
       partsText: parts > 1 ? 'split into ' + parts + ' parts of ≤ 32 KB (relay-sized)' : 'one paste',
       partsBtn: parts > 1 ? 'part 1 of ' + parts : 'digest', preview: lines.join('\n'),

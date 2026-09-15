@@ -1,9 +1,18 @@
 {
   "artboards": [
     {
+      "file": "Home.dc.html",
+      "title": "0 · Home",
+      "x": 0,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "is_interactive": true
+    },
+    {
       "file": "Main.dc.html",
       "title": "1 · New project",
-      "x": 0,
+      "x": 1540,
       "y": 0,
       "w": 1440,
       "h": 900,
@@ -12,7 +21,7 @@
     {
       "file": "Plan.dc.html",
       "title": "2 · Plan",
-      "x": 1540,
+      "x": 3080,
       "y": 0,
       "w": 1440,
       "h": 900,
@@ -21,7 +30,7 @@
     {
       "file": "Run.dc.html",
       "title": "3 · Run",
-      "x": 3080,
+      "x": 4620,
       "y": 0,
       "w": 1440,
       "h": 900,
@@ -53,6 +62,15 @@
       "w": 1440,
       "h": 900,
       "is_interactive": true
+    },
+    {
+      "file": "States.dc.html",
+      "title": "States · empty / loading / error / partial",
+      "x": 4620,
+      "y": 1070,
+      "w": 1440,
+      "h": 900,
+      "is_interactive": false
     }
   ],
   "annotations": [
@@ -60,8 +78,8 @@
       "id": "journey",
       "x": 0,
       "y": 2140,
-      "w": 620,
-      "text": "pmukit — the sub-block designer's journey.\nThe PMU is a black box to them. They bring one netlist built to the naming convention and answer three questions; everything else is derived and shown, never asked.\n\nAll data is synthetic (PMU_DEMO). Each screen is clickable on its own: load the sample netlist, untick a plan group, retry a failed run, click a grade cell, pick a file, change the digest budget. Right-click any row, chip, cell, chart or file: every interactive object has a context menu with all its verbs.\n\n4b is reached from the Copy-for-desk buttons on Model and Run: the air-gap return channel (plain text through the relay, budgeted by priority, dropped blocks named)."
+      "w": 720,
+      "text": "pmukit — the sub-block designer's journey.\nThe PMU is a black box to them. They bring one netlist built to the naming convention and answer three questions; everything else is derived and shown, never asked.\n\nAll data is synthetic (PMU_DEMO). Each screen is clickable on its own: load the sample netlist, untick a plan group, retry a failed run, click a grade cell, pick a file, change the digest budget. Right-click any row, chip, cell, chart or file: every interactive object has a context menu with all its verbs. The ? Help button (top right) opens per-screen help + keys; the strip above the footer echoes the CLI equivalent of the current state, like ADE's CIW echo. Home (0) lists projects and machine status; States is the empty / loading / error / partial reference sheet.\n\n4b is reached from the Copy-for-desk buttons on Model and Run: the air-gap return channel (plain text through the relay, budgeted by priority, dropped blocks named)."
     }
   ],
   "launch": {
