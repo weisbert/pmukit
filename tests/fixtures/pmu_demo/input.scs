@@ -1,0 +1,200 @@
+// ============================================================================
+// pmu_demo -- a SYNTHETIC PMU testbench, in the shape a user would export from
+// ADE.  This is the pmukit intake fixture: it exists so the netlist parser, the
+// corner rewriter, the VSET rewriter and the analysis stripper have a real deck
+// to chew on, and so the simulation backend has something that actually runs.
+//
+// Everything here is invented.  There is no customer content in this file.
+//
+// ---------------------------------------------------------------------------
+// The convention (docs/CONTRACTS.md section 0a, "netlist convention" table)
+// ---------------------------------------------------------------------------
+//   parameters VSET=<n>                 output level code; pmukit rewrites <n>
+//   include "...scs" section=<corner>    pmukit rewrites <corner> per process corner
+//   <inst> (pins...) pmu_demo            the PMU instance, named by `pmu_inst`
+//   IL_<pin>  isource on a rail pin      -> that pin is a VOLTAGE RAIL, dc = typical load
+//   VB_<pin>  vsource on a bias pin      -> that pin is a CURRENT BIAS, dc = compliance V
+//   VS_<pin>  vsource on a supply pin    -> that pin is the SUPPLY,     dc = nominal
+//   VEN_<pin> vsource on the enable pin  -> that pin is ENABLE
+//   grounds                              read from the wiring, NOT from a prefix
+//   analyses / saves                     stripped by pmukit, which writes its own
+//
+// PIN ROLES IN THIS FIXTURE
+//   VDDA_1V0 .... supply                     VS_VDDA_1V0
+//   VDD0P8_A .... rail, peaked Zout          IL_VDD0P8_A   500 uA typical
+//   VDD0P8_B .... rail, ESR-plateau Zout     IL_VDD0P8_B     2 mA typical
+//   VDD0P8_C .... rail, simplest             IL_VDD0P8_C   100 uA typical  (config: stub)
+//   IB_PTAT  .... current bias, PTAT         VB_IB_PTAT    0.4 V compliance
+//   IB_POLY  .... current bias, ~flat        VB_IB_POLY    0.4 V compliance
+//   EN ......... enable                      VEN_EN
+//   TESTMODE ... DELIBERATELY ROLE-LESS: connected inside the PMU, but carries no
+//                convention source, so the parser must report it unclassifiable
+//                rather than guess.
+//   VSS_A / VSS_B / AGND .... the three grounds.  They are SEPARATE NETS inside
+//                the subcircuit (rail A returns to VSS_A, rail B to VSS_B, the
+//                bias cores to AGND) and are tied to global 0 out here through
+//                0 V sources, so nothing floats and each return current is
+//                individually observable.  Their tie sources are named VGND_*,
+//                which is NOT a convention prefix -- grounds are recognised from
+//                the wiring, per the contract table.
+// ============================================================================
+simulator lang=spectre
+global 0
+
+parameters VSET=3
+
+include "pdk/toplevel.scs" section=tt
+include "pdk/rc.scs" section=typ
+
+// ============================================================================
+// PMU_TOP: two regulated rails + a third (stub) rail + two current biases
+// ============================================================================
+subckt pmu_demo (VDDA_1V0 VDD0P8_A VDD0P8_B VDD0P8_C IB_PTAT IB_POLY EN TESTMODE VSS_A VSS_B AGND)
+
+    // ------------------------------------------------------------------
+    // EN buffer (AGND domain).  enb = NOT EN.
+    // ------------------------------------------------------------------
+    mpinv (enb EN VDDA_1V0 VDDA_1V0) plv w=4u  l=0.3u
+    mninv (enb EN AGND     AGND)     nlv w=2u  l=0.3u
+
+    // ------------------------------------------------------------------
+    // PTAT core: self-biased constant-gm (beta-multiplier).
+    //   1:1 PMOS mirror forces I(np1) = I(npg);  NMOS mn2 is 8x wider than the
+    //   diode mn1 and source-degenerated, so  I*Rdeg = dVgs ~ n*(kT/q)*ln(8).
+    //   Rdeg is a LOW-TC resistor, so I rises ~linearly with absolute T = PTAT.
+    //   Rstart leaks ~2 nA so the all-off state is not the solver's answer.
+    //   mptat_off pulls the PMOS gate to VDDA when EN is low -> core dead.
+    // ------------------------------------------------------------------
+    mpp1 (np1 npg VDDA_1V0 VDDA_1V0) plv w=8u  l=2u
+    mpp2 (npg npg VDDA_1V0 VDDA_1V0) plv w=8u  l=2u
+    mpn1 (np1 np1 AGND AGND)         nlv w=10u l=2u
+    mpn2 (npg np1 nps  AGND)         nlv w=80u l=2u
+    Rdeg   (nps AGND)      rsil r=100e3*rsc
+    Rstart (VDDA_1V0 np1)  resistor r=500e6
+    mptat_off (npg EN VDDA_1V0 VDDA_1V0) plv w=2u l=0.3u
+
+    // PTAT output mirror: 14x mpp2, SOURCES current out of the IB_PTAT pin.
+    mptat_out (IB_PTAT npg VDDA_1V0 VDDA_1V0) plv w=112u l=2u
+
+    // ------------------------------------------------------------------
+    // POLY bias: (VDDA - Vgs)/Rpoly, mirrored out.  Rpoly is the POSITIVE-TC
+    //   poly resistor, so its +TC cancels the -TC of Vgs and the output current
+    //   comes out roughly temperature-FLAT (contrast with IB_PTAT above).
+    //   mpen_poly is the series enable switch; mpoly_off kills the output mirror.
+    // ------------------------------------------------------------------
+    mpen_poly (nrt enb VDDA_1V0 VDDA_1V0) plv w=40u l=0.3u
+    Rpoly  (nrt npd) rpoly r=280e3*rsc
+    mpol_d (npd npd AGND AGND) nlv w=4u l=1u
+    mpol_m (npc npd AGND AGND) nlv w=4u l=1u
+    mppd   (npc npc VDDA_1V0 VDDA_1V0) plv w=8u l=1u
+    mpoly_off (npc EN VDDA_1V0 VDDA_1V0) plv w=2u l=0.3u
+    mpoly_out (IB_POLY npc VDDA_1V0 VDDA_1V0) plv w=80u l=1u
+
+    // ------------------------------------------------------------------
+    // Internal reference, 0.5 V, AGND domain, gated by EN through a wide NMOS
+    // pass switch with a pulldown so vrefn is defined when EN is low.
+    // (An ideal vsource: the bandgap itself is out of scope for this fixture.)
+    // ------------------------------------------------------------------
+    VREF_CORE (nrefsrc AGND) vsource dc=0.5
+    mrefsw (nrefsrc EN vrefn AGND) nlv w=40u l=0.3u
+    Rrefpd (vrefn AGND) rsil r=20e6
+
+    // ==================================================================
+    // RAIL A -- VDD0P8_A.  Dominant-pole / PEAKED: a LOW-ESR output cap and a
+    // light gate load, so the loop resonance shows up as a sharp Zout peak and
+    // Zout then rolls off past it -- no ESR plateau.  Returns to VSS_A.
+    //   Vout = 0.5 * (1 + 150k*(VSET+1)/1M)  =  0.575 / 0.650 / 0.725 / 0.800
+    // ==================================================================
+    m1a (na1 fba   ntla VSS_A) nlv w=10u l=0.5u
+    m2a (nga vrefn ntla VSS_A) nlv w=10u l=0.5u
+    m3a (na1 na1 VDDA_1V0 VDDA_1V0) plv w=10u l=0.5u
+    m4a (nga na1 VDDA_1V0 VDDA_1V0) plv w=10u l=0.5u
+    mtla (ntla np1 VSS_A VSS_A) nlv w=30u l=2u
+    mpass_a (VDD0P8_A nga VDDA_1V0 VDDA_1V0) plv w=100u l=0.3u
+    mgoff_a (nga EN VDDA_1V0 VDDA_1V0) plv w=2u l=0.3u
+    mdis_a  (VDD0P8_A enb VSS_A VSS_A) nlv w=4u l=0.5u
+    R1a (VDD0P8_A fba) rsil r=150e3*(VSET+1)*rsc
+    R2a (fba VSS_A)    rsil r=1e6*rsc
+    Couta (VDD0P8_A ncesra) capacitor c=4.7e-9*csc
+    Resra (ncesra VSS_A) resistor r=0.3
+    Cga (nga VSS_A) capacitor c=0.3e-12*csc
+    // feedforward cap across the top divider resistor.  It is rail A's only
+    // damping: the 0.3 ohm ESR puts its zero two decades above the resonance, so
+    // the loop peak stays SHARP and Zout rolls off to the ESR instead of sitting
+    // on a plateau.  Without Cfa the Zout peak is 20x the DC value; with it, 13x.
+    Cfa (VDD0P8_A fba) capacitor c=1e-12*csc
+
+    // ==================================================================
+    // RAIL B -- VDD0P8_B.  ESR-PLATEAU: a big output cap with a real ESR, so
+    // Zout flattens onto the ESR above the loop resonance and the resonance is
+    // damped by the ESR zero.  Bigger pass device (2 mA class).  Returns to VSS_B.
+    //   Vout = 0.5 * (1 + (300k+100k*VSET)/1M) = 0.650 / 0.700 / 0.750 / 0.800
+    // ==================================================================
+    m1b (nb1 fbb   ntlb VSS_B) nlv w=10u l=0.5u
+    m2b (ngb vrefn ntlb VSS_B) nlv w=10u l=0.5u
+    m3b (nb1 nb1 VDDA_1V0 VDDA_1V0) plv w=10u l=0.5u
+    m4b (ngb nb1 VDDA_1V0 VDDA_1V0) plv w=10u l=0.5u
+    mtlb (ntlb np1 VSS_B VSS_B) nlv w=40u l=2u
+    mpass_b (VDD0P8_B ngb VDDA_1V0 VDDA_1V0) plv w=300u l=0.3u
+    mgoff_b (ngb EN VDDA_1V0 VDDA_1V0) plv w=2u l=0.3u
+    mdis_b  (VDD0P8_B enb VSS_B VSS_B) nlv w=8u l=0.5u
+    R1b (VDD0P8_B fbb) rsil r=(300e3+100e3*VSET)*rsc
+    R2b (fbb VSS_B)    rsil r=1e6*rsc
+    Coutb (VDD0P8_B ncesrb) capacitor c=47e-9*csc
+    Resrb (ncesrb VSS_B) resistor r=8.0
+    Cgb (ngb VSS_B) capacitor c=3e-12*csc
+
+    // ==================================================================
+    // RAIL C -- VDD0P8_C.  The simplest of the three; the demo project config
+    // marks it "stub", so pmukit must emit an ideal source for it and never
+    // characterise it.  Returns to VSS_B (it shares rail B's ground domain).
+    //   Vout = 0.5 * (1 + (240k+120k*VSET)/1M) = 0.620 / 0.680 / 0.740 / 0.800
+    // ==================================================================
+    m1c (nc1 fbc   ntlc VSS_B) nlv w=10u l=0.5u
+    m2c (ngc vrefn ntlc VSS_B) nlv w=10u l=0.5u
+    m3c (nc1 nc1 VDDA_1V0 VDDA_1V0) plv w=10u l=0.5u
+    m4c (ngc nc1 VDDA_1V0 VDDA_1V0) plv w=10u l=0.5u
+    mtlc (ntlc np1 VSS_B VSS_B) nlv w=20u l=2u
+    mpass_c (VDD0P8_C ngc VDDA_1V0 VDDA_1V0) plv w=40u l=0.3u
+    mgoff_c (ngc EN VDDA_1V0 VDDA_1V0) plv w=2u l=0.3u
+    mdis_c  (VDD0P8_C enb VSS_B VSS_B) nlv w=4u l=0.5u
+    R1c (VDD0P8_C fbc) rsil r=(240e3+120e3*VSET)*rsc
+    R2c (fbc VSS_B)    rsil r=1e6*rsc
+    Coutc (VDD0P8_C ncesrc) capacitor c=500e-12*csc
+    Resrc (ncesrc VSS_B) resistor r=2.0
+
+    // ------------------------------------------------------------------
+    // TESTMODE: wired to a real gate and a pulldown, so it is CONNECTED and
+    // DC-defined -- but nothing out in the testbench drives it with a
+    // convention source, so pmukit must classify it as "no role" and say so.
+    // ------------------------------------------------------------------
+    Rtm    (TESTMODE AGND) rsil r=10e6
+    mtm    (ntm TESTMODE AGND AGND) nlv w=2u l=0.5u
+    Rtmpu  (VDDA_1V0 ntm) rsil r=5e6
+
+ends pmu_demo
+
+// ============================================================================
+// Testbench
+// ============================================================================
+PMU_TOP (VDDA_1V0 VDD0P8_A VDD0P8_B VDD0P8_C IB_PTAT IB_POLY EN TESTMODE VSS_A VSS_B AGND) pmu_demo
+
+VS_VDDA_1V0 (VDDA_1V0 0) vsource dc=1.0
+IL_VDD0P8_A (VDD0P8_A 0) isource dc=500u
+IL_VDD0P8_B (VDD0P8_B 0) isource dc=2m
+IL_VDD0P8_C (VDD0P8_C 0) isource dc=100u
+VB_IB_PTAT  (IB_PTAT 0)  vsource dc=0.4
+VB_IB_POLY  (IB_POLY 0)  vsource dc=0.4
+VEN_EN      (EN 0)       vsource dc=1.0
+
+// grounds -> global 0 (0 V sources, so the three return currents stay readable)
+VGND_VSS_A (VSS_A 0) vsource dc=0
+VGND_VSS_B (VSS_B 0) vsource dc=0
+VGND_AGND  (AGND  0) vsource dc=0
+
+// ---- analyses and saves: pmukit strips all of this and writes its own -------
+simOpts options temp=27 tnom=27
+dcOp dc write="op.dc"
+acZ  ac start=10 stop=1G dec=10
+save VDD0P8_A VDD0P8_B VDD0P8_C IB_PTAT IB_POLY
+save VB_IB_PTAT:p VB_IB_POLY:p

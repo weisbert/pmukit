@@ -1,0 +1,40 @@
+// ============================================================================
+// pmu_demo synthetic PDK -- MOS process corners.
+//
+//   include "pdk/toplevel.scs" section=tt      <- the line pmukit rewrites
+//
+// Sections: tt (typical) / ss (slow, high-vth, low-mobility, thick oxide)
+//           ff (fast, low-vth, high-mobility, thin oxide).
+//
+// NOTE ON SPECTRE SECTION SEMANTICS (measured on Spectre 18.1.0.077, not guessed):
+// when a file is included with `section=<name>`, ONLY that section's statements
+// are read -- statements written OUTSIDE any section are silently DROPPED.  So
+// the device cards cannot live at file scope; each section sets the corner knobs
+// and then includes the shared card file.  A nested include resolves relative to
+// the directory of the file containing it.
+//
+// The skews are synthetic and deliberately coarse; the point of this fixture is
+// that a corner change MOVES the answer, not that it models a real process.
+// ============================================================================
+simulator lang=spectre
+
+section tt
+parameters vthn=0.30 vthp=-0.30
+parameters u0n=388.32 u0p=138.76
+parameters toxv=3.5e-9
+include "models_bsim3.scs"
+endsection tt
+
+section ss
+parameters vthn=0.36 vthp=-0.36
+parameters u0n=341.72 u0p=122.11
+parameters toxv=3.7e-9
+include "models_bsim3.scs"
+endsection ss
+
+section ff
+parameters vthn=0.24 vthp=-0.24
+parameters u0n=434.92 u0p=155.41
+parameters toxv=3.3e-9
+include "models_bsim3.scs"
+endsection ff

@@ -1,0 +1,42 @@
+// ============================================================================
+// pmu_demo synthetic PDK -- PASSIVE (resistor / capacitor) corners.
+//
+//   include "pdk/rc.scs" section=typ           <- the line pmukit rewrites
+//
+// A SECOND cornered include file, on purpose: it is what makes a composite
+// corner such as
+//     {"MOSff_RCss": {"toplevel.scs": "ff", "rc.scs": "ss"}}
+// a real target rather than a paper feature -- the two files skew independently.
+//
+// What each section carries:
+//   rsc   sheet-resistance multiplier  (ss = high R, ff = low R)
+//   csc   capacitance multiplier       (ss = high C, ff = low C)
+//   model rpoly   poly resistor, POSITIVE tempco -- used by the IB_POLY bias,
+//                 where the +TC of the resistor cancels the -TC of a MOS Vgs
+//                 and makes the output current roughly temperature-flat.
+//   model rsil    silicided/low-TC resistor -- used by the PTAT degeneration
+//                 and by the feedback dividers, where a tempco would corrupt
+//                 the PTAT slope / the regulated voltage.
+//
+// Section names are typ/ss/ff (NOT tt) so that a test or a human can tell the
+// two cornered files apart at a glance.
+// ============================================================================
+simulator lang=spectre
+
+section typ
+parameters rsc=1.00 csc=1.00
+model rpoly resistor tc1=1.30e-3 tc2=0.0
+model rsil  resistor tc1=0.10e-3 tc2=0.0
+endsection typ
+
+section ss
+parameters rsc=1.15 csc=1.12
+model rpoly resistor tc1=1.50e-3 tc2=0.0
+model rsil  resistor tc1=0.14e-3 tc2=0.0
+endsection ss
+
+section ff
+parameters rsc=0.85 csc=0.88
+model rpoly resistor tc1=1.10e-3 tc2=0.0
+model rsil  resistor tc1=0.06e-3 tc2=0.0
+endsection ff
