@@ -1,0 +1,59 @@
+* ============================================================
+* GT variant V8 -- DOUBLE-LC / PI OUTPUT NETWORK (2 resonances + a NOTCH)
+*   Stresses: the single-resonance / parallel-RLC Zout assumption. The output is
+*             a PI network: an ON-DIE cap (Cd) at the regulated node vreg, a series
+*             package/interconnect inductance Lint, and a BOARD cap (Cb=Cout) at the
+*             external pin vout. The loop SENSES vreg (on-die), but the load and the
+*             Zout/PSRR measurement are at the vout PIN -- so the pin sees a passive
+*             two-cap-with-interconnect-L network on top of the regulated node.
+*   Zout(vout) then shows:
+*     - the loop resonance at LF (as usual),
+*     - a SERIES-resonance NOTCH where Lint resonates with the near cap Cd
+*       (Zbranch -> ~esrd, a deep dip), and
+*     - an ANTI-resonance PEAK where Lint resonates with the board cap Cb.
+*   A NOTCH (a deep magnitude dip) is something the model's parallel R||L||C-branch
+*   topology CANNOT produce -> the generalization finding. The auto-extracted Cout
+*   will also disagree with the true board cap (two caps + L) -- part of the finding.
+*   Same PMOS-pass / 5T-OTA core as base; only the output network + sense node change.
+*   ports: vin vout  (global 0 = gnd).  Vout ~ 0.9 V.
+* ============================================================
+.subckt ldo_v8_dlc vin vout vref=0.6 wp=30u lp=0.3u wi=10u li=0.5u
++ wm=10u lm=0.5u wt=20u lt=0.5u wb=20u lb=0.5u ib=10u
++ r1=500k r2=1meg cout=4.7n resr=0.5 cg=1p
++ cd=1n esrd=0.05 lint=2n
+
+* pass device (PMOS) drives the ON-DIE regulated node vreg
+mp vreg ng vin vin plv W={wp} L={lp}
+
+* 5T OTA (NMOS input pair, PMOS mirror load)
+m1 n1 fb    vtail 0   nlv W={wi} L={li}
+m2 ng vrefn vtail 0   nlv W={wi} L={li}
+m3 n1 n1    vin   vin  plv W={wm} L={lm}
+m4 ng n1    vin   vin  plv W={wm} L={lm}
+mtail vtail nb 0 0     nlv W={wt} L={lt}
+
+* tail current mirror bias
+mb   nb nb 0 0         nlv W={wb} L={lb}
+Ibias vin nb DC {ib}
+
+* internal reference
+Vrefs vrefn 0 DC {vref}
+
+* feedback divider SENSES the on-die node vreg
+R1 vreg fb {r1}
+R2 fb 0 {r2}
+
+* on-die cap at vreg (near cap; low ESR -> deep notch)
+Cd vreg ncd {cd}
+Resrd ncd 0 {esrd}
+
+* package / interconnect inductance from the on-die node to the output pin
+Lint vreg vout {lint}
+
+* board cap at the output PIN (the bulk decap)
+Cout vout ncesr {cout}
+Resr ncesr 0 {resr}
+
+* gate-node cap
+Cgate ng 0 {cg}
+.ends ldo_v8_dlc

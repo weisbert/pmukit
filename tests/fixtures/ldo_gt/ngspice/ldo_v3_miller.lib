@@ -1,0 +1,43 @@
+* ============================================================
+* GT variant V3 -- TWO-STAGE MILLER-COMPENSATED LDO
+*   Stresses: the single-resonance / 2-branch-RLC Zout assumption. A second
+*             gain stage + Miller pole-split adds poles -> the Zout may show a
+*             second peak or a different roll-off slope than (R+sL)||(ESR+1/sC).
+*   Stage 1 = 5T OTA (output no1). Stage 2 = CS-NMOS gain stage w/ PMOS current
+*   load, drives pass gate ng. Miller cap Cmil from ng to no1.
+* ============================================================
+.subckt ldo_v3_miller vin vout vref=0.6 wp=30u lp=0.3u wi=10u li=0.5u
++ wm=10u lm=0.5u wt=20u lt=0.5u wb=20u lb=0.5u ib=10u
++ w2=20u l2=0.5u wl2=10u ll2=0.5u cm=15p rz=300k
++ r1=500k r2=1meg cout=1n resr=0.5 cg=0.3p
+
+* pass PMOS
+mp vout ng vin vin plv W={wp} L={lp}
+
+* --- stage 1: 5T OTA, output no1.  m1 diode side gate=vrefn ; m2 out side gate=fb
+*     (fb up -> no1 down -> ng up -> pass off -> vout down : negative feedback) ---
+m1 n1  vrefn vtail 0 nlv W={wi} L={li}
+m2 no1 fb    vtail 0 nlv W={wi} L={li}
+m3 n1  n1    vin vin plv W={wm} L={lm}
+m4 no1 n1    vin vin plv W={wm} L={lm}
+mtail vtail nb 0 0 nlv W={wt} L={lt}
+mb   nb nb 0 0     nlv W={wb} L={lb}
+Ibias vin nb DC {ib}
+Vrefs vrefn 0 DC {vref}
+
+* --- stage 2: common-source NMOS gain stage, PMOS current-source load -> ng ---
+m2g ng  no1   0   0   nlv W={w2} L={l2}
+m2l ng  pbias vin vin plv W={wl2} L={ll2}
+mpb pbias pbias vin vin plv W={wl2} L={ll2}
+Ipb pbias 0 DC {ib}
+
+* Miller compensation (pole split) ng -> no1, with nulling resistor
+Rz ng nz {rz}
+Cmil nz no1 {cm}
+
+R1 vout fb {r1}
+R2 fb 0 {r2}
+Cout vout ncesr {cout}
+Resr ncesr 0 {resr}
+Cgate ng 0 {cg}
+.ends ldo_v3_miller

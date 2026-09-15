@@ -1,0 +1,38 @@
+.subckt ldo_qbow vin vout vref=0.6 wp=30u lp=0.3u wi=10u li=0.5u
++ wm=10u lm=0.5u wt=20u lt=0.5u wb=20u lb=0.5u ib=10u
++ r1=500k r2=1meg cout=1n resr=0.5 cg=1p
++ cd=40n rd=60 ld=0.5u cp=16n rld=50000
+mp vout ng vin vin plv W={wp} L={lp}
+m1 n1 fb    vtail 0   nlv W={wi} L={li}
+m2 ng vrefn vtail 0   nlv W={wi} L={li}
+m3 n1 n1    vin   vin  plv W={wm} L={lm}
+m4 ng n1    vin   vin  plv W={wm} L={lm}
+mtail vtail nb 0 0     nlv W={wt} L={lt}
+mb   nb nb 0 0         nlv W={wb} L={lb}
+Ibias vin nb DC {ib}
+Vrefs vrefn 0 DC {vref}
+R1 vout fb {r1}
+R2 fb 0 {r2}
+Cout vout ncesr {cout}
+Resr ncesr 0 {resr}
+Cgate ng 0 {cg}
+* ---------------------------------------------------------------- mid-bow on Zout
+* This LDO produces a NON-MONOTONIC Zout resonance vs load: Q = 1.5 / 16.5 / 11.1
+* at 20u / 121u / 250u -- a clear MID-peak (the base LDO is monotone-rising Q
+* 4.5/16.6/18.7). The output LC resonance moves up with load (~0.94/1.78/2.1 MHz);
+* a band-stop (notch) damping snubber tuned to the 121u resonance bends the LIGHT
+* corner down so the mid corner stands out:
+*  - DC-blocked by Csnub (no load-reg hit), Rd dissipates into a parallel L||C
+*    tank whose Q/width is set by Rld. The tank is HIGH-Z only at its resonance
+*    f0 = 1/(2pi sqrt(ld*cp)) ~ 1.78 MHz, so the branch is nearly OPEN (weak
+*    damping) right at the 121u peak -- left SHARP -- but LOW-Z (strong broadband
+*    damping) below it, crushing the light-load 20u resonance to ~Q1.5.
+*  - ld SMALL / cp LARGE keeps the tank-L vs Cout parasitic resonance out of band.
+* Result: peak |Z| ~ 126 / 384 / 204 ohm -> Zpk(121)/Zpk(20) ~ 3.0 (sharp mid-bow
+* on the light side). See build notes for the 250u-side limit.
+Csnub vout nsnub {cd}
+Rsnub nsnub ntank {rd}
+Ltank ntank 0 {ld}
+Cptank ntank 0 {cp}
+Rltank ntank 0 {rld}
+.ends ldo_qbow

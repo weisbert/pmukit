@@ -1,0 +1,78 @@
+* ============================================================
+* GT variant -- ldo_swbleed : LOAD-THRESHOLD MODE SWITCH (A3)
+*   A current-threshold-activated shunt damper. The pass-device current
+*   equals the external load current; a small sense-PMOS replica (msen,
+*   Vgs-offset off the pass gate ng) reproduces a load-tracking current,
+*   compared at a high-impedance node `sdet` against a fixed Iref
+*   (current-comparator -> SHARP threshold near ~170uA). Past the threshold
+*   the shunt damper NMOS `mbleed` (W~40u) turns ON and switches in a
+*   series Cblk-Rbl-Lbl branch from vout to gnd. That branch resonates at
+*   f0=1/(2*pi*sqrt(Lbl*Cblk))~150kHz -> a SECOND, distinct Zout RLC NOTCH
+*   that exists ONLY at high load (250u), ABSENT at 20u/121u (the model's
+*   Zout fitter would select a 2nd RLC branch ONLY at the 250u corner).
+*   The DC-blocking cap Cblk makes the damper draw ZERO DC current, so Vout
+*   regulation is strictly untouched (Vout ~0.9V all corners) and the
+*   circuit is small-signal STABLE at every fixed OP (ring-decay<1). Linear
+*   at each OP; only the *structure* jumps between the 121u and 250u OPs.
+* Requires models nlv / plv at top level.
+* ============================================================
+.subckt ldo_swbleed vin vout vref=0.6 wp=30u lp=0.3u wi=10u li=0.5u
++ wm=10u lm=0.5u wt=20u lt=0.5u wb=20u lb=0.5u ib=10u
++ r1=500k r2=1meg cout=1n resr=0.5 cg=1p
++ wsen=4u voff=0.18 wref=4u lref=0.5u rref=560k wbl=40u lbl=0.3u rbl=2 lbl_h=56u cblk=20n
+
+* ---- pass device (PMOS): source=vin gate=ng drain=vout bulk=vin ----
+mp vout ng vin vin plv W={wp} L={lp}
+
+* ---- 5T OTA (NMOS input pair, PMOS mirror load); neg fb ----
+m1 n1 fb    vtail 0   nlv W={wi} L={li}
+m2 ng vrefn vtail 0   nlv W={wi} L={li}
+m3 n1 n1    vin   vin  plv W={wm} L={lm}
+m4 ng n1    vin   vin  plv W={wm} L={lm}
+mtail vtail nb 0 0     nlv W={wt} L={lt}
+mb   nb nb 0 0         nlv W={wb} L={lb}
+Ibias vin nb DC {ib}
+Vrefs vrefn 0 DC {vref}
+
+* ---- feedback divider ----
+R1 vout fb {r1}
+R2 fb 0 {r2}
+
+* ---- on-chip output cap + ESR ----
+Cout vout ncesr {cout}
+Resr ncesr 0 {resr}
+Cgate ng 0 {cg}
+
+* ---- LOAD-CURRENT SENSE w/ Vgs-OFFSET + CURRENT-COMPARATOR THRESHOLD ----
+*   The pass-device source-gate voltage Vsg=vin-ng tracks the load current
+*   monotonically (more load -> ng lower -> bigger |Vsg|). A replica sense
+*   PMOS `msen` shares the gate `ng` but its SOURCE sits a fixed offset
+*   `voff` below vin (rail `vsrc`), so its current Isen(ng) rises steeply
+*   (sub-threshold exponential) with load.  Isen is compared, at the
+*   high-impedance node `sdet`, against a fixed reference sink current
+*   Iref (Rref-set, mirrored mrefd->mref). Below the cross-over load the
+*   reference wins -> sdet pulled to gnd (mbleed OFF); above it the sense
+*   current wins -> sdet swings up to vsrc (mbleed ON). Both ends are
+*   current sources => HIGH GAIN at the cross-over => a SHARP load
+*   threshold near ~170uA. All branches draw only ~1uA -> DC-negligible.
+Voff vin vsrc DC {voff}
+msen sdet ng vsrc vsrc plv W={wsen} L={lp}
+* reference current ~1uA (Rref from vin into a diode NMOS), mirrored to sink at sdet
+Rref  vin nrefd {rref}
+mrefd nrefd nrefd 0 0 nlv W={wref} L={lref}
+mref  sdet  nrefd 0 0 nlv W={wref} L={lref}
+
+* ---- THRESHOLD-ACTIVATED SHUNT DAMPER from vout to gnd ----
+*   gate driven by detector node sdet; mbleed sub-Vth (off) at low load,
+*   conducts above threshold.  Series Cblk-Rbl-Lbl through mbleed: the
+*   DC-blocking cap (cblk) makes the branch draw ZERO DC current (Vout
+*   regulation strictly untouched), while its series R-L-C resonance with
+*   nothing-but-itself presents a low-impedance NOTCH on vout at
+*   f0=1/(2*pi*sqrt(lbl_h*cblk)) ~ 0.5MHz -- a SECOND, distinct Zout RLC
+*   feature that appears ONLY when mbleed conducts (high load).  Below
+*   threshold mbleed is open -> branch invisible (single resonance only).
+Cblk  vout ncb {cblk}
+Rbl   ncb  nrl {rbl}
+Lbl   nrl  nbl {lbl_h}
+mbleed nbl sdet 0 0   nlv W={wbl} L={lbl}
+.ends ldo_swbleed

@@ -31,12 +31,12 @@
 //                convention source, so the parser must report it unclassifiable
 //                rather than guess.
 //   VSS_A / VSS_B / AGND .... the three grounds.  They are SEPARATE NETS inside
-//                the subcircuit (rail A returns to VSS_A, rail B to VSS_B, the
-//                bias cores to AGND) and are tied to global 0 out here through
-//                0 V sources, so nothing floats and each return current is
-//                individually observable.  Their tie sources are named VGND_*,
-//                which is NOT a convention prefix -- grounds are recognised from
-//                the wiring, per the contract table.
+//                the subcircuit -- rail A returns to VSS_A, rail B and rail C to
+//                VSS_B, the bias cores and the reference to AGND -- and all three
+//                pins are wired straight to global 0 in the testbench.  That is
+//                how a ground is recognised (from the WIRING, not from a source
+//                prefix), and it is what lets the tool walk the subcircuit body
+//                and work out which ground each rail actually returns to.
 // ============================================================================
 simulator lang=spectre
 global 0
@@ -177,7 +177,8 @@ ends pmu_demo
 // ============================================================================
 // Testbench
 // ============================================================================
-PMU_TOP (VDDA_1V0 VDD0P8_A VDD0P8_B VDD0P8_C IB_PTAT IB_POLY EN TESTMODE VSS_A VSS_B AGND) pmu_demo
+// pins 9/10/11 are VSS_A / VSS_B / AGND -- wired to global 0 here, separate inside
+PMU_TOP (VDDA_1V0 VDD0P8_A VDD0P8_B VDD0P8_C IB_PTAT IB_POLY EN TESTMODE 0 0 0) pmu_demo
 
 VS_VDDA_1V0 (VDDA_1V0 0) vsource dc=1.0
 IL_VDD0P8_A (VDD0P8_A 0) isource dc=500u
@@ -186,11 +187,6 @@ IL_VDD0P8_C (VDD0P8_C 0) isource dc=100u
 VB_IB_PTAT  (IB_PTAT 0)  vsource dc=0.4
 VB_IB_POLY  (IB_POLY 0)  vsource dc=0.4
 VEN_EN      (EN 0)       vsource dc=1.0
-
-// grounds -> global 0 (0 V sources, so the three return currents stay readable)
-VGND_VSS_A (VSS_A 0) vsource dc=0
-VGND_VSS_B (VSS_B 0) vsource dc=0
-VGND_AGND  (AGND  0) vsource dc=0
 
 // ---- analyses and saves: pmukit strips all of this and writes its own -------
 simOpts options temp=27 tnom=27

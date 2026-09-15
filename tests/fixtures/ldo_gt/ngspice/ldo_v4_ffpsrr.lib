@@ -1,0 +1,45 @@
+* ============================================================
+* GT variant V4 -- FEEDFORWARD / NON-MINIMUM-PHASE PSRR LDO
+*   Stresses: the PSRR = shelf x Zout assumption (shared poles, minimum-phase).
+*             A supply feedforward injects a SECOND vin->vout path that partially
+*             CANCELS the pass-device path, creating a PSRR notch + an RHP-zero ->
+*             strongly non-minimum-phase PSRR (phase races ~390deg, NMPdeg ~55-72).
+*   Mechanism: Cffb+Rffb couple vin ripple onto the feedback node 'fb'. The loop
+*             then drives vout to partially track vin; this loop-borne supply path
+*             competes with the direct pass-device supply path. Near ~1 MHz the two
+*             paths reinforce (deep dip, |vout/vin|>1); above it they cancel and
+*             rejection recovers steeply (the notch / RHP zero). The feedforward is
+*             on the LOW-impedance fb node, NOT the high-Z gate, so it does not add
+*             to the OTA-output pole -> the loop stays well damped. resr provides the
+*             Cout-resonance damping zero that keeps Q in check.
+*   Same PMOS-pass / 5T-OTA core as base + the supply feedforward network.
+* ============================================================
+.subckt ldo_v4_ffpsrr vin vout vref=0.6 wp=30u lp=0.3u wi=10u li=0.5u
++ wm=10u lm=0.5u wt=20u lt=0.5u wb=20u lb=0.5u ib=10u
++ r1=500k r2=1meg cout=1n resr=5 cg=1p cff=0p cffb=3p rffb=200k
+
+mp vout ng vin vin plv W={wp} L={lp}
+
+m1 n1 fb    vtail 0 nlv W={wi} L={li}
+m2 ng vrefn vtail 0 nlv W={wi} L={li}
+m3 n1 n1    vin vin plv W={wm} L={lm}
+m4 ng n1    vin vin plv W={wm} L={lm}
+mtail vtail nb 0 0 nlv W={wt} L={lt}
+mb   nb nb 0 0     nlv W={wb} L={lb}
+Ibias vin nb DC {ib}
+Vrefs vrefn 0 DC {vref}
+
+R1 vout fb {r1}
+R2 fb 0 {r2}
+Cout vout ncesr {cout}
+Resr ncesr 0 {resr}
+Cgate ng 0 {cg}
+
+* optional residual gate feedforward (default off -- fb feedforward carries the notch)
+Cff vin ng {cff}
+
+* supply feedforward onto the feedback node: a second vin->vout path (via the loop)
+* that partially cancels the pass-device path -> PSRR notch + RHP zero (non-min-phase)
+Cffb vin nffb {cffb}
+Rffb nffb fb {rffb}
+.ends ldo_v4_ffpsrr

@@ -1,0 +1,58 @@
+* ============================================================
+* Adversarial overfit-probe GT: ldo_classab  (HANDOFF A4)
+*   ports: vin vout   (global 0 = gnd)
+*   Class-AB PUSH-PULL output stage replacing the single PMOS pass:
+*     - PMOS source device  mp : source=vin gate=ng  drain=vout  (sources current)
+*     - NMOS sink   device  mn : drain=vout gate=ngn source=gnd   (sinks current)
+*   Both conduct at the OP (well-defined gm => small-signal Zout/PSRR/noise
+*   are LTI and base-like). On a LARGE sourcing demand the NMOS sink cuts off
+*   and the PMOS slams into high-gm sourcing => effective output gm varies
+*   strongly over the swing => ASYMMETRIC large-signal droop-vs-recovery that
+*   the symmetric linear model cannot reproduce. NO dropout clamp; Vout~0.9V,
+*   >=50mV headroom at all times.
+*
+*   Level shift ng -> ngn: NMOS source-follower mlsh (drain=vin gate=ng
+*   source=ngn) loaded by a current source Ilsh so ngn = ng - Vgs(mlsh),
+*   sized so the NMOS sink carries a small quiescent current at the OP.
+* Requires models nlv / plv at top level.
+* ============================================================
+.subckt ldo_classab vin vout vref=0.6 wp=200u lp=0.3u wn=30u lnn=0.3u
++ wi=10u li=0.5u wm=10u lm=0.5u wt=20u lt=0.5u wb=20u lb=0.5u ib=10u
++ wls=10u lls=0.5u ils=200u
++ r1=500k r2=1meg cout=2n resr=15 cg=1p
+
+* --- push-pull output ---
+* PMOS source (sources current into vout); gate = OTA out ng
+mp vout ng  vin vin plv W={wp} L={lp}
+* NMOS sink  (sinks current from vout to gnd); gate = level-shifted ngn
+mn vout ngn 0   0   nlv W={wn} L={lnn}
+
+* --- level shift ng -> ngn (source follower + current-source load) ---
+mlsh vin ng ngn 0 nlv W={wls} L={lls}
+Ilsh ngn 0 DC {ils}
+
+* --- 5T OTA (NMOS input pair, PMOS mirror load); neg fb: fb->diode, vref->out ---
+m1 n1 fb    vtail 0   nlv W={wi} L={li}
+m2 ng vrefn vtail 0   nlv W={wi} L={li}
+m3 n1 n1    vin   vin  plv W={wm} L={lm}
+m4 ng n1    vin   vin  plv W={wm} L={lm}
+mtail vtail nb 0 0     nlv W={wt} L={lt}
+
+* tail current mirror bias
+mb   nb nb 0 0         nlv W={wb} L={lb}
+Ibias vin nb DC {ib}
+
+* internal reference
+Vrefs vrefn 0 DC {vref}
+
+* feedback divider  Vout = vref*(r1+r2)/r2 = 0.6*1.5M/1M = 0.9 V
+R1 vout fb {r1}
+R2 fb 0 {r2}
+
+* on-chip output cap + ESR
+Cout vout ncesr {cout}
+Resr ncesr 0 {resr}
+
+* gate-node cap (OTA-output pole)
+Cgate ng 0 {cg}
+.ends ldo_classab
