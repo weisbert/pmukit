@@ -422,7 +422,7 @@ RUN_BODY = f"""
     </div>
   </div>
 </div>
-<div class="foot"><span class="hint">Runs write to <span class="mono">~/pmukit_data/demo_pmu/runs.sqlite</span> · closing this page does not stop the queue</span><button class="btn pri" disabled="{{{{ notDone }}}}">Fit model {ICONS['arrow']}</button></div>
+<div class="foot"><span class="hint">Runs write to <span class="mono">~/pmukit_data/demo_pmu/runs.sqlite</span> · closing this page does not stop the queue</span><div style="display:flex;gap:8px"><button class="btn">{ICONS['copy']} Copy failure bundle for desk</button><button class="btn pri" disabled="{{{{ notDone }}}}">Fit model {ICONS['arrow']}</button></div></div>
 """
 
 RUN_SCRIPT = "const ROWS = " + json.dumps([dict(id=a, cell=b, an=c, status=d, el=e, cpu=f) for a, b, c, d, e, f in RUN_ROWS]) + """;
@@ -538,7 +538,7 @@ MODEL_BODY = f"""
     </div>
   </div>
 </div>
-<div class="foot"><span class="hint">Fit from dataset <span class="mono">a91f…c3</span> · 280 of 282 runs consumed (2 failed, marked not run) · 10 reused from the ledger</span><div style="display:flex;gap:8px"><button class="btn">Open report.md</button><button class="btn pri">Deliver {ICONS['arrow']}</button></div></div>
+<div class="foot"><span class="hint">Fit from dataset <span class="mono">a91f…c3</span> · 280 of 282 runs consumed (2 failed, marked not run) · 10 reused from the ledger</span><div style="display:flex;gap:8px"><button class="btn">{ICONS['copy']} Copy for desk</button><button class="btn">Open report.md</button><button class="btn pri">Deliver {ICONS['arrow']}</button></div></div>
 """
 
 MODEL_SCRIPT = """
@@ -727,12 +727,115 @@ class Component extends DCLogic {
 """
 
 
+# ------------------------------------------------------------------ 6 Digest (copy for desk)
+DIGEST_ITEMS = [
+    dict(id="prov", name="Provenance + config", kb=1.1, pri=0, fixed=True, desc="config sha, dataset sha, TB state, pmukit version"),
+    dict(id="ledger", name="Ledger summary", kb=2.8, pri=0, fixed=True, desc="282 runs: status, cell, analysis, cpu · one line each"),
+    dict(id="params", name="Fitted parameters · all cells", kb=6.4, pri=1, fixed=False, desc="lossless JSON: every block, every cell · the desk can re-emit the .va from this alone"),
+    dict(id="grades", name="Grades + trust summary", kb=0.9, pri=1, fixed=False, desc="the Model screen, as text"),
+    dict(id="faillog", name="Failed-run logs + netlist diff", kb=4.6, pri=2, fixed=False, desc="2 failed runs · last 40 log lines · only the lines pmukit changed in input.scs"),
+    dict(id="idc", name="Curves · bias idc(T), I-V", kb=3.2, pri=3, fixed=False, desc="GT + model at the same points · 2 biases × 3 corners"),
+    dict(id="inoise", name="Curves · bias current noise", kb=4.1, pri=4, fixed=False, desc="log-resampled 12 pts/dec · GT + model"),
+    dict(id="zpsrr", name="Curves · Zout + PSRR, selected cell", kb=5.6, pri=5, fixed=False, desc="ss / 25 °C · 2 rails · GT + model at the same freqs"),
+    dict(id="vnoise", name="Curves · rail noise, selected cell", kb=3.8, pri=6, fixed=False, desc="GT + model"),
+    dict(id="tran", name="Transients · load-EN, selected cell", kb=7.2, pri=7, fixed=False, desc="decimated but keeps dip / overshoot / settle points exactly"),
+    dict(id="zpsrr_all", name="Curves · Zout + PSRR, all 9 cells", kb=50.4, pri=8, fixed=False, desc="everything the fit saw · big"),
+]
+
+DIGEST_BODY = f"""
+<div class="main">
+  <div class="col" style="flex:0 0 640px">
+    <div class="panel" style="flex:none">
+      <div class="pb" style="padding:12px 14px;display:flex;flex-direction:column;gap:6px">
+        <div style="font-weight:600;font-size:14px">Copy for desk</div>
+        <div class="hint">The box has no agent and no network. This packs what a desk debugger needs into <b>plain text you paste through the relay</b>. Numbers are lossless; curves are resampled and say so. Nothing crosses git.</div>
+      </div>
+    </div>
+    <div class="panel" style="flex:1">
+      <div class="ph"><span>What goes across</span><div style="display:flex;gap:6px;align-items:center"><span class="hint">budget</span><sc-for list="{{{{ budgets }}}}" as="b" hint-placeholder-count="3"><span class="chip {{{{ b.cls }}}}" onClick="{{{{ b.pick }}}}">{{{{ b.name }}}}</span></sc-for></div></div>
+      <div class="pb" style="padding:0">
+        <table class="t">
+          <thead><tr><th style="width:28px"></th><th>Block</th><th class="num" style="text-align:right">KB</th><th>Fate</th></tr></thead>
+          <tbody>
+            <sc-for list="{{{{ items }}}}" as="i" hint-placeholder-count="11">
+              <tr><td><input type="checkbox" checked="{{{{ i.on }}}}" disabled="{{{{ i.fixed }}}}" onChange="{{{{ i.toggle }}}}"></td><td style="{{{{ i.style }}}}"><div>{{{{ i.name }}}}</div><div class="hint">{{{{ i.desc }}}}</div></td><td class="num">{{{{ i.kb }}}}</td><td><span class="badge {{{{ i.fcls }}}}">{{{{ i.fate }}}}</span></td></tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+      <div style="padding:10px 14px;border-top:1px solid #ebe8e1;display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;justify-content:space-between;font-size:12px"><span><b class="mono">{{{{ sizeKb }}}} KB</b> selected · <b class="mono">{{{{ keptKb }}}} KB</b> fits in {{{{ budgetKb }}}} KB</span><span class="hint">{{{{ partsText }}}}</span></div>
+        <div class="bar"><div class="seg" style="background:#1f6f9f;width:{{{{ barKept }}}}%"></div><div class="seg" style="background:#b7791f;width:{{{{ barDrop }}}}%"></div></div>
+        <div class="hint">Over budget, the lowest-priority blocks drop first and are <b>named in the trailer</b>. Never a silent cut. Priority: provenance › ledger › params › failed logs › bias curves › rail curves › transients.</div>
+      </div>
+    </div>
+  </div>
+  <div class="col" style="flex:1">
+    <div class="panel" style="flex:1">
+      <div class="ph"><span>Preview</span><div style="display:flex;gap:8px"><button class="btn sm" onClick="{{{{ copy }}}}">{ICONS['copy']} {{{{ copyLabel }}}}</button><button class="btn sm">Save to ~/pmukit_data/…/digest/</button></div></div>
+      <div class="pb"><div class="code" style="height:100%;box-sizing:border-box;font-size:11.5px">{{{{ preview }}}}</div></div>
+    </div>
+    <div class="panel" style="flex:none">
+      <div class="ph"><span>On the desk</span><span class="sub">the other half of this feature</span></div>
+      <div class="pb"><div class="code" style="white-space:pre-wrap">pmukit digest import digest_demo_pmu_2026-09-15.txt   # rebuilds a dataset subset (contract 2) + params; missing blocks are listed, not guessed
+pmukit reproduce demo_pmu --from-digest             # refits on the desk and diffs every number against what the box reported
+pmukit report demo_pmu --cell ss/25c                # same report text as the box, so both sides talk about the same numbers</div></div>
+    </div>
+  </div>
+</div>
+<div class="foot"><span class="hint">Digests live under <span class="mono">~/pmukit_data/demo_pmu/digest/</span> on both machines · never in git</span><button class="btn pri" onClick="{{{{ copy }}}}">{ICONS['copy']} Copy {{{{ partsBtn }}}}</button></div>
+"""
+
+DIGEST_SCRIPT = "const ITEMS = " + json.dumps(DIGEST_ITEMS, ensure_ascii=False) + """;
+class Component extends DCLogic {
+  constructor(p){ super(p); const on = {}; ITEMS.forEach(i => on[i.id] = i.id !== 'zpsrr_all'); this.state = { on, budget: 64, copied: false }; }
+  renderVals(){
+    const s = this.state;
+    const sel = ITEMS.filter(i => s.on[i.id]).slice().sort((a,b) => a.pri - b.pri);
+    let acc = 0; const kept = new Set();
+    sel.forEach(i => { if (acc + i.kb <= s.budget) { acc += i.kb; kept.add(i.id); } });
+    const sizeKb = sel.reduce((a,i) => a + i.kb, 0);
+    const dropped = sel.filter(i => !kept.has(i.id));
+    const items = ITEMS.map(i => { const on = !!s.on[i.id]; const fate = !on ? 'off' : kept.has(i.id) ? 'kept' : 'dropped'; return { ...i, on, kb: i.kb.toFixed(1),
+      fate, fcls: fate === 'kept' ? 'b-ok' : fate === 'dropped' ? 'b-warn' : 'b-mute', style: on ? '' : 'color:#8a867d',
+      toggle: () => { if (i.fixed) return; const o = Object.assign({}, s.on); o[i.id] = !o[i.id]; this.setState({on:o}); } }; });
+    const budgets = [32, 64, 128].map(b => ({ name: b + ' KB', cls: s.budget === b ? 'on' : '', pick: () => this.setState({budget:b}) }));
+    const parts = Math.max(1, Math.ceil(acc / 32));
+    const lines = [
+      '[pmukit-digest v1] project=demo_pmu created=2026-09-15T14:31 budget=' + s.budget + 'KB parts=' + parts,
+      '[D0 provenance] config=5d8c…a1 dataset=a91f…c3 pmukit=0.1.0 tb_state="RX mode, reg 0x12=0x03"',
+      '[D1 ledger] 282 runs: done 270 · failed 2 · cached 10 · cpu-h 163.2',
+      '  e4d27a5c1f90 ss/125c/v3 tran·load-EN B·off FAILED 12m40s  "timestep too small near IL_VDD0P8_B edge"',
+      '  f0a7c4d2b8e1 ss/125c/v3 tran·load-EN B·on  FAILED 12m38s  (same)',
+      '  … 280 more lines',
+    ];
+    if (kept.has('params')) lines.push('[D2 params] {"VDD0P8_A":{"tt":{"25":{"zout":{"Ra":0.021,"La":1.2e-7,"Rpl":48.3,…},"psrr":{…},"noise":{…}}}},…}  (lossless)');
+    if (kept.has('grades')) lines.push('[D3 grades] VDD0P8_A: tt OK OK OK · ss OK OK MARG · ff OK OK OK | VDD0P8_B: … | IB_PTAT: … | IB_CONST: …');
+    if (kept.has('faillog')) lines.push('[D6 faillog e4d27a5c1f90] netlist diff: +IL_VDD0P8_B … pwl(0 2m 2u 2m 2.002u 20u)  +tran tstop=10u step=2n', '  log tail (40 lines) …');
+    if (kept.has('idc')) lines.push('[D4 idc IB_PTAT] T[C] I_gt[A] I_model[A]  (3 corners × 34 pts)', '  -40  1.212e-6  1.209e-6', '  -35  1.231e-6  1.229e-6', '  …');
+    if (kept.has('inoise')) lines.push('[D4 inoise IB_PTAT tt/25c] f[Hz] Si_gt[A2/Hz] Si_model[A2/Hz]  (12 pts/dec, 10 Hz–100 MHz)', '  1.000e1  9.01e-22  9.12e-22', '  …');
+    if (kept.has('zpsrr')) lines.push('[D4 zout VDD0P8_A ss/25c load=500u] f[Hz] |Z|_gt Zph_gt |Z|_model Zph_model  (12 pts/dec)', '  1.000e1  23.31  -0.4  23.42  -0.4', '  …', '[D4 psrr VDD0P8_A ss/25c] f[Hz] H_gt[dB] Hph_gt H_model[dB] Hph_model', '  …');
+    if (kept.has('vnoise')) lines.push('[D4 vnoise VDD0P8_A ss/25c] f[Hz] Sv_gt Sv_model', '  …');
+    if (kept.has('tran')) lines.push('[D5 tran load-EN VDD0P8_A ss/25c on] t[s] V_gt V_model  (decimated 200 pts; extrema kept exactly: dip 0.7482 V @ 2.0031e-6)', '  …');
+    if (kept.has('zpsrr_all')) lines.push('[D4 zout/psrr · 9 cells × 2 rails × 4 loads] …');
+    lines.push('[D9 trailer] kept ' + kept.size + '/' + sel.length + ' blocks · ' + acc.toFixed(1) + ' KB' + (dropped.length ? ' · DROPPED (budget): ' + dropped.map(d => d.id).join(', ') : ' · nothing dropped') + ' · sha256 ' + Math.round(acc*7919 % 65536).toString(16).padStart(4,'0') + '…');
+    return { items, budgets, sizeKb: sizeKb.toFixed(1), keptKb: acc.toFixed(1), budgetKb: s.budget,
+      barKept: Math.min(100, 100 * acc / Math.max(sizeKb, 0.1)).toFixed(1), barDrop: Math.min(100, 100 * (sizeKb - acc) / Math.max(sizeKb, 0.1)).toFixed(1),
+      partsText: parts > 1 ? 'split into ' + parts + ' parts of ≤ 32 KB (relay-sized)' : 'one paste',
+      partsBtn: parts > 1 ? 'part 1 of ' + parts : 'digest', preview: lines.join('\\n'),
+      copyLabel: s.copied ? 'Copied' : 'Copy', copy: () => { this.setState({copied:true}); setTimeout(() => this.setState({copied:false}), 1500); } };
+  }
+}
+"""
+
+
 def main():
     (OUT / "Main.dc.html").write_text(page("New", 1, NEW_BODY, NEW_SCRIPT), encoding="utf-8")
     (OUT / "Plan.dc.html").write_text(page("Plan", 2, PLAN_BODY, PLAN_SCRIPT), encoding="utf-8")
     (OUT / "Run.dc.html").write_text(page("Run", 3, RUN_BODY, RUN_SCRIPT), encoding="utf-8")
     (OUT / "Model.dc.html").write_text(page("Model", 4, MODEL_BODY, MODEL_SCRIPT), encoding="utf-8")
     (OUT / "Deliver.dc.html").write_text(page("Deliver", 5, DELIVER_BODY, DELIVER_SCRIPT), encoding="utf-8")
+    (OUT / "Digest.dc.html").write_text(page("Digest", 4, DIGEST_BODY, DIGEST_SCRIPT), encoding="utf-8")
     W, H, GX, GY = 1440, 900, 100, 170
     canvas = {
         "artboards": [
@@ -741,15 +844,16 @@ def main():
             {"file": "Run.dc.html", "title": "3 · Run", "x": 2 * (W + GX), "y": 0, "w": W, "h": H, "is_interactive": True},
             {"file": "Model.dc.html", "title": "4 · Model", "x": 0, "y": H + GY, "w": W, "h": H, "is_interactive": True},
             {"file": "Deliver.dc.html", "title": "5 · Deliver", "x": W + GX, "y": H + GY, "w": W, "h": H, "is_interactive": True},
+            {"file": "Digest.dc.html", "title": "4b · Copy for desk (from Model / Run)", "x": 2 * (W + GX), "y": H + GY, "w": W, "h": H, "is_interactive": True},
         ],
         "annotations": [
-            {"id": "journey", "x": 2 * (W + GX), "y": H + GY, "w": 520,
-             "text": "pmukit — the sub-block designer's journey.\nThe PMU is a black box to them. They bring one netlist built to the naming convention and answer three questions; everything else is derived and shown, never asked.\n\nAll data is synthetic (PMU_DEMO). Each screen is clickable on its own: load the sample netlist, untick a plan group, retry a failed run, click a grade cell, pick a file."},
+            {"id": "journey", "x": 0, "y": 2 * (H + GY), "w": 620,
+             "text": "pmukit — the sub-block designer's journey.\nThe PMU is a black box to them. They bring one netlist built to the naming convention and answer three questions; everything else is derived and shown, never asked.\n\nAll data is synthetic (PMU_DEMO). Each screen is clickable on its own: load the sample netlist, untick a plan group, retry a failed run, click a grade cell, pick a file, change the digest budget.\n\n4b is reached from the Copy-for-desk buttons on Model and Run: the air-gap return channel (plain text through the relay, budgeted by priority, dropped blocks named)."},
         ],
         "launch": {"view": "canvas"},
     }
     (OUT / "canvas.json").write_text(json.dumps(canvas, ensure_ascii=False, indent=2), encoding="utf-8")
-    print("wrote 5 artboards + canvas.json")
+    print("wrote 6 artboards + canvas.json")
 
 
 if __name__ == "__main__":

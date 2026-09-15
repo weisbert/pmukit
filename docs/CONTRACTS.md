@@ -1,4 +1,4 @@
-# pmukit 四份契约（草稿，2026-09-15）
+# pmukit 五份契约（2026-09-15）
 
 > 代码围绕这四份契约长。改契约要改这个文件，先于改代码。
 > 格式一律 JSON + numpy `.npy` + SQLite，全是标准库或 numpy，盒子上不需要新 wheel。
@@ -6,6 +6,7 @@
 ```
 项目配置 ──> 模型规格 ──> 测量计划 ──> 运行台账 ──> 数据集 ──> 拟合 ──> 交付物
  (输入)      (契约1)     (推导)      (契约3)     (契约2)            (契约4)
+                                          └──────── 摘要（契约5）：盒子 → 桌面的气隙回程 ────────┘
 ```
 
 ## 0. 项目配置：两层，用户只碰第一层
@@ -177,6 +178,30 @@ $PMUKIT_DATA/<project>/deliver/<stamp>/
 - `envelope.json` 里的任何一项超出，报告里必须出现红字；模型不静默外推。
 - 交付目录不进 git；`report.md` 里只有数字，没有客户网名，才允许摘录进仓库文档。
 - 工艺角选择靠 Spectre `section`，和 PDK 的角变量同名，消费者的 corner 设置里加一行就能切。
+
+## 5. 摘要（Copy for desk：盒子到桌面的气隙回程）
+
+盒子上没有 agent、没有网络。桌面要调试或本地复现，只能靠用户粘贴纯文本（relay）。老仓的 `[MPD1]` 摘要机制原样继承，规则如下。
+
+```
+[pmukit-digest v1] project=… created=… budget=64KB parts=2
+[D0 provenance]  config sha · dataset sha · pmukit 版本 · 表征时 TB 状态
+[D1 ledger]      每条 run 一行：状态、cell、分析、CPU；失败的带一句错误
+[D2 params]      拟合参数，全部 cell，无损 JSON —— 桌面凭这一块就能重新发射 .va
+[D3 grades]      Model 屏的绿黄红和"能不能信"四格，文本版
+[D4 curves]      GT 和模型在**同一组重采样频点**上并排（zout/psrr/noise/idc/inoise），每十倍频 12 点
+[D5 transients]  抽稀但极值点原样保留（跌落、过冲、稳定点）
+[D6 faillog]     失败 run 的日志尾 40 行 + 网表里 pmukit 改动过的那几行
+[D9 trailer]     保留了几块、多少 KB、**按预算丢掉的块点名列出**、sha256
+```
+
+规则：
+- **预算按优先级裁**：provenance › ledger › params › 失败日志 › 偏置曲线 › 轨曲线 › 瞬态。超预算从低优先级丢，丢掉的必须在 trailer 点名，永远不静默截断。
+- 预算档 32 / 64 / 128 KB；超过 32 KB 自动分段，每段带 `part i/N` 头，relay 一段一贴。
+- 曲线块同时带 GT 和模型：桌面不必重拟合就能做对比；重采样会改变拟合结果，这一点老仓验证过，所以模型数字要随摘要走，不靠桌面重算。
+- 入口：Model 屏"Copy for desk"（默认带选中 cell 的曲线）、Run 屏"Copy failure bundle"（默认只带 D0/D1/D6）。
+- 桌面侧三条命令：`pmukit digest import <txt>` 重建契约 2 格式的数据集子集（缺的块登记在 `missing`，不猜）；`pmukit reproduce --from-digest` 在桌面重拟合并逐数字对比盒子报告；`pmukit report` 两边输出同一份文本。
+- 摘要存 `$PMUKIT_DATA/<project>/digest/`，两台机器各一份，不进 git。
 
 ## 已确认（2026-09-15）
 
