@@ -8,19 +8,35 @@
 
 ## 0. 装上（5 分钟）
 
+**盒子能 `git pull` 公开仓，但多半够不到 PyPI** —— 所以有两条路，**先试离线那条**。
+
+### (a) 离线包（推荐，已经打好了）
+
+桌面上 **`C:\code\pmukit_package`**（54 MB，含 manylinux2014 的 numpy/scipy 轮子）已经打好，
+按你平时过气隙的办法拷到盒子上，然后：
+
 ```tcsh
-cd <你的工作区>
-git clone https://github.com/weisbert/pmukit.git
-cd pmukit
+cd <包所在目录>
 bash apply                     # 注意是 bash，不是 ./apply —— 盒子的 shell 是 tcsh
 ```
 
-**期望**：结尾打印装后自检（5 项）和两行要你贴进 `~/.cshrc` 的 `setenv`。照贴，然后 `source ~/.cshrc`。
+包过期了就在桌面重新打一个：`python deploy/package.py --out C:\code\pmukit_package`
 
-- `bash apply` 里做了完整性校验（`MANIFEST.json` + `SHA256SUMS`）。**改过一个字节就会拒绝并点名文件。**
-- 离线包里的 numpy/scipy 是 manylinux2014（glibc 2.17）轮子，装的时候 `pip install --no-index`，不联网。
-- clone 出来的仓库**没有** `wheels/`，`apply` 会认出这是 git-clone 模式并走联网 pip。
-  如果盒子不能联网，先在桌面跑 `python deploy/package.py --out <dir>` 打一个离线包带过去。
+### (b) git clone（只在盒子能联网装 pip 时可行）
+
+```tcsh
+git clone https://github.com/weisbert/pmukit.git && cd pmukit && bash apply
+```
+clone 出来**没有** `wheels/`，`apply` 会认出这是 git-clone 模式并走**联网** pip。装不上就回到 (a)。
+
+---
+
+**期望**（两条路一样）：结尾打印装后自检（**6 项**）和两行要你贴进 `~/.cshrc` 的 `setenv`。
+照贴，然后 `source ~/.cshrc`。
+
+- `bash apply` 做完整性校验（`MANIFEST.json` + `SHA256SUMS`）。**改过一个字节就会拒绝并点名文件。**
+- 离线装是 `pip install --no-index --find-links wheels`，全程不联网。
+- **`$PMUKIT_DATA` 永远不会被 `apply` / `update.sh` 碰** —— 重装不会丢你的数据。
 
 ☐ 装好，`pmukit --help` 有输出
 
