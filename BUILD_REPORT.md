@@ -127,3 +127,35 @@ MANIFEST 键里 `backslash keys: 0`。**34 个测试**。
 **需要明天在盒子上验的 / 没做到的**：docker 不在本机，glibc-2.17 容器彩排只走了静态路径；
 `tcsh` 本身没被执行过（`apply` 是 bash，只**打印** `setenv` 行，要人手贴进 `~/.cshrc`）；
 盒子真实 `$PMUKIT_PREFIX` 的配额 / NFS / `noexec` 未知。
+
+## M11 — CLI（`pmukit.cli` + `__main__.py` + 共享帮助文本）
+
+- `pmukit new/pins/config/plan/run/status/fit/verify/report/deliver/digest/reproduce/list/open/ui/help`。
+  后面才落地的模块**全部惰性导入**：装了一半也能跑已就绪的命令，没就绪的给四段式错误而不是 ImportError 栈。
+- **`pmukit/helptext.py` 是帮助文本的唯一副本**：`pmukit help <screen>` 打印的、web 的 `? Help` 面板显示的、
+  `GET /api/help/<screen>` 返回的，是同一段文字（有测试逐字比对）。八个屏，每屏三句话 + 本屏快捷键 + 全局快捷键。
+- **补上了 M12 发现的阻塞项**：`pmukit/__main__.py` 之前不存在，启动器 `python -m pmukit` 会
+  `No module named pmukit.__main__`。现已补上并有测试用真子进程验证。
+- 顺手修的一个真会绊人的地方：`--temps -40,25,125` 会被 argparse 当成选项。现在负号开头的数字串会在解析前
+  被重新拼成 `--temps=-40,...`（`=` 写法一直可用，现在自然写法也可用）。
+- **端到端实测**（合成 PMU 网表）：
+
+```
+$ pmukit new demo_pmu --netlist tb/input.scs --pmu-inst PMU_TOP --corners tt,ss \
+      --temps -40,25,125 --vset 3 --care-up-to 1e9 --load a=5e-4,2e-6 --load b=2e-3,5e-6
+pin   net       role    fate    source       dc      gnd   note
+vdda  VDDA_1V0  supply  model   VS_VDDA_1V0  1       -
+a     VDD0P8_A  rail    model   IL_VDD0P8_A  0.0005  vssa  nearest ground in the subcircuit graph (2 hops)
+b     VDD0P8_B  rail    model   IL_VDD0P8_B  0.002   vssb  nearest ground in the subcircuit graph (2 hops)
+ptat  IB_PTAT   bias    model   VB_IB_PTAT   0.4     agnd  nearest ground in the subcircuit graph (1 hops)
+poly  IB_POLY   bias    model   VB_IB_POLY   0.4     agnd  nearest ground in the subcircuit graph (1 hops)
+en    EN        en      model   VEN_EN       1       -
+tm    TESTMODE  none    ignore  -            -       -     no source named IL_*/VB_*/VS_*/VEN_* drives net 'TESTMODE'
+  1 pin(s) have no role: tm        <- 报出来，不猜
+
+$ pmukit plan demo_pmu --off noise:noise_v.a --off tran_en
+212 runs, 0.68 CPU-hours estimated (4 load states, 19 groups)
+  NOT RUN: a noise -- amp_i, corner_i_hz, flicker, nmode, white
+  NOT RUN: en ramp -- i_overshoot, i_rise, t_delay, t_rise, v_overshoot
+```
+  `pmukit help <screen>` = 帮助面板同一段文字（**验收条件，已锁**）。**20 个测试**。

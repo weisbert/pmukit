@@ -43,3 +43,6 @@
 | D36 | M12 | 打包用「文件系统遍历 + `git check-ignore`」而不是 `git ls-files` | 部署流水线必须在自己被提交之前就能打包自己 | 易 |
 | D37 | M12 | 新增 `audit_wheels.py --deep`：扫轮子里 `.so` 的 `GLIBC_x.y` 字符串 | 文件名声称 2.17、里面的 `.so` 却要 2.28 的轮子，光看 tag 抓不到；这是没有 docker 时 auditwheel 的替身 | 易 |
 | D38 | M12 | `tests/` 永不进包 | 开工单的拷贝清单里没有它，而且 fixtures 将来可能含真测量 | 易 |
+| D39 | M11 | 帮助文本放 `pmukit/helptext.py`，CLI 和 web 都 import 它，不各写一份 | 验收条件就是"`pmukit help <screen>` = 帮助面板同一段文字"；两份副本迟早会漂移 | 易 |
+| D40 | M11 | CLI 捕获 `PmuError` → 四段式打到 stderr + 退出码 2，**永不抛栈** | 用户看到的应该是"怎么办"，不是 traceback；退出码 2 让脚本能区分"用法/数据问题"和崩溃 | 易 |
+| D41 | M11 | 解析前把 `--temps -40,25` 这类负号开头的值重拼成 `--temps=-40,25` | argparse 会把 `-40,25` 当未知选项；温度天然带负号，不能要求用户记得写 `=` | 易 |
