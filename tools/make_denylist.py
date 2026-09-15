@@ -5,7 +5,7 @@ The denylist is what the pre-commit guard (tools/guard.py) refuses to let into t
 customer library / cell / net / source names and project identifiers. It never leaves the machine.
 
     python tools/make_denylist.py --manifest <old_repo>/cadence/insitu/manifests/REAL_*.json \
-                                  --extra Hi1108 WuR ... --out .pmukit-denylist
+                                  --extra <PROJECT_CODE> <BLOCK_NAME> ... --out .pmukit-denylist
 
 Reads an LDO_modeling-style manifest (dut.lib/cell/tb_lib/tb_cell/extract_cell, every role's
 pin/net/source names) and adds the --extra tokens. Tokens shorter than 3 chars are dropped.

@@ -1,0 +1,13 @@
+#!/bin/sh
+# pmukit commit gate -- refuse customer identifiers into this PUBLIC repo.
+# Installed by: git config core.hooksPath .githooks
+set -e
+PY=""
+for cand in ./.venv/Scripts/python.exe ./.venv/bin/python python3 python; do
+    if command -v "$cand" >/dev/null 2>&1 || [ -x "$cand" ]; then PY="$cand"; break; fi
+done
+if [ -z "$PY" ]; then
+    echo "pre-commit: no python found; commit gate SKIPPED" >&2
+    exit 0
+fi
+"$PY" tools/guard.py --staged

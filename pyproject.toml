@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pmukit"
+version = "0.1.0"
+description = "Characterize a PMU (LDO rails + current biases) and emit an HB-safe behavioral model"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26,<3", "scipy>=1.11,<2"]
+
+[project.scripts]
+pmukit = "pmukit.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pmukit*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["error::DeprecationWarning:pmukit.*"]

@@ -26,9 +26,9 @@
   "temps_c": [-40, 25, 125],
   "vset_codes": [3],
   "state_note": "RX 模式，寄存器 0x12=0x03",
-  "ports": {"VDD0P8_PLL": "model", "VDD0P8_VCO": "model", "VDD0P8_AUX": "stub", "IB_PTAT": "model", "IB_POLY": "model", "TESTMODE": "ignore"},
+  "ports": {"VDD0P8_A": "model", "VDD0P8_B": "model", "VDD0P8_C": "stub", "IB_PTAT": "model", "IB_POLY": "model", "TESTMODE": "ignore"},
   "my_load": {
-    "VDD0P8_PLL": {"on_a": 5e-4, "off_a": 2e-6, "switches": true}
+    "VDD0P8_A": {"on_a": 5e-4, "off_a": 2e-6, "switches": true}
   },
   "care_up_to_hz": 2e10
 }
