@@ -320,14 +320,31 @@ PLAN_BODY = f"""
       </div>
     </div>
   </div>
-  <div class="col" style="flex:0 0 380px">
+  <div class="col" style="flex:0 0 470px">
     <div class="panel" style="flex:1">
-      <div class="ph"><span>Why this run exists</span><span class="sub mono">{{{{ sel.an }}}}</span></div>
+      <div class="ph"><span class="mono">{{{{ sel.an }}}}</span><div style="display:flex;gap:6px"><span class="chip {{{{ tabWhyCls }}}}" onClick="{{{{ showWhy }}}}">Why</span><span class="chip {{{{ tabRunsCls }}}}" onClick="{{{{ showRuns }}}}">Runs · {{{{ sel.runs }}}}</span></div></div>
+      <sc-if value="{{{{ isWhy }}}}" hint-placeholder-val="{{{{ true }}}}">
       <div class="pb" style="display:flex;flex-direction:column;gap:14px">
         <div style="font-size:13px;line-height:1.55">{{{{ sel.why }}}}</div>
         <div class="kv"><span class="k">Feeds</span><span class="mono">{{{{ sel.feeds }}}}</span><span class="k">Runs</span><span class="mono">{{{{ sel.runs }}}} across 9 cells</span><span class="k">Stimulus</span><span class="mono">{{{{ sel.stim }}}}</span></div>
         <div><div class="lbl" style="margin-bottom:6px">If you skip it</div><div class="callout warn">{{{{ sel.cons }}}}</div></div>
       </div>
+      </sc-if>
+      <sc-if value="{{{{ isRuns }}}}" hint-placeholder-val="{{{{ false }}}}">
+      <div class="pb" style="padding:0;display:flex;flex-direction:column;min-height:0">
+        <div style="overflow:auto;max-height:240px;flex:none;border-bottom:1px solid #ebe8e1">
+          <table class="t">
+            <thead><tr><th>Run</th><th>Corner</th><th class="num" style="text-align:right">T °C</th><th class="num" style="text-align:right">VSET</th><th>Load</th><th>Edits</th></tr></thead>
+            <tbody><sc-for list="{{{{ runList }}}}" as="r" hint-placeholder-count="8"><tr class="click {{{{ r.cls }}}}" onClick="{{{{ r.pick }}}}"><td class="id">{{{{ r.id }}}}</td><td class="mono">{{{{ r.corner }}}}</td><td class="num">{{{{ r.temp }}}}</td><td class="num">{{{{ r.vset }}}}</td><td class="mono">{{{{ r.load }}}}</td><td class="hint">{{{{ r.edits }}}}</td></tr></sc-for></tbody>
+          </table>
+        </div>
+        <div style="padding:10px 14px;display:flex;flex-direction:column;gap:6px;min-height:0;overflow:auto">
+          <div class="lbl">How run <span class="id" style="text-transform:none;color:#1c1b18">{{{{ recipe.id }}}}</span> is built and submitted</div>
+          <div class="code" style="font-size:11px">{{{{ recipe.text }}}}</div>
+          <div class="hint">Lines marked <span class="mono">+</span> are added by pmukit, <span class="mono">~</span> edited in place (original in the comment), everything else is your netlist untouched. The same text is stored with the run in the ledger.</div>
+        </div>
+      </div>
+      </sc-if>
     </div>
     <div class="panel" style="flex:0 1 auto;max-height:380px">
       <div class="ph"><span>Consequences of current selection</span></div>
@@ -346,20 +363,76 @@ PLAN_BODY = f"""
 """
 
 PLAN_SCRIPT = "const GROUPS = " + json.dumps(PLAN_GROUPS, ensure_ascii=False) + """;
+const CORNERS = ['tt','ss','ff'], TEMPS = [-40, 25, 125];
+const LOADS = { VDD0P8_A: ['2u','100u','500u','1m'], VDD0P8_B: ['20u','400u','2m','4m'] };
+function rid(str){ let h = 2166136261; for (const ch of str) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; } return (h.toString(16) + '0000000000').slice(0, 12); }
+function runsOf(g){
+  const out = [];
+  const perCell = (c, t) => {
+    const base = { corner: c, temp: t, vset: 3 };
+    const an = g.an;
+    if (an === 'dc_temp') return [{ ...base, temp: 'sweep', load: '—', edits: 'section, VSET, dc temp sweep' }];
+    if (an === 'dc_load') return ['VDD0P8_A','VDD0P8_B'].map(r => ({ ...base, load: r + ' sweep', edits: 'section, temp, VSET, IL_ dc sweep' }));
+    if (an === 'dc_iv') return ['IB_PTAT','IB_CONST'].map(b => ({ ...base, load: b + ' sweep', edits: 'section, temp, VSET, VB_ dc sweep' }));
+    if (an.startsWith('ac · inject VDD0P8_A')) return LOADS.VDD0P8_A.map(l => ({ ...base, load: l, edits: 'section, temp, VSET, IL_A dc+mag=1, save all' }));
+    if (an.startsWith('ac · inject VDD0P8_B')) return LOADS.VDD0P8_B.map(l => ({ ...base, load: l, edits: 'section, temp, VSET, IL_B dc+mag=1, save all' }));
+    if (an.startsWith('ac · inject AVDD')) return LOADS.VDD0P8_A.map((l, i) => ({ ...base, load: l + ' / ' + LOADS.VDD0P8_B[i], edits: 'section, temp, VSET, VS_ mag=1, save all' }));
+    if (an.startsWith('noise VDD0P8_A')) return LOADS.VDD0P8_A.map(l => ({ ...base, load: l, edits: 'section, temp, VSET, IL_A dc, oprobe' }));
+    if (an.startsWith('noise VDD0P8_B')) return LOADS.VDD0P8_B.map(l => ({ ...base, load: l, edits: 'section, temp, VSET, IL_B dc, oprobe' }));
+    if (an.startsWith('noise IB')) return ['IB_PTAT','IB_CONST'].map(b => ({ ...base, load: b, edits: 'section, temp, VSET, iprobe on VB_' }));
+    if (an.startsWith('tran · load-EN A')) return ['on','off'].map(d => ({ ...base, load: d === 'on' ? '2u → 500u' : '500u → 2u', edits: 'section, temp, VSET, IL_A pwl' }));
+    if (an.startsWith('tran · load-EN B')) return ['on','off'].map(d => ({ ...base, load: d === 'on' ? '20u → 2m' : '2m → 20u', edits: 'section, temp, VSET, IL_B pwl' }));
+    return [{ ...base, load: '—', edits: 'section, temp, VSET, VEN_ pwl' }];
+  };
+  if (g.an === 'dc_temp') CORNERS.forEach(c => perCell(c, 25).forEach(r => out.push(r)));
+  else CORNERS.forEach(c => TEMPS.forEach(t => perCell(c, t).forEach(r => out.push(r))));
+  return out.map(r => ({ ...r, id: rid(g.id + r.corner + r.temp + r.load) }));
+}
+function recipeOf(g, r){
+  const tempLine = r.temp === 'sweep' ? '+ dcT  dc  param=temp start=-40 stop=125 step=5' : '+ tcov options temp=' + r.temp;
+  const L = [
+    '# ' + g.an + '   cell ' + r.corner + ' / ' + (r.temp === 'sweep' ? 'T sweep' : r.temp + ' °C') + ' / VSET ' + r.vset + '   load ' + r.load,
+    '# netlist: ~/pmukit_data/demo_pmu/runs/' + r.corner + '_' + (r.temp === 'sweep' ? 'Tsw' : String(r.temp).replace('-','m') + 'c') + '_v3/' + r.id + '/input.scs',
+    '~ include "$PDK/toplevel.scs" section=' + r.corner + '        // was section=tt',
+    '~ include "$PDK/rc.scs"       section=' + r.corner + '        // was section=tt',
+    '~ parameters VSET=' + r.vset + '                            // was VSET=3',
+    tempLine,
+    '- ac1 / noise1 / tran1                        // your analyses stripped',
+  ];
+  const an = g.an;
+  if (an === 'dc_load') L.push('~ ' + r.load.split(' ')[0].replace('VDD0P8', 'IL_VDD0P8') + ' (…) isource dc=500u        // swept below', '+ dcL  dc  dev=IL_' + r.load.split(' ')[0] + ' param=dc start=0 stop=2*on lin=41', '+ save VDD0P8_A VDD0P8_B');
+  else if (an === 'dc_iv') L.push('+ dcV  dc  dev=VB_' + r.load.split(' ')[0] + ' param=dc start=0 stop=1.0 lin=21', '+ save VB_' + r.load.split(' ')[0] + ':p');
+  else if (an === 'dc_temp') L.push('+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p');
+  else if (an.startsWith('ac · inject VDD0P8_A')) L.push('~ IL_VDD0P8_A (VDD0P8_A 0) isource dc=' + r.load + ' mag=1   // was dc=500u, no mag', '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p', '+ ac1 ac start=10 stop=20G dec=20');
+  else if (an.startsWith('ac · inject VDD0P8_B')) L.push('~ IL_VDD0P8_B (VDD0P8_B 0) isource dc=' + r.load + ' mag=1   // was dc=2m, no mag', '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p', '+ ac1 ac start=10 stop=20G dec=20');
+  else if (an.startsWith('ac · inject AVDD')) L.push('~ VS_AVDD1P0 (AVDD1P0 0) vsource dc=1.0 mag=1       // was no mag', '~ IL_VDD0P8_A dc=' + r.load.split(' / ')[0] + '   IL_VDD0P8_B dc=' + r.load.split(' / ')[1], '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p', '+ ac1 ac start=10 stop=20G dec=20');
+  else if (an.startsWith('noise VDD')) { const rail = an.includes('_A') ? 'A' : 'B'; L.push('~ IL_VDD0P8_' + rail + ' dc=' + r.load, '+ nz1 noise start=10 stop=100M dec=20 oprobe=VDD0P8_' + rail); }
+  else if (an.startsWith('noise IB')) L.push('+ nz1 noise start=10 stop=100M dec=20 iprobe=VB_' + r.load);
+  else if (an.startsWith('tran · load-EN')) { const rail = an.endsWith('A') ? 'A' : 'B'; const [a, b] = r.load.split(' → '); L.push('~ IL_VDD0P8_' + rail + ' (VDD0P8_' + rail + ' 0) isource type=pwl wave=[0 ' + a + ' 2u ' + a + ' 2.002u ' + b + ' 10u ' + b + ']', '+ tr1 tran stop=10u step=2n', '+ save VDD0P8_' + rail); }
+  else L.push('~ VEN_EN (EN 0) vsource type=pwl wave=[0 0 1u 0 1.01u 1.0 20u 1.0]', '+ tr1 tran stop=20u', '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p');
+  L.push('# dsub -A rf_short -R "cpu=8;mem=8000" -x all -EP <dir> -J alps input.scs -format ps -o ../psf/' + r.id + ' -I $PDK/alps -mt 8 -ade');
+  return L.join('\\n');
+}
 class Component extends DCLogic {
-  constructor(p){ super(p); const on = {}; GROUPS.forEach(g => on[g.id] = true); this.state = { on, sel: 'g7' }; }
+  constructor(p){ super(p); const on = {}; GROUPS.forEach(g => on[g.id] = true); this.state = { on, sel: 'g7', tab: 'why', runSel: null }; }
   renderVals(){
     const s = this.state;
     const groups = GROUPS.map(g => ({ ...g, on: !!s.on[g.id], cls: s.sel === g.id ? 'sel' : '',
       style: s.on[g.id] ? '' : 'text-decoration:line-through;color:#8a867d',
-      select: () => this.setState({sel: g.id}),
+      select: () => this.setState({sel: g.id, runSel: null}),
       toggle: () => { const o = Object.assign({}, s.on); o[g.id] = !o[g.id]; this.setState({on:o}); },
       stop: (e) => { if (e && e.stopPropagation) e.stopPropagation(); } }));
     const onG = groups.filter(g => g.on);
     const runs = onG.reduce((a,g) => a + g.runs, 0), cpuh = onG.reduce((a,g) => a + g.h, 0);
     const offList = groups.filter(g => !g.on);
+    const selG = GROUPS.find(g => g.id === s.sel);
+    const rl = runsOf(selG); const runSel = rl.find(r => r.id === s.runSel) || rl[0];
+    const runList = rl.map(r => ({ ...r, cls: r.id === runSel.id ? 'sel' : '', pick: () => this.setState({runSel: r.id}) }));
     return { groups, runs, cpuh: cpuh.toFixed(1), nGroups: onG.length + ' / ' + GROUPS.length,
-      sel: GROUPS.find(g => g.id === s.sel), allOn: offList.length === 0, anyOff: offList.length > 0, offList };
+      sel: selG, allOn: offList.length === 0, anyOff: offList.length > 0, offList,
+      isWhy: s.tab === 'why', isRuns: s.tab === 'runs', tabWhyCls: s.tab === 'why' ? 'on' : '', tabRunsCls: s.tab === 'runs' ? 'on' : '',
+      showWhy: () => this.setState({tab:'why'}), showRuns: () => this.setState({tab:'runs'}),
+      runList, recipe: { id: runSel.id, text: recipeOf(selG, runSel) } };
   }
 }
 """
@@ -416,7 +489,8 @@ RUN_BODY = f"""
       <div class="ph"><span>Run <span class="id">{{{{ sel.id }}}}</span></span><span class="badge {{{{ sel.bcls }}}}">{{{{ sel.status }}}}</span></div>
       <div class="pb" style="display:flex;flex-direction:column;gap:12px">
         <div class="kv"><span class="k">Cell</span><span class="mono">{{{{ sel.cell }}}}</span><span class="k">Analysis</span><span>{{{{ sel.an }}}}</span><span class="k">Feeds</span><span class="mono">{{{{ sel.feeds }}}}</span><span class="k">Job</span><span class="mono">donau {{{{ sel.job }}}} · rf_short · 8 cpu</span><span class="k">Netlist</span><span class="mono">…/{{{{ sel.cellDir }}}}/{{{{ sel.id }}}}/input.scs</span><span class="k">PSF</span><span class="mono">{{{{ sel.psf }}}}</span></div>
-        <div><div class="lbl" style="margin-bottom:6px">Log tail</div><div class="code" style="height:300px">{{{{ sel.log }}}}</div></div>
+        <div><div class="lbl" style="margin-bottom:6px">How it ran <span class="hint" style="text-transform:none;letter-spacing:0">(netlist edits · analysis · submit)</span></div><div class="code" style="height:150px;font-size:11px">{{{{ sel.recipe }}}}</div></div>
+        <div><div class="lbl" style="margin-bottom:6px">Log tail</div><div class="code" style="height:170px">{{{{ sel.log }}}}</div></div>
         <sc-if value="{{{{ sel.isFailed }}}}" hint-placeholder-val="{{{{ false }}}}"><div class="callout bad">Failed twice with the same message. If it fails again pmukit stops retrying and the fit proceeds with <b>tran_load_off.B @ ss/125 °C = NOT RUN</b>, flagged in the report.</div></sc-if>
       </div>
     </div>
@@ -447,6 +521,20 @@ job DONE  rc=0  ${r.el}  peak mem 1.4 GB`,
   cached: (r) => `identical run_id already in ledger (2026-09-14 18:02) -> reused`,
 };
 const BCLS = { done:'b-ok', running:'b-acc', failed:'b-bad', queued:'b-mute', cached:'b-mute' };
+function recipeRow(r){
+  const [corner, tc, vset] = r.cell.split(' / '); const t = tc.replace(' °C','').replace('−','-');
+  const L = ['# ' + r.an + '   cell ' + r.cell, '~ include "$PDK/toplevel.scs" section=' + corner + '   // was tt', '~ include "$PDK/rc.scs" section=' + corner, '~ parameters VSET=' + vset, '+ tcov options temp=' + t, '- (your analyses stripped)'];
+  if (r.an.startsWith('noise VDD')) { const rail = r.an.includes('_A') ? 'A' : 'B'; const ld = r.an.split('·').pop().trim(); L.push('~ IL_VDD0P8_' + rail + ' dc=' + ld, '+ nz1 noise start=10 stop=100M dec=20 oprobe=VDD0P8_' + rail); }
+  else if (r.an.startsWith('noise IB')) L.push('+ nz1 noise start=10 stop=100M dec=20 iprobe=VB_' + r.an.split(' ')[1]);
+  else if (r.an.startsWith('ac')) { const ld = r.an.split('·').pop().trim(); L.push('~ ' + (r.an.includes('AVDD') ? 'VS_AVDD1P0 mag=1' : 'IL_' + r.an.split('inject ')[1].split(' ')[0] + ' dc=' + ld + ' mag=1'), '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p', '+ ac1 ac start=10 stop=20G dec=20'); }
+  else if (r.an.startsWith('tran · load-EN')) { const rail = r.an.includes('EN A') ? 'A' : 'B'; const off = r.an.endsWith('off'); const hi = rail === 'A' ? '500u' : '2m', lo = rail === 'A' ? '2u' : '20u'; const [a,b] = off ? [hi,lo] : [lo,hi]; L.push('~ IL_VDD0P8_' + rail + ' type=pwl wave=[0 ' + a + ' 2u ' + a + ' 2.002u ' + b + ' 10u ' + b + ']', '+ tr1 tran stop=10u step=2n', '+ save VDD0P8_' + rail); }
+  else if (r.an.startsWith('tran · EN')) L.push('~ VEN_EN type=pwl wave=[0 0 1u 0 1.01u 1.0 20u 1.0]', '+ tr1 tran stop=20u');
+  else if (r.an === 'dc_temp') L.push('+ dcT dc param=temp start=-40 stop=125 step=5', '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p');
+  else if (r.an.startsWith('dc_iv')) L.push('+ dcV dc dev=VB_' + r.an.split(' ')[1] + ' param=dc start=0 stop=1.0 lin=21');
+  else L.push('+ dcL dc dev=IL_' + r.an.split(' ')[1] + ' param=dc start=0 stop=2*on lin=41');
+  L.push('# dsub -A rf_short -R "cpu=8;mem=8000" -x all -EP <dir> -J alps input.scs -format ps -o ../psf/' + r.id + ' -I $PDK/alps -mt 8 -ade');
+  return L.join('\\n');
+}
 class Component extends DCLogic {
   constructor(p){ super(p); this.state = { rows: ROWS.map(r => ({...r})), sel: 'e4d27a5c1f90', filter: 'All', counts: {done:191, running:8, queued:71, failed:2, cached:10} }; }
   componentDidMount(){ this.timer = setInterval(() => { const c = Object.assign({}, this.state.counts); if (c.running > 0) { c.running -= 1; c.done += 1; } if (c.queued > 0) { c.queued -= 1; c.running += 1; } if (c.running !== this.state.counts.running || c.queued !== this.state.counts.queued) this.setState({counts:c}); }, 1800); }
@@ -459,7 +547,7 @@ class Component extends DCLogic {
       select: () => this.setState({sel: r.id}),
       retry: (e) => { if (e && e.stopPropagation) e.stopPropagation(); const rows = s.rows.map(x => x.id === r.id ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.failed = Math.max(0, cc.failed - 1); cc.queued += 1; this.setState({rows, counts: cc}); } }));
     const selRow = s.rows.find(r => r.id === s.sel) || s.rows[0];
-    const sel = { ...selRow, bcls: BCLS[selRow.status], isFailed: selRow.status === 'failed', log: LOGS[selRow.status](selRow, c), cellDir: selRow.cell.replace(/ \/ /g, '_').replace(' °C', 'c').replace('−', 'm'), job: '4881' + parseInt(selRow.id.slice(0,4), 16).toString().slice(0,4),
+    const sel = { ...selRow, bcls: BCLS[selRow.status], isFailed: selRow.status === 'failed', log: LOGS[selRow.status](selRow, c), recipe: recipeRow(selRow), cellDir: selRow.cell.replace(/ \/ /g, '_').replace(' °C', 'c').replace('−', 'm'), job: '4881' + parseInt(selRow.id.slice(0,4), 16).toString().slice(0,4),
       feeds: selRow.an.startsWith('noise') ? 'noise block' : selRow.an.startsWith('ac') ? 'zout / psrr blocks' : selRow.an.startsWith('tran') ? 'load_en (large-signal)' : 'dc tables',
       psf: selRow.status === 'done' || selRow.status === 'cached' ? '…/psf/' + selRow.id + '/' : '—' };
     const filters = ['All','Running','Failed','Queued'].map(n => ({ name:n, cls: s.filter === n ? 'on' : '', pick: () => this.setState({filter:n}) }));
