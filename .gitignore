@@ -4,6 +4,12 @@ data/
 work*/
 runs/
 deliver/
+# Any local $PMUKIT_DATA scratch area. These hold real measurements the moment someone points
+# pmukit at a real bench, so they are ignored by NAME, not by hoping nobody creates one.
+.tmpdata/
+pmukit_data/
+*_data/
+.pmukit_scratch/
 .venv/
 __pycache__/
 *.pyc

@@ -360,6 +360,8 @@ def cmd_plan(a) -> int:
     print(_table(rows, ["group", "runs", "cpu_s", "", "what it measures"]))
     print(f"\n{summary['runs']} runs, {summary['cpu_hours']:.2f} CPU-hours estimated "
           f"({len(plan.states)} load states, {len(plan.groups)} groups)")
+    for n in plan.notes:
+        print(f"  note: {n}")
     for c in plan.consequences():
         print(f"  NOT RUN: {c['port']} {c['block']} -- {', '.join(c['params'])}")
     if a.submit:
@@ -371,6 +373,28 @@ def cmd_plan(a) -> int:
     else:
         print(f"\nNext:  {PROG} plan {a.project} --submit   then   {PROG} run {a.project}")
     return 0
+
+
+def _aux_for(cfg, d: pathlib.Path) -> list[pathlib.Path]:
+    """Everything a run directory needs besides input.scs -- the netlist's relative includes.
+
+    A testbench normally includes its PDK by a RELATIVE path (`include "pdk/toplevel.scs"`). The
+    run directory is somewhere else (a scratch dir on the VM, a netlist dir on the queue), so
+    unless those files travel with it the simulator answers
+    `ERROR (SFE-868): Can not open input file 'pdk/toplevel.scs'`. Absolute includes are left
+    alone -- they resolve on the far side or they do not, and copying a whole PDK would be worse.
+    """
+    nl = _netlist_of(cfg, d)
+    base = pathlib.Path(nl.path).resolve().parent if nl.path else pathlib.Path.cwd()
+    out: list[pathlib.Path] = []
+    for file_path, _section in nl.includes():
+        p = pathlib.Path(file_path)
+        if p.is_absolute():
+            continue
+        top = base / p.parts[0]              # copy the whole `pdk/` tree, not one file of it
+        if top.exists() and top not in out:
+            out.append(top)
+    return out
 
 
 def cmd_run(a) -> int:
@@ -390,7 +414,8 @@ def cmd_run(a) -> int:
     ds = (dsmod.Dataset.open(dpath) if (dpath / "index.json").exists()
           else dsmod.Dataset.create(dpath, project=cfg.project, config_sha=cfg.sha(),
                                     dims=_dims_for(der, plan)))
-    runner = rmod.Runner(cfg.project, plan, led, site, dataset=ds, root=d)
+    runner = rmod.Runner(cfg.project, plan, led, site, dataset=ds, root=d,
+                         jobs=a.jobs, aux=_aux_for(cfg, d))
     result = runner.run_all(resume=not a.no_resume,
                             on_event=None if a.json else _progress)
     ds.close()
@@ -399,8 +424,32 @@ def cmd_run(a) -> int:
     return 0
 
 
-def _progress(kind, run_id, detail) -> None:
-    print(f"  [{kind:<8}] {run_id}  {detail}", flush=True)
+def _progress(*args) -> None:
+    """Render a progress event from either producer.
+
+    The runner emits `(kind, run_id, detail)`; the fitter emits a single dict per fitted block.
+    The two grew up in different modules and have not been unified -- this renders both rather
+    than pretending they are the same shape.
+    """
+    if len(args) == 3:
+        kind, run_id, detail = args
+        print(f"  [{kind:<8}] {run_id}  {detail}", flush=True)
+        return
+    ev = args[0] if args else {}
+    if isinstance(ev, dict):
+        port = ev.get("port", "?")
+        block = ev.get("block", "?")
+        bits = []
+        if ev.get("missing"):
+            bits.append("NOT RUN")
+        elif ev.get("score") is not None:
+            bits.append(f"{ev['score']:.3g} {ev.get('metric', '')}".strip())
+        for key in ("corner", "process", "temp_c", "vset", "load"):
+            if ev.get(key) is not None:
+                bits.append(f"{key}={ev[key]}")
+        print(f"  [fit     ] {port}.{block:<10} {'  '.join(bits)}", flush=True)
+    else:
+        print(f"  [progress] {ev}", flush=True)
 
 
 def _dims_for(der, plan) -> dict:

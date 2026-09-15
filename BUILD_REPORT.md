@@ -373,3 +373,64 @@ AC：`done cpu=0.185s`，`acz.ac: freq[161] 10..1e9`；导出的 `ac_zout.VDD0P8
 - corner 'ss' set on 2 includes: pdk/toplevel.scs=ss, pdk/rc.scs=ss
 - corner 'ff' set on 2 includes: pdk/toplevel.scs=ff, pdk/rc.scs=ff
 ```
+
+## M10 — web 壳（单页应用，八块画板）
+
+`pmukit/state.py`（每项目的界面状态，原子写；撤销**只有一条栈**：配置负载仍放
+`config.ConfigHistory`，勾选快照放这里，`undo_log` 只记顺序，所以一次 Ctrl-Z 撤销的是"刚才那一下"）、
+`pmukit/server.py`（stdlib `http.server`，默认只绑 127.0.0.1，开工单接口表的 38 条路由全实现）、
+`pmukit/web/index.html`（2204 行 / 128 KB 单文件，**零 `http://` 外部引用**）。
+
+- **`tests/test_e2e_api.py` = M10 的验收**：不开浏览器，按顺序调接口 24 步 →
+  **21 passed, 3 skipped**（skip 的三步是 `verify` / `deliver` / 文件预览，等 M7/M8）。
+  其中第 7 步实测 AC 叠加：一次 `VS_` 注入喂 4 个端口；第 9 步实测"关掉一组 → 点名丢了什么 + Ctrl-Z"。
+- **真服务器 + 真 Spectre**：从 API 提交 `spectre_ssh`，run 在 VM 上执行、日志拉回、
+  `/runs/<id>/log` 读得到。`/api/machine` 探测：engine ok（232 ms，指到 SPECTRE181），
+  queue ok=False（"`dsub` is not on PATH; this is a desk, not a submit host."）—— 失败也给四段式理由。
+- `model/curve` 实测（`ss/125C/vset3/5.0e-04A`，zout）：GT 与模型在**同一组频点**上，
+  1e5 Hz 差 −0.016 dB / 0.0°，1e7 Hz 差 −0.017 dB / 0.5°。
+- **130 + 24 个测试**；`node --check` 通过；有一个无头门用假 DOM 执行页面自己的脚本、
+  把八个屏都渲染一遍（断言不抛错、不漏 `undefined`、四段式错误的 Do 行渲染出来）。
+- **页面从未在真浏览器里打开过**（代理开不了窗口）—— 明早盒子 Firefox 是第一次。
+
+## 把四个模块接起来时暴露出的问题（全部已修，全部是真的）
+
+M10 和 M5 各交回两条，加上我自己跑通真 Spectre 全链时撞出的两条：
+
+1. **`pmukit/web/index.html` 不会进 wheel** —— `pyproject.toml` 缺
+   `[tool.setuptools.package-data]`。装出来的包会**没有页面**，明早 `pmukit ui` 直接空白。已补。
+2. **`.tmpdata/` 没进 `.gitignore`** —— 我自己在冒烟测试时造的目录。公开仓里这是条泄漏路径：
+   一旦有人把 `$PMUKIT_DATA` 指到仓内，真测量就可能被提交。已按**名字**忽略
+   （`.tmpdata/`、`pmukit_data/`、`*_data/`、`.pmukit_scratch/`），不靠"希望没人建"。
+3. **远端跑 Spectre 时 PDK 找不到**：`ERROR (SFE-868): Can not open input file 'pdk/toplevel.scs'` ——
+   台子用相对路径 include PDK，而 run 目录在别处。现在 CLI 把网表里**相对** include 的顶层目录
+   一起送进每个 run 目录（绝对路径的不动，拷一整个 PDK 更糟）。
+4. **退化的 DC 扫描**：`dcz dc ... start=0.0005 stop=0.0005` →
+   `ERROR (SPECTRE-16108): Stop limit must not equal start limit.` 两处根因：
+   - 没声明 `--load` 的轨只有一个负载点 → 负载扫描没有量程。现在 `derive` 给它
+     **0 .. 2× 台子自己的典型负载**（这个量程来自网表，不是猜用户的模块），带 provenance。
+   - 只声明一个温度时，连续扫温**无意义** → **不生成这条 run**，并在计划里明说
+     "读它的参数会被报成 NOT RUN"。**不编一段用户没要求的温度范围。**
+   另外 `_sweep_clause` 现在对 start==stop 直接四段式报错，堵死这一类。
+5. **两个代理的进度回调形状不同**（runner 是 `(kind, run_id, detail)`，fitter 是一个 dict）。
+   CLI 两边都渲染，并在注释里说明它们没统一 —— 不假装是同一个东西。
+
+## 真 Spectre 全链实测（M0→M6 串起来，合成 PMU，tt/27 °C）
+
+```
+$ pmukit run demo --engine spectre_ssh
+  [done ] dc_load ... cpu 0.142 s   [stored] dc_load.VDD0P8_A @ tt/27C/vset3/5.0e-04A
+  [done ] ac      ... cpu 0.148 s   [stored] ac_zout.VDD0P8_A
+  [done ] ac      ... cpu 0.155 s   [stored] ac_psrr.VDD0P8_A, ac_psrr.VDD0P8_B,
+                                              ac_psrr.IB_POLY, ac_psrr.IB_PTAT   <- 一次注入读 4 个端口
+  [done ] noise   ... cpu 0.180 s   [stored] noise_v.VDD0P8_A
+$ pmukit fit demo
+  VDD0P8_A.zout   0.0394 dB      VDD0P8_A.psrr   0.0439 dB     VDD0P8_A.noise  1.07 dB   dc 0
+  VDD0P8_B.zout   1.82   dB      VDD0P8_B.psrr   0.565  dB     VDD0P8_B.noise  0.723 dB  dc 0
+  IB_POLY.yout    0.0012 dB      IB_POLY.psrr    2.24   dB     IB_POLY.idc     2.74 %
+  IB_PTAT.yout    0.313  dB      IB_PTAT.psrr   21.8    dB     IB_PTAT.idc     1.78 %
+```
+**这是对真器件级仿真的拟合，不是对解析真值的。** 轨 A（峰型）Zout/PSRR 到百分之几 dB；
+轨 B（ESR 平台型）Zout 1.82 dB —— 平台型本来就更难，是已知的代表性难例。
+**`IB_PTAT.psrr = 21.8 dB` 是一条明确的待查项**（PTAT 的电源→电流传递很小，可能是量本身接近噪声，
+也可能是拟合问题）——写在这里，明早值得看一眼，不假装它是好的。

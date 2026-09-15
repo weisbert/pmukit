@@ -336,3 +336,91 @@ def test_pin_table_dict_is_what_derive_consumes():
 def test_write_is_lf_on_disk(tmp_path):
     p = nl().write(tmp_path / "out.scs")
     assert b"\r" not in p.read_bytes()
+
+
+# ------------------------------------------- a convention source wired the other way round
+REVERSED = """\
+simulator lang=spectre
+subckt p (out ib)
+    r1 (out ib) resistor r=1
+ends p
+X1 (VOUT IBIAS) p
+IL_VOUT (VOUT 0) isource dc=1m
+VB_IBIAS (0 IBIAS) vsource dc=0.4
+"""
+
+
+def test_a_reversed_convention_source_still_classifies_the_pin():
+    """`VB_x (0 <pin>)` is an easy thing to draw; failing to classify it would be worse."""
+    t = Netlist(REVERSED).scan("X1")
+    by = {p.name: p for p in t.pins.values()}
+    assert by["ib"].role == "bias" and by["ib"].src == "VB_IBIAS"
+    assert by["ib"].src_reversed is True
+    assert by["out"].src_reversed is False
+    assert any("wired (0 IBIAS)" in n for n in t.notes)
+    assert any("polarity is inverted" in n for n in t.notes)
+
+
+def test_a_source_wired_the_normal_way_round_wins():
+    text = REVERSED.replace("VB_IBIAS (0 IBIAS) vsource dc=0.4",
+                            "VB_IBIAS (IBIAS 0) vsource dc=0.4")
+    t = Netlist(text).scan("X1")
+    assert t.pins["ib"].src_reversed is False
+
+
+def test_two_convention_sources_on_one_net_is_ambiguous():
+    text = REVERSED + "VB_OTHER (IBIAS 0) vsource dc=0.5\n"
+    text = text.replace("VB_IBIAS (0 IBIAS)", "VB_IBIAS (IBIAS 0)")
+    with pytest.raises(PmuError) as e:
+        Netlist(text).scan("X1")
+    assert "more than one convention source" in str(e.value)
+    assert "VB_IBIAS" in str(e.value) and "VB_OTHER" in str(e.value)
+
+
+# --------------------------------------------- the simple corner must not over-reach
+def _pdk(tmp_path, name, sections):
+    d = tmp_path / "pdk"
+    d.mkdir(exist_ok=True)
+    body = "\n".join(f"section {s}\n  // {s}\nendsection {s}" for s in sections)
+    (d / name).write_text(body + "\n", encoding="utf-8", newline="\n")
+    return d / name
+
+
+def test_section_names_are_read_from_the_included_file(tmp_path):
+    _pdk(tmp_path, "toplevel.scs", ["tt", "ss", "ff"])
+    nl = Netlist('simulator lang=spectre\ninclude "pdk/toplevel.scs" section=tt\n',
+                 tmp_path / "input.scs")
+    assert nl.section_names("pdk/toplevel.scs") == {"tt", "ss", "ff"}
+
+
+def test_an_unreadable_include_reports_none_not_a_guess(tmp_path):
+    nl = Netlist('simulator lang=spectre\ninclude "/nowhere/toplevel.scs" section=tt\n',
+                 tmp_path / "input.scs")
+    assert nl.section_names("/nowhere/toplevel.scs") is None
+
+
+def test_a_simple_corner_skips_an_include_that_has_no_such_section(tmp_path):
+    """The bug this catches: rewriting rc.scs to 'tt' made Spectre say 'No section found'."""
+    _pdk(tmp_path, "toplevel.scs", ["tt", "ss", "ff"])
+    _pdk(tmp_path, "rc.scs", ["typ", "ss", "ff"])
+    text = ('simulator lang=spectre\n'
+            'include "pdk/toplevel.scs" section=tt\n'
+            'include "pdk/rc.scs" section=typ\n')
+    nl = Netlist(text, tmp_path / "input.scs")
+    notes = nl.set_section_all("tt")
+    out = nl.render()
+    assert 'include "pdk/toplevel.scs" section=tt' in out
+    assert 'include "pdk/rc.scs" section=typ' in out          # untouched -- it has no 'tt'
+    assert any("has no 'tt'" in n and "composite corner form" in n for n in notes)
+
+    nl2 = Netlist(text, tmp_path / "input.scs")
+    nl2.set_section_all("ss")                                  # both DO have 'ss'
+    assert nl2.render().count("section=ss") == 2
+
+
+def test_an_unverifiable_include_is_rewritten_but_says_so(tmp_path):
+    nl = Netlist('simulator lang=spectre\ninclude "/nowhere/toplevel.scs" section=tt\n',
+                 tmp_path / "input.scs")
+    notes = nl.set_section_all("ss")
+    assert "section=ss" in nl.render()                         # the contract's behaviour...
+    assert any("not verified to exist" in n for n in notes)    # ...but never silently
