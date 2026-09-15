@@ -1,0 +1,48 @@
+* ============================================================
+* GT variant V1 -- NMOS-pass / SOURCE-FOLLOWER LDO
+*   Stresses the "there is always a resonance" assumption.  Source-follower pass
+*   => intrinsic Zout ~ 1/gm.  A WIDE pass (high gm) makes 1/gm small, and a LOW
+*   DC loop gain (Rota lowered by Rload on the OTA output) keeps Zpk/Zlf (the loop
+*   gain) small => LOW and ~FLAT Zout with little peaking (low Q).  High PSRR.
+*   ports: vin vout  (global 0 = gnd).  Vout ~ 0.55 V.
+*   Device geometries are literals (BSIM op for this SF loop does not converge with
+*   W/L as {param} expressions; cout/resr/cg stay params).
+* ============================================================
+.subckt ldo_v1_nmos vin vout cout=1n resr=30 cg=2p
+
+* --- NMOS source-follower pass: very wide => high gm => low 1/gm (low flat Zout) ---
+mpass vin ng vout vout nlv W=1000u L=0.5u
+
+* --- NMOS-input 5T OTA, PMOS mirror load, output ng ; m2 gate=fb (neg fb) ---
+m1 n1 vrefn vtail 0 nlv W=20u L=0.5u
+m2 ng fb    vtail 0 nlv W=20u L=0.5u
+m3 n1 n1 vin vin plv W=20u L=0.5u
+m4 ng n1 vin vin plv W=20u L=0.5u
+mtail vtail nb 0 0 nlv W=40u L=0.5u
+mb nb nb 0 0 nlv W=20u L=0.5u
+Ibias vin nb DC 10u
+
+* internal reference
+Vrefs vrefn 0 DC 0.50
+
+* OTA-output load resistor: lowers Rota => lowers DC loop gain => lowers Q
+Rng ng vout 50k
+
+* feedback divider (resistive DC path -> robust op convergence)
+R1 vout fb 200k
+R2 fb 0 2meg
+
+* on-chip output cap + ESR ; gate-node cap
+Cout vout ncesr {cout}
+Resr ncesr 0 {resr}
+Cgate ng 0 {cg}
+.ends ldo_v1_nmos
+
+
+
+
+
+
+
+
+

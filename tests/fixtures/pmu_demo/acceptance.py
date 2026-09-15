@@ -146,10 +146,28 @@ def run(tag: str, deck: str) -> pathlib.Path:
 # cases
 # --------------------------------------------------------------------------- #
 RAILS = ["VDD0P8_A", "VDD0P8_B", "VDD0P8_C"]
-GROUNDS = ["VGND_VSS_A:p", "VGND_VSS_B:p", "VGND_AGND:p"]
+GROUND_PINS = ["VSS_A", "VSS_B", "AGND"]        # subcircuit ports 9/10/11
 VSET_TARGET = {  # the divider maths in input.scs, for VSET=3
     "VDD0P8_A": 0.800, "VDD0P8_B": 0.800, "VDD0P8_C": 0.800,
 }
+
+
+def split_ground_probe(base: str) -> str:
+    """Give each ground pin its own net, joined to 0 by a 0 V source.
+
+    In the fixture the three ground pins go straight to global 0, because that is how
+    the contract says a ground is recognised.  That also merges the three return
+    currents into one net.  To MEASURE them separately -- the evidence that the three
+    grounds are genuinely separate inside the subcircuit -- split them here, the way a
+    user would if they wanted per-domain return current.  Electrically identical.
+    """
+    old = re.search(r"^PMU_TOP \(([^)]*)\) pmu_demo\s*$", base, re.M)
+    assert old, "no PMU_TOP instance line"
+    nets = old.group(1).split()
+    assert nets[-3:] == ["0", "0", "0"], nets
+    nets[-3:] = GROUND_PINS
+    out = base[:old.start()] + f"PMU_TOP ({' '.join(nets)}) pmu_demo" + base[old.end():]
+    return out + "\n" + "\n".join(f"VGND_{g} ({g} 0) vsource dc=0" for g in GROUND_PINS) + "\n"
 
 
 def case_dc():
@@ -167,13 +185,15 @@ def case_dc():
         raw = run(f"dc_{name}", deck)
         rows[name] = read_dcop(raw / "dcOp.dc")
 
-    hdr = f"{'corner':<12}" + "".join(f"{r:>12}" for r in RAILS) + \
-          f"{'IB_PTAT':>11}{'IB_POLY':>11}" + "".join(f"{g:>16}" for g in GROUNDS)
+    hdr = (f"{'corner':<12}" + "".join(f"{r:>12}" for r in RAILS) +
+           f"{'IB_PTAT':>11}{'IB_POLY':>11}{'I(VDDA)':>12}"
+           f"{'nga':>9}{'ngb':>9}{'np1':>9}")
     print(hdr)
     for name, op in rows.items():
         line = f"{name:<12}" + "".join(f"{op[r]:>12.4f}" for r in RAILS)
         line += f"{op['VB_IB_PTAT:p']*1e6:>10.3f}u{op['VB_IB_POLY:p']*1e6:>10.3f}u"
-        line += "".join(f"{op[g]*1e6:>15.3f}u" for g in GROUNDS)
+        line += f"{-op['VS_VDDA_1V0:p']*1e3:>10.4f}m"
+        line += "".join(f"{op['PMU_TOP.' + n]:>9.4f}" for n in ("nga", "ngb", "np1"))
         print(line)
     for r in RAILS:
         err = [(op[r] - VSET_TARGET[r]) / VSET_TARGET[r] * 100 for op in rows.values()]
@@ -183,6 +203,19 @@ def case_dc():
               for r in RAILS}
     print(f"  corner spread (max-min): " +
           ", ".join(f"{r} {spread[r]*1e3:.1f} mV" for r in RAILS))
+    print("  (the rails are SUPPOSED to be corner-insensitive -- that is what the loop is for;"
+          " the corner moves nga/ngb/np1, IB_POLY and the supply current)")
+
+    print("\n  split-ground probe (tt/typ, 27 C): per-domain return current")
+    op = read_dcop(run("dc_splitgnd", split_ground_probe(base) +
+                       '\nsaveOpts options temp=27 tnom=27\n'
+                       'save ' + " ".join(f"VGND_{g}:p" for g in GROUND_PINS) + "\n"
+                       'dcOp dc write="op.dc"\n') / "dcOp.dc")
+    for g in GROUND_PINS:
+        print(f"    {g:<7} {op[f'VGND_{g}:p']*1e6:>9.3f} uA")
+    vals = [op[f"VGND_{g}:p"] for g in GROUND_PINS]
+    print("    " + ("three distinct return currents -> the grounds really are separate  OK"
+                    if len(set(round(v, 12) for v in vals)) == 3 else "GROUNDS ARE SHORTED -- FAIL"))
     return rows
 
 
@@ -315,7 +348,42 @@ nz (VDD0P8_A 0) noise start=10 stop=100M dec=10
         print(f"    {ff:>10.3g} Hz  {v:.4g}")
 
 
-CASES = {"dc": case_dc, "vset": case_vset, "temp": case_temp, "en": case_en, "ac": case_ac}
+def case_accorner():
+    print("\n=== Zout / PSRR vs corner (VSET=3, 27 C) ===")
+    base = set_mag(load_netlist(), "IL_VDD0P8_A", 1)
+    corners = {"tt": ("tt", "typ"), "ss": ("ss", "typ"), "ff": ("ff", "typ"),
+               "MOSff_RCss": ("ff", "ss")}
+    print(f"{'corner':<12}{'ZpkA [ohm]':>12}{'fpkA [MHz]':>12}{'ZhfA':>8}"
+          f"{'ZpkB':>10}{'fpkB [MHz]':>12}{'ZhfB (ESR)':>12}"
+          f"{'PSRR_A@1M':>11}{'PSRR_B@1M':>11}")
+    for name, (mos, rc) in corners.items():
+        deck = set_section(set_section(base, "toplevel.scs", mos), "rc.scs", rc)
+        deck += """
+saveOpts options temp=27 tnom=27
+save VDD0P8_A VDD0P8_B
+zoutA ac start=1k stop=1G dec=15
+a1 alter dev=IL_VDD0P8_A param=mag value=0
+a2 alter dev=IL_VDD0P8_B param=mag value=1
+zoutB ac start=1k stop=1G dec=15
+a3 alter dev=IL_VDD0P8_B param=mag value=0
+a4 alter dev=VS_VDDA_1V0 param=mag value=1
+psrr ac start=1k stop=1G dec=15
+"""
+        raw = run(f"accorner_{name}", deck)
+        za = read_ac(raw / "zoutA.ac")["VDD0P8_A"]
+        zb = read_ac(raw / "zoutB.ac")["VDD0P8_B"]
+        ps = read_ac(raw / "psrr.ac")
+        fa, va = max(za, key=lambda fy: abs(fy[1]))
+        fb, vb = max(zb, key=lambda fy: abs(fy[1]))
+        pa = 20 * math.log10(abs(at(ps["VDD0P8_A"], 1e6)[1]))
+        pb = 20 * math.log10(abs(at(ps["VDD0P8_B"], 1e6)[1]))
+        print(f"{name:<12}{abs(va):>12.2f}{fa/1e6:>12.3f}{abs(za[-1][1]):>8.3f}"
+              f"{abs(vb):>10.2f}{fb/1e6:>12.3f}{abs(zb[-1][1]):>12.3f}"
+              f"{pa:>11.2f}{pb:>11.2f}")
+
+
+CASES = {"dc": case_dc, "vset": case_vset, "temp": case_temp, "en": case_en,
+         "ac": case_ac, "accorner": case_accorner}
 
 
 def main(argv):

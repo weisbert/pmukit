@@ -1,0 +1,30 @@
+* ============================================================
+* GT variant V2 -- CAP-LESS / small-Cout, high-UGB LDO
+*   Stresses: the project's foundational "spur band is ABOVE UGB -> linear"
+*             finding (here UGB is pushed up toward the 8 MHz spur band), and
+*             whether the 2-branch RLC Zout still fits when the resonance moves up.
+*   Same PMOS-pass / 5T-OTA core as base, but Cout is small (50 pF) and the gate
+*   pole (cg) is the internal compensation knob. Tuned for a stable, high-f peak.
+* ============================================================
+.subckt ldo_v2_capless vin vout vref=0.6 wp=30u lp=0.3u wi=10u li=0.5u
++ wm=10u lm=0.5u wt=20u lt=0.5u wb=20u lb=0.5u ib=40u
++ r1=500k r2=1meg cout=100p resr=120 cg=3p cf=1p
+
+mp vout ng vin vin plv W={wp} L={lp}
+
+m1 n1 fb    vtail 0 nlv W={wi} L={li}
+m2 ng vrefn vtail 0 nlv W={wi} L={li}
+m3 n1 n1    vin vin plv W={wm} L={lm}
+m4 ng n1    vin vin plv W={wm} L={lm}
+mtail vtail nb 0 0 nlv W={wt} L={lt}
+mb   nb nb 0 0     nlv W={wb} L={lb}
+Ibias vin nb DC {ib}
+Vrefs vrefn 0 DC {vref}
+
+R1 vout fb {r1}
+R2 fb 0 {r2}
+Cf vout fb {cf}
+Cout vout ncesr {cout}
+Resr ncesr 0 {resr}
+Cgate ng 0 {cg}
+.ends ldo_v2_capless

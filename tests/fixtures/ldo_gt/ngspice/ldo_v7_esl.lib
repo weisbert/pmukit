@@ -1,0 +1,48 @@
+* ============================================================
+* GT variant V7 -- OUTPUT-CAP SERIES ESL (inductive HF Zout tail)
+*   Stresses: the Zout model has NO series-output-inductance term -- it is
+*             (R_a+sL_a) || (R_pl) || (ESR + 1/sC), so above the cap corner it
+*             rolls off to the ESR floor and stays FLAT. A real output cap has a
+*             series ESL: Cout - Resr - Lesl. That branch self-resonates at the
+*             cap SRF (Zbranch minimum = Resr) and then RISES inductively (ωLesl)
+*             above it. So the measured Zout(vout) dips to ~Resr at the SRF and
+*             then climbs at HF -- the inductive tail the lumped model cannot fit.
+*   This is exactly the package/board physics a real GHz part shows; it ties the
+*   modeling-bandwidth ESL note and Target-B (characterize to 2 GHz via hf_stop).
+*   Same PMOS-pass / 5T-OTA core as base; only the output-cap branch changes.
+*   ports: vin vout  (global 0 = gnd).  Vout ~ 0.9 V.
+* ============================================================
+.subckt ldo_v7_esl vin vout vref=0.6 wp=30u lp=0.3u wi=10u li=0.5u
++ wm=10u lm=0.5u wt=20u lt=0.5u wb=20u lb=0.5u ib=10u
++ r1=500k r2=1meg cout=1n resr=0.5 cg=1p lesl=0.6n
+
+* pass device (PMOS): source=vin gate=ng drain=vout bulk=vin
+mp vout ng vin vin plv W={wp} L={lp}
+
+* 5T OTA (NMOS input pair, PMOS mirror load); neg fb: fb->diode side, vref->out
+m1 n1 fb    vtail 0   nlv W={wi} L={li}
+m2 ng vrefn vtail 0   nlv W={wi} L={li}
+m3 n1 n1    vin   vin  plv W={wm} L={lm}
+m4 ng n1    vin   vin  plv W={wm} L={lm}
+mtail vtail nb 0 0     nlv W={wt} L={lt}
+
+* tail current mirror bias
+mb   nb nb 0 0         nlv W={wb} L={lb}
+Ibias vin nb DC {ib}
+
+* internal reference
+Vrefs vrefn 0 DC {vref}
+
+* feedback divider
+R1 vout fb {r1}
+R2 fb 0 {r2}
+
+* on-chip output cap WITH series ESL: Cout - Resr - Lesl to gnd
+* (SRF ~ 1/(2*pi*sqrt(Lesl*Cout)); for 0.6nH*1nF ~ 205 MHz, inductive above it)
+Cout vout ncesr {cout}
+Resr ncesr ncl {resr}
+Lesl ncl 0 {lesl}
+
+* gate-node cap: knob to place the OTA-output pole (loop Q / peaking)
+Cgate ng 0 {cg}
+.ends ldo_v7_esl

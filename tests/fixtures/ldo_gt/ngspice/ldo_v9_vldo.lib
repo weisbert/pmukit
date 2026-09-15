@@ -1,0 +1,51 @@
+* ============================================================
+* GT variant V9 -- VERY-LOW-DROPOUT, large pass device (large-signal axis)
+*   Stresses: the LTI / small-signal-validity assumption. The divider sets
+*             Vout ~ 1.00 V from Vin = 1.05 V => only ~50 mV of dropout headroom.
+*             The PMOS pass therefore sits in deep triode at the operating point.
+*             Small-signal Zout/PSRR/noise are still well-behaved (the model should
+*             FIT them), but the large load steps (trans_big 1mA, trans_slew 5mA)
+*             demand a current swing the device cannot deliver at 50 mV headroom ->
+*             it falls into DROPOUT (the gate rails), producing a large, strongly
+*             NON-LINEAR droop. The DC dropout sweep also rolls off early.
+*   So the finding is NOT a fit miss -- it is that the LTI model's VALIDITY ENVELOPE
+*   must correctly NARROW here (the linearity-floor detection / systest large-signal
+*   gate must fire). This is the amplitude axis, orthogonal to the freq-domain parts.
+*   IDENTICAL device + core as base (wp=30u); the ONLY change is the divider, which
+*   pushes Vout to ~1.00 V so only ~50 mV of headroom remains -> the dropout knee
+*   falls to ~1 mA, so the standard trans_big (1mA) step now hits dropout (vs base,
+*   where 1mA is recoverable). This isolates the low-dropout variable from sizing.
+*   ports: vin vout  (global 0 = gnd).  Vout ~ 1.00 V (dropout ~50 mV).
+* ============================================================
+.subckt ldo_v9_vldo vin vout vref=0.6 wp=30u lp=0.3u wi=10u li=0.5u
++ wm=10u lm=0.5u wt=20u lt=0.5u wb=20u lb=0.5u ib=10u
++ r1=400k r2=600k cout=1n resr=0.5 cg=1p
+
+* pass device (PMOS): same width as base, but only ~50 mV of headroom -> deep triode
+mp vout ng vin vin plv W={wp} L={lp}
+
+* 5T OTA (NMOS input pair, PMOS mirror load); neg fb: fb->diode side, vref->out
+m1 n1 fb    vtail 0   nlv W={wi} L={li}
+m2 ng vrefn vtail 0   nlv W={wi} L={li}
+m3 n1 n1    vin   vin  plv W={wm} L={lm}
+m4 ng n1    vin   vin  plv W={wm} L={lm}
+mtail vtail nb 0 0     nlv W={wt} L={lt}
+
+* tail current mirror bias
+mb   nb nb 0 0         nlv W={wb} L={lb}
+Ibias vin nb DC {ib}
+
+* internal reference
+Vrefs vrefn 0 DC {vref}
+
+* feedback divider: Vout = vref*(R1+R2)/R2 = 0.6*1000k/600k = 1.00 V
+R1 vout fb {r1}
+R2 fb 0 {r2}
+
+* on-chip output cap + ESR
+Cout vout ncesr {cout}
+Resr ncesr 0 {resr}
+
+* gate-node cap
+Cgate ng 0 {cg}
+.ends ldo_v9_vldo

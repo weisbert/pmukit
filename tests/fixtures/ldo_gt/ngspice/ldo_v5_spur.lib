@@ -1,0 +1,55 @@
+* ============================================================
+* Ground-truth LDO WITH INTRINSIC SPUR AGGRESSORS (Part B validation DUT)
+*   ports: vin vout   (global 0 = gnd)
+*   = ldo_gt (PMOS pass + 5T OTA) + deterministic on-chip spur sources, each
+*     entering via a DIFFERENT internal path so they reach vout with different
+*     loop/Zout shaping (exactly the situation the model must reproduce):
+*       - reference spur : ripple on the internal Vref  (bandgap/chopper tone)
+*       - bias spur      : current tone on the bias node (charge-pump ripple)
+*       - output spur    : current tone straight at vout (clock feedthrough)
+*   The model only sees vout, so all three manifest as discrete vout tones it
+*   characterizes (transient-FFT) and re-injects. Small-signal Zout/PSRR/noise
+*   are UNCHANGED vs base (tones are tiny + zero in DC/AC), so the spur block is
+*   purely ADDITIVE on top of the base behavioral model.
+*   Spur freqs sit on the 15.625kHz coherent grid (harness/spur_char.py window).
+* Requires models nlv / plv at top level.
+* ============================================================
+.subckt ldo_v5_spur vin vout vref=0.6 wp=30u lp=0.3u wi=10u li=0.5u
++ wm=10u lm=0.5u wt=20u lt=0.5u wb=20u lb=0.5u ib=10u
++ r1=500k r2=1meg cout=1n resr=0.5 cg=1p
++ aref=200u fref=1.0e6 acp=300n fcp=2.5e6 aout=6u fout=4.0e6
+
+* pass device (PMOS): source=vin gate=ng drain=vout bulk=vin
+mp vout ng vin vin plv W={wp} L={lp}
+
+* 5T OTA (NMOS input pair, PMOS mirror load)
+m1 n1 fb    vtail 0   nlv W={wi} L={li}
+m2 ng vrefn vtail 0   nlv W={wi} L={li}
+m3 n1 n1    vin   vin  plv W={wm} L={lm}
+m4 ng n1    vin   vin  plv W={wm} L={lm}
+mtail vtail nb 0 0     nlv W={wt} L={lt}
+
+* tail current mirror bias
+mb   nb nb 0 0         nlv W={wb} L={lb}
+Ibias vin nb DC {ib}
+
+* internal reference WITH a deterministic ripple spur (bandgap/chopper tone)
+Vrefs vrefn 0 DC {vref} SIN({vref} {aref} {fref})
+
+* feedback divider
+R1 vout fb {r1}
+R2 fb 0 {r2}
+
+* on-chip output cap + ESR
+Cout vout ncesr {cout}
+Resr ncesr 0 {resr}
+
+* gate-node cap
+Cgate ng 0 {cg}
+
+* ---- intrinsic spur aggressors (DC=0 -> no effect on DC/AC/.noise) ----
+* charge-pump ripple: current tone on the bias node (loop/bias-shaped to vout)
+Icp  nb 0 DC 0 SIN(0 {acp} {fcp})
+* clock feedthrough: current tone straight at the output (Zout-shaped)
+Iout vout 0 DC 0 SIN(0 {aout} {fout})
+.ends ldo_v5_spur
