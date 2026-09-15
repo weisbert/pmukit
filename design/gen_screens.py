@@ -315,7 +315,7 @@ class Component extends CtxLogic {
   renderVals(){
     const s = this.state;
     const pins = [
-      {pin:'AVDD1P0', net:'AVDD1P0', role:'supply', roleCls:'b-ink', src:'VS_AVDD1P0', dc:'1.00 V', st:'ok', stCls:'b-ok'},
+      {pin:'VDDA_1V0', net:'VDDA_1V0', role:'supply', roleCls:'b-ink', src:'VS_VDDA_1V0', dc:'1.00 V', st:'ok', stCls:'b-ok'},
       {pin:'VDD0P8_A', net:'VDD0P8_A', role:'rail', roleCls:'b-acc', src:'IL_VDD0P8_A', dc:'500 µA', st:'ok', stCls:'b-ok'},
       {pin:'VDD0P8_B', net:'VDD0P8_B', role:'rail', roleCls:'b-acc', src:'IL_VDD0P8_B', dc:'2.0 mA', st:'ok', stCls:'b-ok'},
       {pin:'VDD0P8_C', net:'VDD0P8_C', role:'rail', roleCls:'b-acc', src:'IL_VDD0P8_C', dc:'50 µA', st:'ok', stCls:'b-ok'},
@@ -377,7 +377,7 @@ PLAN_GROUPS = [
          why="Output impedance vs frequency. Your block's current ripple × Zout = rail ripple = AM-PM.", cons="zout.A NOT RUN → rail A emitted as an ideal voltage source; spur/pushing paths missing."),
     dict(id="g5", an="ac · inject VDD0P8_B", ports="VDD0P8_B", runs=36, stim="IL_VDD0P8_B ac=1", reads="Zout.B", feeds="zout.B ladder", h=19.4,
          why="Same as above for rail B.", cons="zout.B NOT RUN → rail B emitted as an ideal voltage source."),
-    dict(id="g6", an="ac · inject AVDD1P0", ports="all outputs", runs=36, stim="VS_AVDD1P0 ac=1 (9 cells × 4 loads)", reads="PSRR.A, PSRR.B, psrr.IB_PTAT, psrr.IB_CONST", feeds="4 psrr blocks", h=1.8,
+    dict(id="g6", an="ac · inject VDDA_1V0", ports="all outputs", runs=36, stim="VS_VDDA_1V0 ac=1 (9 cells × 4 loads)", reads="PSRR.A, PSRR.B, psrr.IB_PTAT, psrr.IB_CONST", feeds="4 psrr blocks", h=1.8,
          why="One supply injection is read at every output at once (AC superposition), so 4 transfers cost 1 run per cell.", cons="All 4 PSRR blocks NOT RUN → supply ripple never reaches the outputs in your sim."),
     dict(id="g7", an="noise VDD0P8_A", ports="VDD0P8_A", runs=36, stim="—", reads="noise_v.A", feeds="noise.A (white + 1/f + shaped)", h=20.2,
          why="Rail voltage noise; supply pushing turns it into phase noise. Depends on load, hence 4 loads.", cons="noise.A NOT RUN → rail A is noiseless in .noise / pnoise / hbnoise. Report will be red."),
@@ -505,7 +505,7 @@ function recipeOf(g, r){
   else if (an === 'dc_temp') L.push('+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p');
   else if (an.startsWith('ac · inject VDD0P8_A')) L.push('~ IL_VDD0P8_A (VDD0P8_A 0) isource dc=' + r.load + ' mag=1   // was dc=500u, no mag', '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p', '+ ac1 ac start=10 stop=20G dec=20');
   else if (an.startsWith('ac · inject VDD0P8_B')) L.push('~ IL_VDD0P8_B (VDD0P8_B 0) isource dc=' + r.load + ' mag=1   // was dc=2m, no mag', '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p', '+ ac1 ac start=10 stop=20G dec=20');
-  else if (an.startsWith('ac · inject AVDD')) L.push('~ VS_AVDD1P0 (AVDD1P0 0) vsource dc=1.0 mag=1       // was no mag', '~ IL_VDD0P8_A dc=' + r.load.split(' / ')[0] + '   IL_VDD0P8_B dc=' + r.load.split(' / ')[1], '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p', '+ ac1 ac start=10 stop=20G dec=20');
+  else if (an.startsWith('ac · inject AVDD')) L.push('~ VS_VDDA_1V0 (VDDA_1V0 0) vsource dc=1.0 mag=1       // was no mag', '~ IL_VDD0P8_A dc=' + r.load.split(' / ')[0] + '   IL_VDD0P8_B dc=' + r.load.split(' / ')[1], '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p', '+ ac1 ac start=10 stop=20G dec=20');
   else if (an.startsWith('noise VDD')) { const rail = an.includes('_A') ? 'A' : 'B'; L.push('~ IL_VDD0P8_' + rail + ' dc=' + r.load, '+ nz1 noise start=10 stop=100M dec=20 oprobe=VDD0P8_' + rail); }
   else if (an.startsWith('noise IB')) L.push('+ nz1 noise start=10 stop=100M dec=20 iprobe=VB_' + r.load);
   else if (an.startsWith('tran · load-EN')) { const rail = an.endsWith('A') ? 'A' : 'B'; const [a, b] = r.load.split(' → '); L.push('~ IL_VDD0P8_' + rail + ' (VDD0P8_' + rail + ' 0) isource type=pwl wave=[0 ' + a + ' 2u ' + a + ' 2.002u ' + b + ' 10u ' + b + ']', '+ tr1 tran stop=10u step=2n', '+ save VDD0P8_' + rail); }
@@ -551,7 +551,7 @@ class Component extends CtxLogic {
 # ------------------------------------------------------------------ 3 Run
 RUN_ROWS = [
     ("7c3e91a04bd2", "tt / 25 °C / 3", "noise VDD0P8_A · 500 µ", "done", "4m 12s", "0.56"),
-    ("b19f0c72e4a8", "ss / 125 °C / 3", "ac · inject AVDD1P0 · 2 m", "running", "1m 03s", "—"),
+    ("b19f0c72e4a8", "ss / 125 °C / 3", "ac · inject VDDA_1V0 · 2 m", "running", "1m 03s", "—"),
     ("e4d27a5c1f90", "ss / 125 °C / 3", "tran · load-EN B · off", "failed", "12m 40s", "1.69"),
     ("02aa8e6b7d31", "ff / −40 °C / 3", "noise IB_CONST", "running", "0m 41s", "—"),
     ("5f6c1d9e2ab7", "tt / 25 °C / 3", "dc_load VDD0P8_B", "cached", "—", "0.00"),
@@ -619,7 +619,7 @@ tran: tstop=10u  step=2n (${r.an.endsWith('off') ? 'load-EN off, 2 m -> 20 u' : 
   convergence failure near IL_VDD0P8_B edge
 job FAILED  rc=1  ${r.el}  peak mem 1.9 GB`,
   running: (r) => `alps 2026.03.hf1  -mt 8  -format ps
-ac: 10 Hz -> 20 GHz  20 pts/dec  (acm_VS_AVDD1P0=1)
+ac: 10 Hz -> 20 GHz  20 pts/dec  (acm_VS_VDDA_1V0=1)
   dc op converged in 214 iterations
   ac sweep 41% ... 63% ... 78%`,
   done: (r) => `alps 2026.03.hf1  -mt 8  -format ps
@@ -637,7 +637,7 @@ function recipeRow(r){
   const L = ['# ' + r.an + '   cell ' + r.cell, '~ include "$PDK/toplevel.scs" section=' + corner + '   // was tt', '~ include "$PDK/rc.scs" section=' + corner, '~ parameters VSET=' + vset, '+ tcov options temp=' + t, '- (your analyses stripped)'];
   if (r.an.startsWith('noise VDD')) { const rail = r.an.includes('_A') ? 'A' : 'B'; const ld = r.an.split('·').pop().trim(); L.push('~ IL_VDD0P8_' + rail + ' dc=' + ld, '+ nz1 noise start=10 stop=100M dec=20 oprobe=VDD0P8_' + rail); }
   else if (r.an.startsWith('noise IB')) L.push('+ nz1 noise start=10 stop=100M dec=20 iprobe=VB_' + r.an.split(' ')[1]);
-  else if (r.an.startsWith('ac')) { const ld = r.an.split('·').pop().trim(); L.push('~ ' + (r.an.includes('AVDD') ? 'VS_AVDD1P0 mag=1' : 'IL_' + r.an.split('inject ')[1].split(' ')[0] + ' dc=' + ld + ' mag=1'), '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p', '+ ac1 ac start=10 stop=20G dec=20'); }
+  else if (r.an.startsWith('ac')) { const ld = r.an.split('·').pop().trim(); L.push('~ ' + (r.an.includes('AVDD') ? 'VS_VDDA_1V0 mag=1' : 'IL_' + r.an.split('inject ')[1].split(' ')[0] + ' dc=' + ld + ' mag=1'), '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p', '+ ac1 ac start=10 stop=20G dec=20'); }
   else if (r.an.startsWith('tran · load-EN')) { const rail = r.an.includes('EN A') ? 'A' : 'B'; const off = r.an.endsWith('off'); const hi = rail === 'A' ? '500u' : '2m', lo = rail === 'A' ? '2u' : '20u'; const [a,b] = off ? [hi,lo] : [lo,hi]; L.push('~ IL_VDD0P8_' + rail + ' type=pwl wave=[0 ' + a + ' 2u ' + a + ' 2.002u ' + b + ' 10u ' + b + ']', '+ tr1 tran stop=10u step=2n', '+ save VDD0P8_' + rail); }
   else if (r.an.startsWith('tran · EN')) L.push('~ VEN_EN type=pwl wave=[0 0 1u 0 1.01u 1.0 20u 1.0]', '+ tr1 tran stop=20u');
   else if (r.an === 'dc_temp') L.push('+ dcT dc param=temp start=-40 stop=125 step=5', '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p');
@@ -852,7 +852,7 @@ DELIVER_BODY = f"""
 include "~/pmukit_data/demo_pmu/deliver/2026-09-15T14-02/PMU_demo_pmu.scs" section=tt
 
 // instance — same pins as PMU_DEMO, plus per-rail switches
-PMU_TOP (AVDD1P0 VDD0P8_A VDD0P8_B IB_PTAT IB_CONST EN TESTMODE VSS_A VSS_B AGND) PMU_demo_pmu \\
+PMU_TOP (VDDA_1V0 VDD0P8_A VDD0P8_B IB_PTAT IB_CONST EN TESTMODE VSS_A VSS_B AGND) PMU_demo_pmu \\
     vset=3  load_en_A=1  load_en_B=1</div>
         <div class="hint" style="margin-top:8px">Temperature comes from your <span class="mono">options temp=</span>. Anything outside envelope.json is reported, never silently extrapolated.</div>
       </div>
@@ -891,9 +891,9 @@ endlibrary PMU_demo_pmu`,
 // valid: load_A 2u..1m  load_B 20u..4m  temp -40..125  f<=20G  vset 3
 // large-signal: load_en_A ON (HB check 7.7e-3)  load_en_B OFF (default)  en_ramp usable-only
 \\`include "disciplines.vams"
-module PMU_demo_pmu(AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND);
-  inout AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND;  // TESTMODE: pass-through, no role
-  electrical AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND;
+module PMU_demo_pmu(VDDA_1V0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND);
+  inout VDDA_1V0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND;  // TESTMODE: pass-through, no role
+  electrical VDDA_1V0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND;
   parameter integer vset = 3;
   parameter integer load_en_A = 1, load_en_B = 0;
   // ---- rail A: dc table(T) · zout ladder · psrr gm-C biquad · noise · load_en (opt-in)

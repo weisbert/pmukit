@@ -129,7 +129,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
 include "~/pmukit_data/demo_pmu/deliver/2026-09-15T14-02/PMU_demo_pmu.scs" section=tt
 
 // instance — same pins as PMU_DEMO, plus per-rail switches
-PMU_TOP (AVDD1P0 VDD0P8_A VDD0P8_B IB_PTAT IB_CONST EN TESTMODE VSS_A VSS_B AGND) PMU_demo_pmu \
+PMU_TOP (VDDA_1V0 VDD0P8_A VDD0P8_B IB_PTAT IB_CONST EN TESTMODE VSS_A VSS_B AGND) PMU_demo_pmu \
     vset=3  load_en_A=1  load_en_B=1</div>
         <div class="hint" style="margin-top:8px">Temperature comes from your <span class="mono">options temp=</span>. Anything outside envelope.json is reported, never silently extrapolated.</div>
       </div>
@@ -219,9 +219,9 @@ endlibrary PMU_demo_pmu`,
 // valid: load_A 2u..1m  load_B 20u..4m  temp -40..125  f<=20G  vset 3
 // large-signal: load_en_A ON (HB check 7.7e-3)  load_en_B OFF (default)  en_ramp usable-only
 \`include "disciplines.vams"
-module PMU_demo_pmu(AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND);
-  inout AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND;  // TESTMODE: pass-through, no role
-  electrical AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND;
+module PMU_demo_pmu(VDDA_1V0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND);
+  inout VDDA_1V0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND;  // TESTMODE: pass-through, no role
+  electrical VDDA_1V0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND;
   parameter integer vset = 3;
   parameter integer load_en_A = 1, load_en_B = 0;
   // ---- rail A: dc table(T) · zout ladder · psrr gm-C biquad · noise · load_en (opt-in)
