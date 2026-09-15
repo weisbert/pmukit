@@ -1,0 +1,270 @@
+#!/bin/bash
+# from LDO_modeling/deploy/apply @ d2c5b80
+#
+# pmukit installer -- the ONE command the user runs on the box.
+#
+#     bash apply                     # from an unpacked offline package, or from a git clone
+#     bash deploy/apply              # same thing, run from the repo root
+#     bash apply pmukit_pkg.tar.gz   # or hand it a tarball sitting next to this script
+#
+# It auto-detects what it is looking at:
+#     MANIFEST.json mode=full        -> verify, (re)build the venv from wheels/, install
+#     MANIFEST.json mode=incremental -> hand off to update.sh (venv untouched)
+#     no MANIFEST.json, but pyproject.toml + pmukit/  -> GIT-CLONE mode (no wheels to verify)
+#
+# Everything lands under ONE user-writable folder ($PMUKIT_PREFIX, default $HOME/pmukit) because
+# /opt is not writable on the shared box.  Real data never goes there: it lives in $PMUKIT_DATA.
+#
+# THIS FILE MUST BE LF.  A CRLF makes bash read `set -euo pipefail\r` -> "invalid option name".
+set -euo pipefail
+
+SELF="$(cd "$(dirname "$0")" && pwd)"
+SRC="$SELF"
+PREFIX="${PMUKIT_PREFIX:-$HOME/pmukit}"
+DATA="${PMUKIT_DATA:-$HOME/pmukit_data}"
+PYBIN="${PMUKIT_PYTHON:-python3.11}"
+STAGE=""
+
+die() {        # four-part error, same shape as pmukit.errors.PmuError
+    echo ""                                  >&2
+    echo "What : $1"                         >&2
+    echo "Why  : $2"                         >&2
+    echo "Do   : $3"                         >&2
+    [ $# -ge 4 ] && echo "     : $4"         >&2
+    echo "Where: ${5:-$SRC}"                 >&2
+    exit 1
+}
+cleanup() { [ -n "$STAGE" ] && rm -rf "$STAGE" || true; }
+trap cleanup EXIT
+
+# ---------------------------------------------------------------- 0. tarball? unpack it first --
+TAR="${1:-}"
+if [ -z "$TAR" ] && [ ! -f "$SRC/MANIFEST.json" ] && [ ! -f "$SRC/../pyproject.toml" ]; then
+    TAR="$(ls -1t "$SRC"/*.tar.gz 2>/dev/null | head -1 || true)"
+fi
+if [ -n "$TAR" ]; then
+    [ -f "$TAR" ] || die "Package '$TAR' not found." \
+        "apply was given a tarball path that does not exist." \
+        "Copy the package next to this script and re-run: bash apply <file>.tar.gz" "" "$TAR"
+    if [ -f "$TAR.sha256" ]; then
+        echo "[0/6] sha256 of the tarball ..."
+        sed 's/\r$//' "$TAR.sha256" | (cd "$(dirname "$TAR")" && sha256sum -c -) \
+            || die "The tarball is corrupt." "Its sha256 does not match the .sha256 sidecar." \
+                   "Re-copy it from the desk and run apply again." "" "$TAR"
+    fi
+    STAGE="$SELF/.pmukit_stage.$$"
+    rm -rf "$STAGE"; mkdir -p "$STAGE"
+    tar xzf "$TAR" -C "$STAGE"
+    SRC="$STAGE"
+fi
+
+# ------------------------------------------------------------------- 1. what kind of tree is it --
+if [ -f "$SRC/MANIFEST.json" ] && [ -d "$SRC/app" ]; then
+    KIND="package"; APP="$SRC/app"
+    MODE="$(sed -n 's/.*"mode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SRC/MANIFEST.json" | head -1)"
+    VER="$(cat "$SRC/VERSION" 2>/dev/null || echo unknown)"
+elif [ -f "$SRC/../pyproject.toml" ] && [ -d "$SRC/../pmukit" ]; then
+    KIND="clone"; APP="$(cd "$SRC/.." && pwd)"; MODE="full"; VER="$(git -C "$APP" describe --always --dirty 2>/dev/null || echo unknown)"
+elif [ -f "$SRC/pyproject.toml" ] && [ -d "$SRC/pmukit" ]; then
+    KIND="clone"; APP="$SRC"; MODE="full"; VER="$(git -C "$APP" describe --always --dirty 2>/dev/null || echo unknown)"
+else
+    die "This does not look like a pmukit package or checkout." \
+        "apply found neither MANIFEST.json + app/ (offline package) nor pyproject.toml + pmukit/ (git clone) next to itself." \
+        "Run it from inside the unpacked package:  cd <package> && bash apply" \
+        "Or from a clone of the repo:  cd pmukit && bash deploy/apply"
+fi
+
+echo "== pmukit apply =="
+echo "   source  : $SRC   ($KIND, mode=$MODE, version=$VER)"
+echo "   prefix  : $PREFIX"
+echo "   data    : $DATA   (never touched by apply)"
+
+case "$PREFIX" in
+    /*) ;;
+    *)  die "PMUKIT_PREFIX must be an ABSOLUTE path (got '$PREFIX')." \
+            "A relative prefix would install into whatever directory you happen to be in." \
+            "tcsh:  setenv PMUKIT_PREFIX \$HOME/pmukit   then re-run bash apply" "" "$PREFIX" ;;
+esac
+
+# ------------------------------------------------------------------------ 2. incremental? defer --
+if [ "$MODE" = "incremental" ]; then
+    [ -f "$SRC/update.sh" ] || die "This incremental package has no update.sh." \
+        "An incremental package refreshes an existing install; the refresh script is missing." \
+        "Rebuild the package on the desk, or install a --full package instead." "" "$SRC"
+    echo "   -> incremental package: handing off to update.sh (venv + wheels untouched)"
+    tmp="$SRC/.update.$$.sh"; sed 's/\r$//' "$SRC/update.sh" > "$tmp"
+    bash "$tmp" "$SRC"; rm -f "$tmp"
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------- 3. the box python --
+command -v "$PYBIN" >/dev/null 2>&1 || PYBIN="python3"
+command -v "$PYBIN" >/dev/null 2>&1 || die "No Python 3.11 on PATH." \
+    "The wheels in this package are cp311; a different interpreter cannot install them." \
+    "Put python3.11 on PATH, or point apply at it:  setenv PMUKIT_PYTHON /path/to/python3.11" \
+    "" "PATH=$PATH"
+"$PYBIN" -c 'import sys; raise SystemExit(0 if sys.version_info[:2]==(3,11) else 1)' \
+    || die "$PYBIN is not Python 3.11." \
+           "The shipped wheels are tagged cp311, so pip refuses them on any other version." \
+           "setenv PMUKIT_PYTHON /path/to/python3.11   then re-run bash apply" "" "$($PYBIN -V 2>&1)"
+echo "   python  : $(command -v "$PYBIN")  ($("$PYBIN" -V 2>&1))"
+
+# ------------------------------------------------------------- 4. verify BEFORE touching anything --
+if [ "$KIND" = "package" ]; then
+    echo "[1/6] verifying MANIFEST.json + SHA256SUMS ..."
+    "$PYBIN" - "$SRC" <<'PYEOF'
+import hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+man = json.loads((root / "MANIFEST.json").read_text(encoding="utf-8"))
+def sha(p):
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for c in iter(lambda: f.read(1 << 20), b""):
+            h.update(c)
+    return h.hexdigest()
+bad = []
+for rel, meta in man.get("files", {}).items():
+    p = root / rel.replace("\\", "/")          # POSIX keys; tolerate a Windows-built manifest
+    if not p.is_file():
+        bad.append(("MISSING", rel)); continue
+    if sha(p) != meta["sha256"]:
+        bad.append(("CORRUPT", rel))
+sums = root / "SHA256SUMS"
+if sums.is_file():
+    raw = sums.read_bytes()
+    if b"\r" in raw:
+        bad.append(("CRLF", "SHA256SUMS"))
+    for line in raw.decode("utf-8").splitlines():
+        if not line.strip():
+            continue
+        want, rel = line.split("  ", 1)
+        p = root / rel
+        if not p.is_file():
+            bad.append(("MISSING", rel))
+        elif sha(p) != want:
+            bad.append(("CORRUPT", rel))
+else:
+    print("      (no SHA256SUMS in this package -- MANIFEST check only)")
+bad = list(dict.fromkeys(bad))     # MANIFEST and SHA256SUMS overlap: report each file once
+if bad:
+    for kind, rel in bad[:20]:
+        print(f"      {kind}  {rel}")
+    print(f"\nWhat : The package failed its integrity check ({len(bad)} file(s)).")
+    print("Why  : A shipped file is missing or its sha256 does not match what the packager recorded,")
+    print("       so the transfer to the box was incomplete or corrupted.")
+    print("Do   : Re-copy the whole package from the desk and run `bash apply` again.")
+    print(f"Where: {bad[0][1]}")
+    sys.exit(1)
+print(f"      integrity OK ({len(man.get('files', {}))} files)")
+PYEOF
+else
+    echo "[1/6] git clone: no MANIFEST.json to verify (nothing was packaged, so nothing to check)"
+fi
+
+# ------------------------------------------------------------------------ 5. install the source --
+echo "[2/6] installing source -> $PREFIX/app ..."
+mkdir -p "$PREFIX" "$PREFIX/bin" "$DATA"
+rm -rf "$PREFIX/app.new"
+mkdir -p "$PREFIX/app.new"
+( cd "$APP" && tar cf - \
+    --exclude='.git' --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' \
+    --exclude='dist' --exclude='build' --exclude='data' --exclude='runs' --exclude='deliver' \
+    . ) | ( cd "$PREFIX/app.new" && tar xf - )
+rm -rf "$PREFIX/app.old"
+if [ -d "$PREFIX/app" ]; then mv "$PREFIX/app" "$PREFIX/app.old"; fi
+mv "$PREFIX/app.new" "$PREFIX/app"
+rm -rf "$PREFIX/app.old"
+# a Windows-packaged tree may carry CRLF in the shell scripts we are about to install/run
+for s in "$PREFIX"/app/deploy/*.sh "$PREFIX/app/deploy/apply"; do
+    [ -f "$s" ] && sed -i 's/\r$//' "$s" || true
+done
+
+# ------------------------------------------------------------------------------ 6. venv + deps --
+if [ -n "${PMUKIT_REBUILD_VENV:-}" ] || [ ! -x "$PREFIX/.venv/bin/python" ]; then
+    echo "[3/6] creating venv $PREFIX/.venv ..."
+    rm -rf "$PREFIX/.venv"
+    "$PYBIN" -m venv "$PREFIX/.venv"
+else
+    echo "[3/6] reusing venv $PREFIX/.venv  (set PMUKIT_REBUILD_VENV=1 to force a rebuild)"
+fi
+VPY="$PREFIX/.venv/bin/python"
+
+WHEELS=""
+[ -d "$SRC/wheels" ] && [ -n "$(ls -A "$SRC/wheels" 2>/dev/null)" ] && WHEELS="$SRC/wheels"
+REQ="$SRC/requirements.lock"; [ -f "$REQ" ] || REQ="$APP/requirements.txt"
+if [ -n "$WHEELS" ]; then
+    echo "[4/6] OFFLINE pip install (--no-index --find-links wheels) ..."
+    rm -rf "$PREFIX/wheels"; cp -r "$WHEELS" "$PREFIX/wheels"
+    "$VPY" -m pip install --no-index --find-links "$PREFIX/wheels" -r "$REQ" \
+        || die "Offline pip install failed." \
+               "pip could not satisfy $REQ from the wheels in this package (a pin has no wheel, or a wheel is for the wrong ABI)." \
+               "On the desk: python deploy/audit_wheels.py <package>/wheels --explain" \
+               "Then rebuild a --full package and re-copy it." "$REQ"
+else
+    echo "[4/6] no wheels/ in this tree -> installing numpy+scipy from the network ..."
+    "$VPY" -m pip install -r "$REQ" \
+        || die "pip install failed and this tree has no wheels/ directory." \
+               "A git clone carries no wheels, so pip needed the network and could not reach an index." \
+               "On the desk: python deploy/package.py --out dist/pkg   (downloads + audits the wheels)" \
+               "Copy dist/pkg to the box and run: bash apply" "$REQ"
+fi
+
+# --------------------------------------------------------- 7. launchers, installed ATOMICALLY --
+# A plain in-place `cp` truncates and rewrites the very file that may be RUNNING right now
+# (apply reinstalls apply): the running bash then resumes at a stale byte offset and dies with
+# "syntax error". rename() swaps the inode, so the running script's open fd stays valid.
+echo "[5/6] installing launchers -> $PREFIX/bin ..."
+install_launcher() {                  # $1 = name, stdin = body
+    tmp="$PREFIX/bin/.$1.tmp.$$"
+    cat > "$tmp"
+    sed -i 's/\r$//' "$tmp"
+    chmod 755 "$tmp"
+    mv -f "$tmp" "$PREFIX/bin/$1"
+}
+install_launcher pmukit <<EOF
+#!/bin/sh
+# pmukit launcher -- generated by deploy/apply. Runs the tool out of \$PREFIX/app, so an
+# update.sh that swaps app/ is picked up with no reinstall.
+PREFIX="\${PMUKIT_PREFIX:-$PREFIX}"
+PYTHONPATH="\$PREFIX/app\${PYTHONPATH:+:\$PYTHONPATH}"
+export PYTHONPATH
+exec "\$PREFIX/.venv/bin/python" -m pmukit "\$@"
+EOF
+install_launcher pmukit-ui <<EOF
+#!/bin/sh
+# pmukit-ui -- start the local web shell and print the URL to paste into the box's Firefox.
+exec "\${PMUKIT_PREFIX:-$PREFIX}/bin/pmukit" ui "\$@"
+EOF
+cat > "$PREFIX/INSTALL.json" <<EOF
+{"installed_utc":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","prefix":"$PREFIX","kind":"$KIND","version":"$VER"}
+EOF
+if [ -f "$SRC/MANIFEST.json" ]; then cp "$SRC/MANIFEST.json" "$PREFIX/MANIFEST.deployed.json"; fi
+
+# ---------------------------------------------------------------------- 8. post-install check --
+echo "[6/6] post-install check (tools/webprobe.py, headless) ..."
+"$VPY" "$PREFIX/app/deploy/postinstall_check.py" --prefix "$PREFIX" || {
+    echo ""
+    echo "*** The install COMPLETED but the browser-path check did not fully pass (see above)."
+    echo "*** pmukit itself is installed; re-run the check any time with:"
+    echo "***     $PREFIX/.venv/bin/python $PREFIX/app/deploy/postinstall_check.py"
+}
+
+# ------------------------------------------------------------------------------- 9. tcsh lines --
+cat <<EOF
+
+== installed: $PREFIX ==
+
+The box runs tcsh, so add these to ~/.cshrc (bash 'VAR=val' syntax does NOT work there):
+
+    setenv PATH        $PREFIX/bin:\$PATH
+    setenv PMUKIT_DATA $DATA
+
+Then, in a NEW shell:
+
+    pmukit ui                       # starts the web shell and prints a http://... URL
+                                    # paste that URL into the box's Firefox
+    pmukit --help                   # the same commands, from the terminal
+
+Real data (netlists, PSF, datasets, delivered models) lives in $DATA and is never
+touched by apply or update.sh -- reinstalling cannot lose your work.
+EOF

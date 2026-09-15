@@ -31,3 +31,61 @@ tools/make_denylist.py:  docstring 例子里的真项目码 -> <PROJECT_CODE> <B
   改完 `python tools/guard.py --all` → exit=0。
 - **没做**：无。
 - **决定**：D1–D5（见 `docs/DECISIONS.md`）。
+
+## M1 — 五份契约落成代码（config / spec / dataset / ledger）
+
+
+- **`pmukit/errors.py`** 四段式错误（what/why/do/where，缺一不可），`to_dict()` 就是 web 的错误体；
+  **`pmukit/jsonio.py`** 规范 JSON + sha（Windows 和盒子上同一串）。
+- **契约 0a/0b `config.py` + `site.py`** — `ProjectConfig`（三问 + `ports` 的 model/stub/ignore + 复合角）、
+  `ConfigHistory`（Ctrl-Z，压栈 50）、`DerivedConfig` + `derive()`（0b 整张表，每个字段带 provenance）、
+  `refine_from_zout()`；`SiteConfig`（engine/queue/cpus，装机一次，不进项目）。**77 个测试**。
+- **契约 1 `spec.py`** — 11 个块 / 51 个参数的固定物理清单，`SPEC_SHA=959eb3dbdce8`；
+  `requirements()` 把「参数 ← 观测量 ← 轴」反过来给计划器；`explain()` 是帮助面板和 CLI 的同一段文字；
+  `NOT_MODELED` 把 REFACTOR_PLAN 6.2 明确不建的东西写进代码，防止有人手滑加回来。**32 个测试**。
+- **契约 2 `dataset.py`** — 目录 + `index.json` + 每变量一个 `.npy`；维度序固定 `process, temp_c, vset, [load_a], [扫描坐标]`，
+  `load_a` 按端口各自一套网格；**NaN = 没数据**，`coverage()` 区分 filled / missing（跑坏了，带原因）/ never_run（没跑）。
+  写入是 `.npy` → `index.json` 各自 tmp+fsync+`os.replace`，任意时刻被杀都是可读数据集。**36 个测试**。
+- **契约 3 `ledger.py`** — SQLite 两张表，列名列序与契约逐字一致（测试用 `PRAGMA table_info` 锁住）；
+  `make_run_id` 只哈希内容 → 重新计划自动 `skipped_cached`（这就是 resume）；`consumes` + `why()` 就是 Plan 屏的"为什么跑"；
+  `Recipe` 的 `~ + -` 文本可往返解析，提交命令永远是最后一行。**33 个测试**。
+- **契约 4 `deliverable.py`** — 交付目录（`.scs` section 库 + 每角 `.va` + `envelope.json` + `report.md` +
+  `provenance.json`），每个 `.va` 头重复一遍溯源（文件脱离目录也能追溯）；`report.md` 第一段固定四项，
+  轨表里不出现内部分数（用正则锁住），机器可读的分数走旁边的 `grades.json`；`Envelope.contains()` 把越界
+  的轴逐条点名；`Deliverable.diff()` 就是首页的"对比两个交付版本"。**24 个测试**。
+- **契约 5 `digest.py`** — `[pmukit-digest v1]` 纯文本，块 D0–D9；**按优先级裁，丢掉的必须在 D9 trailer
+  点名**（永不静默截断）；超 32 KB 自动分段、乱序也能拼回、缺段报四段式错误点名第几段、body sha256 对不上就拒收；
+  D2 参数块无损（桌面凭它就能重新发射 `.va`）；`decimate_preserving_extremes` 保证跌落最小值和过冲最大值
+  逐字保留；`failure_bundle` = D0/D1/D6。**17 个测试**。
+- **验收**：每份 schema 校验 + round-trip 测试通过；**全套 331 个测试通过**。
+
+## M2 — `netlist.py`：按前缀认角色，四处改写
+
+- 从老仓 `cadence/cluster/netlist_augment.py @ d2c5b80` **原样搬**：续行合并、subckt 深度跟踪（子电路里的
+  `I1` 永远不会冒充顶层源）、实例解析、分析语句识别与剥除、`mag=`/`dc=`/`type=pwl` 就地改写。
+- **换掉的只有查找方式**：不再有 manifest，角色只认源名前缀 `IL_`/`VB_`/`VS_`/`VEN_`；对不上就报
+  "此引脚无法归类"并给出可点的下一步，**不猜**。
+- **新增**：`section=` 改写（工艺角）、`parameters VSET=` 改写（档位）、`options temp=` （温度）、
+  分地按子电路器件图 BFS 读出、`insert_role_source()`（右键给引脚补一个约定源）、每次改动自动记一条
+  `~ + -` 配方行。
+- **验收**：合成 PMU 网表（两轨 + 两偏置 + EN + 一个无角色引脚 TESTMODE）全部认出；
+  `require_classified()` 对 TESTMODE 报四段式错误；分地 `a→vssa`、`b→vssb`、偏置→`agnd` 从连线读出。**41 个测试**。
+
+## M4 — `plan.py`：规格 × 配置 → 计划
+
+- **族合并**：analysis + 同一个激励源 = 同一次仿真。轨 PSRR 和偏置 PSRR 是同一次电源注入 → 一条 run 两边都读。
+- 每条 run 带 `feeds`（喂给哪些 `端口.块.参数`）→ 写进台账 `consumes` → Plan 屏的 Why 面板是查表不是编故事。
+- 每条 run 带完整网表变体 + `~ + -` 配方 + 以远程 tcsh 命令收尾的提交行。
+- 去掉一组 → `consequences()` 逐条列出哪些参数没人喂了，效果写成"会被报成 NOT RUN"。
+- **验收（合成 PMU：2 角 × 3 温度 × 1 档 × 4 负载态，2 轨 2 偏置）**：
+
+```
+19 groups, 242 runs, 0.85 CPU-h (estimate)
+    24 dc_load:IL_VDD0P8_A     24 ac:IL_VDD0P8_A      24 ac:VS_VDDA_1V0       24 noise:noise_v.a
+    24 dc_load:IL_VDD0P8_B     24 ac:IL_VDD0P8_B      24 noise:noise_v.b       8 dc_temp
+     6 dc_iv:VB_IB_PTAT         6 ac:VB_IB_PTAT        6 noise:noise_i.ptat
+     6 dc_iv:VB_IB_POLY         6 ac:VB_IB_POLY        6 noise:noise_i.poly
+     6 tran_load_on/off × 2 rails                      6 tran_en
+```
+  `ac:VS_VDDA_1V0` 一条 run 的 reads = `ac_psrr.a, ac_psrr.b, ac_psrr.ptat, ac_psrr.poly` —— 叠加合并生效。
+  重新计划 → run_id 全部相同；提交两次 → 第二次 `cached == 全部`。**32 个测试**。
