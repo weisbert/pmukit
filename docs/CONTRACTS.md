@@ -26,12 +26,15 @@
   "temps_c": [-40, 25, 125],
   "vset_codes": [3],
   "state_note": "RX 模式，寄存器 0x12=0x03",
+  "ports": {"VDD0P8_PLL": "model", "VDD0P8_VCO": "model", "VDD0P8_AUX": "stub", "IB_PTAT": "model", "IB_POLY": "model", "TESTMODE": "ignore"},
   "my_load": {
     "VDD0P8_PLL": {"on_a": 5e-4, "off_a": 2e-6, "switches": true}
   },
   "care_up_to_hz": 2e10
 }
 ```
+
+**哪些端口建模，用户在 New 屏的 Model 列决定**，落成 `ports`。三种归宿：`model` = 表征 + 拟合 + 发射；`stub` = 引脚保留，发射成该脚直流值的理想源（轨 → 电压源，偏置 → 电流源），零仿真，报告和 `.va` 头写明 "stub, not modeled"；`ignore` = 无角色引脚原样接线。有角色源的引脚默认 `model`；没有角色源的引脚要先右键指定角色，工具往网表插一个约定源。Plan 只为 `model` 端口出 run，这就是最小仿真集的实际落点。
 
 `corners` 的高级写法：复合角按 include 文件分别指定 section，例如 `{"MOSff_RCss": {"toplevel.scs": "ff", "rc.scs": "ss"}}`。简单写法 `["tt","ss"]` 时所有带 `section=` 的 include 行统一替换。
 
