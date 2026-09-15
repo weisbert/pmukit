@@ -1,0 +1,1383 @@
+{
+  "bench": {
+    "care_up_to_hz": 1000000000.0,
+    "corners": [
+      "tt"
+    ],
+    "iload_a": 0.000121,
+    "iload_off_a": 1.21e-05,
+    "temps_c": [
+      25.0,
+      85.0
+    ],
+    "testbench": "pmukit.verify.regression.testbench(cell, lib)",
+    "vin_v": 1.05,
+    "vset_codes": [
+      0
+    ]
+  },
+  "created": "2026-09-15T17:35:30Z",
+  "engine": "spectre_ssh",
+  "engine_note": "spectre 18.1.0.077",
+  "kind": "pmukit.regression/1",
+  "limits": {
+    "EN ramp % RMS": {
+      "green": 15.0,
+      "unit": "%",
+      "yellow": 40.0
+    },
+    "I-V % of plateau RMS": {
+      "green": 1.0,
+      "unit": "%",
+      "yellow": 3.0
+    },
+    "In dB RMS": {
+      "green": 2.0,
+      "unit": "dB",
+      "yellow": 6.0
+    },
+    "PSRR dB RMS": {
+      "green": 1.0,
+      "unit": "dB",
+      "yellow": 3.0
+    },
+    "Sv dB RMS": {
+      "green": 2.0,
+      "unit": "dB",
+      "yellow": 6.0
+    },
+    "load-step droop % error": {
+      "green": 10.0,
+      "unit": "%",
+      "yellow": 25.0
+    },
+    "vout % RMS": {
+      "green": 0.5,
+      "unit": "%",
+      "yellow": 2.0
+    },
+    "|Y| dB RMS": {
+      "green": 1.0,
+      "unit": "dB",
+      "yellow": 3.0
+    },
+    "|Zout| dB RMS": {
+      "green": 1.0,
+      "unit": "dB",
+      "yellow": 3.0
+    },
+    "|gdd| dB RMS": {
+      "green": 1.0,
+      "unit": "dB",
+      "yellow": 3.0
+    }
+  },
+  "pmukit_version": "0.1.0",
+  "spec_sha": "0bf95cf70955",
+  "tolerance": {
+    "atol_fraction_of_green_limit": 0.02,
+    "rtol": 0.25,
+    "rule": "a block regresses when its GRADE BAND gets worse, when it stops being fitted at all, or when its score exceeds max(base * (1 + rtol), base + atol)."
+  },
+  "variants": {
+    "ldo_classab": {
+      "blocks": {
+        "vout/dc": {
+          "band": "green",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.004381133627051348
+        },
+        "vout/load_en": {
+          "band": "red",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 30.290609310556793
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "white",
+            "flicker"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.9950337724621633
+        },
+        "vout/psrr": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "G_i[2]",
+            "pole_i_hz[2]",
+            "G_i[1]",
+            "pole_i_hz[1]"
+          ],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.19283603969051782
+        },
+        "vout/zout": {
+          "band": "green",
+          "cells": 8,
+          "flagged": [],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.5732159437247735
+        }
+      },
+      "cell": "ldo_classab",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": "a class-AB push-pull output stage. Small signal is base-like and should fit; the LARGE-signal droop and recovery are asymmetric in a way a symmetric linear model cannot reproduce.",
+      "library": "ldo_classab.scs",
+      "notes": [],
+      "runs": {
+        "cpu_seconds": 6.026,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    },
+    "ldo_gt": {
+      "blocks": {
+        "vout/dc": {
+          "band": "green",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.002066037276262557
+        },
+        "vout/load_en": {
+          "band": "yellow",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 19.820970226709708
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "flicker",
+            "amp_i[4]"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 1.3982643028384667
+        },
+        "vout/psrr": {
+          "band": "green",
+          "cells": 8,
+          "flagged": [],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.22392630998412072
+        },
+        "vout/zout": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "Rpl"
+          ],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.43448385379361015
+        }
+      },
+      "cell": "ldo_gt",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": null,
+      "library": "ldo_gt.scs",
+      "notes": [],
+      "runs": {
+        "cpu_seconds": 6.114,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    },
+    "ldo_pzmig": {
+      "blocks": {
+        "vout/dc": {
+          "band": "green",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.002066037276262557
+        },
+        "vout/load_en": {
+          "band": "red",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 29.724209598662576
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "flicker"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 3.6469137657930935
+        },
+        "vout/psrr": {
+          "band": "green",
+          "cells": 8,
+          "flagged": [],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.18793485303768598
+        },
+        "vout/zout": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "Rpl"
+          ],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.6443342452941025
+        }
+      },
+      "cell": "ldo_pzmig",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": "a pole-zero pair that MIGRATES with load, which is the load-scheduling assumption under stress rather than the block form.",
+      "library": "ldo_pzmig.scs",
+      "notes": [],
+      "runs": {
+        "cpu_seconds": 6.037,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    },
+    "ldo_qbow": {
+      "blocks": {
+        "vout/dc": {
+          "band": "green",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.002066037276262557
+        },
+        "vout/load_en": {
+          "band": "red",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 91.42127438057666
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "flicker",
+            "amp_i[4]"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 1.5550161539101248
+        },
+        "vout/psrr": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "pc_zero"
+          ],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 1.8430252578962838
+        },
+        "vout/zout": {
+          "band": "red",
+          "cells": 8,
+          "flagged": [
+            "Rpl",
+            "La"
+          ],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 3.450714973201876
+        }
+      },
+      "cell": "ldo_qbow",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": "a mid-band bow on |Zout| that no single resonance reproduces -- the shape gate under stress.",
+      "library": "ldo_qbow.scs",
+      "notes": [],
+      "runs": {
+        "cpu_seconds": 6.889,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    },
+    "ldo_swbleed": {
+      "blocks": {
+        "vout/dc": {
+          "band": "green",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.002066037276262557
+        },
+        "vout/load_en": {
+          "band": "yellow",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 17.398210491168644
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "flicker"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 1.4345584691290771
+        },
+        "vout/psrr": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "pole_i_hz[2]"
+          ],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.33920621341057783
+        },
+        "vout/zout": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "Rpl"
+          ],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 2.0072944984175027
+        }
+      },
+      "cell": "ldo_swbleed",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": "a load-threshold MODE SWITCH: past ~170 uA a shunt damper switches in a second resonant branch, so the Zout topology itself CHANGES with load. The parameter schedule is continuous in ln(iload) and cannot step.",
+      "library": "ldo_swbleed.scs",
+      "notes": [],
+      "runs": {
+        "cpu_seconds": 6.231,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    },
+    "ldo_v10_3lc": {
+      "blocks": {
+        "vout/dc": {
+          "band": "green",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.002066037276262557
+        },
+        "vout/load_en": {
+          "band": "red",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 96.23710626388106
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "flicker"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 4.3988982419378555
+        },
+        "vout/psrr": {
+          "band": "red",
+          "cells": 8,
+          "flagged": [
+            "pole_i_hz[1]"
+          ],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 5.364323573775761
+        },
+        "vout/zout": {
+          "band": "red",
+          "cells": 8,
+          "flagged": [
+            "Rpl",
+            "La"
+          ],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 11.191837621139886
+        }
+      },
+      "cell": "ldo_v10_3lc",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": "a three-stage decoupling ladder puts THREE-plus resonances on |Zout| while the Zout block realizes at most two R-L branches. The un-modeled resonance is a documented ORDER floor; this is the worst-scoring variant by design.",
+      "library": "ldo_v10_3lc.scs",
+      "notes": [],
+      "runs": {
+        "cpu_seconds": 6.658,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    },
+    "ldo_v1_nmos": {
+      "blocks": {
+        "vout/dc": {
+          "band": "green",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.013884388846376603
+        },
+        "vout/load_en": {
+          "band": "yellow",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 3.5070759606078674
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "flicker"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 1.3440660970391483
+        },
+        "vout/psrr": {
+          "band": "green",
+          "cells": 8,
+          "flagged": [],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.6564365121527768
+        },
+        "vout/zout": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "Ra",
+            "La",
+            "Rpl"
+          ],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 2.017200778832967
+        }
+      },
+      "cell": "ldo_v1_nmos",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": "an NMOS source follower with a deliberately LOW loop gain, so the rail sits about 5 % off its divider target. That offset is the circuit, not the model.",
+      "library": "ldo_v1_nmos.scs",
+      "notes": [
+        "vout (tt/25.0C/vset0): the fitted feedthrough capacitance spreads 27 % across the load points (78.9-102.4 fF). A real feedthrough cap is load-independent, so treat this one as unconfirmed.",
+        "vout (tt/85.0C/vset0): the fitted feedthrough capacitance spreads 28 % across the load points (79.5-104.4 fF). A real feedthrough cap is load-independent, so treat this one as unconfirmed."
+      ],
+      "runs": {
+        "cpu_seconds": 6.108,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    },
+    "ldo_v2_capless": {
+      "blocks": {
+        "vout/dc": {
+          "band": "green",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.004276375405022386
+        },
+        "vout/load_en": {
+          "band": "yellow",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 4.017234360501576
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "flicker",
+            "white",
+            "amp_i[4]"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 1.9326672003709604
+        },
+        "vout/psrr": {
+          "band": "green",
+          "cells": 8,
+          "flagged": [],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.3889042741992929
+        },
+        "vout/zout": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "Rpl"
+          ],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.4798443420368909
+        }
+      },
+      "cell": "ldo_v2_capless",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": "cap-less: the output capacitor is nearly invisible behind its ESR, so Cout/ESR are underdetermined. Expect the identifiability gate to fire; a joint least-squares that pretends to pin them is REJECTED (it diverges).",
+      "library": "ldo_v2_capless.scs",
+      "notes": [],
+      "runs": {
+        "cpu_seconds": 5.966,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    },
+    "ldo_v3_miller": {
+      "blocks": {
+        "vout/dc": {
+          "band": "yellow",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 1.620148178519761
+        },
+        "vout/load_en": {
+          "band": "red",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 446.3683062518377
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "white",
+            "flicker"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 2.079491817624306
+        },
+        "vout/psrr": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "G_i[0]",
+            "G_i[2]",
+            "pc_zero",
+            "pc_w0",
+            "G_i[1]",
+            "pole_i_hz[1]"
+          ],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.416038667496902
+        },
+        "vout/zout": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "Rpl",
+            "Lb"
+          ],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.9070071642541683
+        }
+      },
+      "cell": "ldo_v3_miller",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": "Miller-compensated, and its ground-truth Zout is genuinely NON-PASSIVE (Re(Z) < 0 over part of the band). A passive-by-construction RLC cannot reproduce that: the residual is a documented representational FLOOR.",
+      "library": "ldo_v3_miller.scs",
+      "notes": [],
+      "runs": {
+        "cpu_seconds": 6.188,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    },
+    "ldo_v4_ffpsrr": {
+      "blocks": {
+        "vout/dc": {
+          "band": "green",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.002066037276265688
+        },
+        "vout/load_en": {
+          "band": "yellow",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 6.588600437334535
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "flicker"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 1.1449461939221297
+        },
+        "vout/psrr": {
+          "band": "red",
+          "cells": 8,
+          "flagged": [
+            "pole_i_hz[1]",
+            "pole_i_hz[2]",
+            "pc_zero",
+            "G_i[1]",
+            "G_i[2]",
+            "pc_w0",
+            "pc_q",
+            "pc_gain"
+          ],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 3.973815493377395
+        },
+        "vout/zout": {
+          "band": "green",
+          "cells": 8,
+          "flagged": [],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.10046257999827522
+        }
+      },
+      "cell": "ldo_v4_ffpsrr",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": "a feed-forward PSRR path makes the supply transfer NON-MINIMUM-PHASE. It needs the signed complex-conjugate second-order section; historically this was the dominant system-level failure that block metrics masked.",
+      "library": "ldo_v4_ffpsrr.scs",
+      "notes": [],
+      "runs": {
+        "cpu_seconds": 6.116,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    },
+    "ldo_v5_spur": {
+      "blocks": {
+        "vout/dc": {
+          "band": "green",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.002066037276262557
+        },
+        "vout/load_en": {
+          "band": "yellow",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 13.021164148672678
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "flicker",
+            "amp_i[4]"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 1.3982643028384667
+        },
+        "vout/psrr": {
+          "band": "green",
+          "cells": 8,
+          "flagged": [],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.22392630998412072
+        },
+        "vout/zout": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "Rpl"
+          ],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.43448385379361015
+        }
+      },
+      "cell": "ldo_v5_spur",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": "carries deterministic intrinsic SPUR tones. pmukit's block list has no spur block, so the tones ride in the ground truth the rail blocks are fitted to.",
+      "library": "ldo_v5_spur.scs",
+      "notes": [],
+      "runs": {
+        "cpu_seconds": 7.532,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    },
+    "ldo_v6_spur2": {
+      "blocks": {
+        "vout/dc": {
+          "band": "green",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.002066037276262557
+        },
+        "vout/load_en": {
+          "band": "red",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 31.63295384129684
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "flicker",
+            "amp_i[4]"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 1.3982643028384667
+        },
+        "vout/psrr": {
+          "band": "green",
+          "cells": 8,
+          "flagged": [],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.22392630998412072
+        },
+        "vout/zout": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "Rpl"
+          ],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.43448385379361015
+        }
+      },
+      "cell": "ldo_v6_spur2",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": "two INCOMMENSURATE spur tones, the multi-tone stress. Same caveat as ldo_v5_spur, with two fundamentals instead of one.",
+      "library": "ldo_v6_spur2.scs",
+      "notes": [],
+      "runs": {
+        "cpu_seconds": 7.407,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    },
+    "ldo_v7_esl": {
+      "blocks": {
+        "vout/dc": {
+          "band": "green",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.002066037276262557
+        },
+        "vout/load_en": {
+          "band": "yellow",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 15.983960226475356
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "flicker",
+            "amp_i[4]"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 1.405124325123299
+        },
+        "vout/psrr": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "pole_i_hz[0]",
+            "pole_i_hz[1]",
+            "pole_i_hz[2]",
+            "pc_zero",
+            "pc_q"
+          ],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.45964696916085607
+        },
+        "vout/zout": {
+          "band": "red",
+          "cells": 8,
+          "flagged": [
+            "Rpl"
+          ],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 3.0741867426327096
+        }
+      },
+      "cell": "ldo_v7_esl",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": "the output cap has a series ESL, so |Zout| dips at the cap's self-resonance and then RISES inductively above it. The Zout block has no series-output-inductance term, so the HF tail is a MODEL-FORM gap -- and it is invisible below 100 MHz, which is why this suite sweeps to 1 GHz.",
+      "library": "ldo_v7_esl.scs",
+      "notes": [],
+      "runs": {
+        "cpu_seconds": 6.148,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    },
+    "ldo_v8_dlc": {
+      "blocks": {
+        "vout/dc": {
+          "band": "green",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.002066037276262557
+        },
+        "vout/load_en": {
+          "band": "red",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 65.57919120548665
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "flicker",
+            "amp_i[4]"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 1.4405982523709329
+        },
+        "vout/psrr": {
+          "band": "red",
+          "cells": 8,
+          "flagged": [
+            "G_i[1]",
+            "G_i[2]",
+            "pole_i_hz[1]",
+            "pole_i_hz[2]",
+            "pc_zero"
+          ],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 3.745860475010556
+        },
+        "vout/zout": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "Rpl"
+          ],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 1.9305186989407432
+        }
+      },
+      "cell": "ldo_v8_dlc",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": "a double-LC PI output network: the loop senses the on-die node while the measurement is at the pin, so |Zout| carries a deep series-resonance NOTCH above the loop resonance. Also an HF feature the in-band score cannot see.",
+      "library": "ldo_v8_dlc.scs",
+      "notes": [],
+      "runs": {
+        "cpu_seconds": 6.304,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    },
+    "ldo_v9_vldo": {
+      "blocks": {
+        "vout/dc": {
+          "band": "green",
+          "cells": 4,
+          "flagged": [],
+          "metric": "vout % RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.008230424019847473
+        },
+        "vout/load_en": {
+          "band": "yellow",
+          "cells": 2,
+          "flagged": [
+            "iaV"
+          ],
+          "metric": "load-step droop % error",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "ls",
+          "worst": 7.994647154207393
+        },
+        "vout/no_sink": {
+          "band": "green",
+          "cells": 1,
+          "flagged": [],
+          "metric": "",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": null
+        },
+        "vout/noise": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "flicker",
+            "amp_i[5]"
+          ],
+          "metric": "Sv dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 1.487517886530698
+        },
+        "vout/psrr": {
+          "band": "green",
+          "cells": 8,
+          "flagged": [],
+          "metric": "PSRR dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.11415666748591813
+        },
+        "vout/zout": {
+          "band": "yellow",
+          "cells": 8,
+          "flagged": [
+            "Rpl"
+          ],
+          "metric": "|Zout| dB RMS",
+          "missing_cells": 0,
+          "port_type": "rail",
+          "tier": "hb",
+          "worst": 0.008869116109429717
+        }
+      },
+      "cell": "ldo_v9_vldo",
+      "engine": "spectre_ssh",
+      "engine_note": "spectre 18.1.0.077",
+      "known_hard": "only ~50 mV of dropout headroom, so the pass device sits in deep triode. Small signal is still fittable and DOES fit here; the defect is large signal, and the correct outcome is a NARROWER validity envelope rather than a worse fit. CALIBRATION NOTE: this bench's load step is 121 uA to 12 uA, which is far too small to push the device into dropout, so the large-signal block scores WELL in this baseline. That is the bench being gentle, not the defect being absent -- the fixture's own numbers come from a milliamp-class step.",
+      "library": "ldo_v9_vldo.scs",
+      "notes": [],
+      "runs": {
+        "cpu_seconds": 6.151,
+        "done": 40,
+        "failed": 0,
+        "planned": 40
+      },
+      "status": "ok"
+    }
+  }
+}

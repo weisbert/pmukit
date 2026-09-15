@@ -88,7 +88,7 @@ def _resolve_fit(project: str, derived: DerivedConfig, fit, root):
     return fit_mod.fit_project(ds_mod.Dataset.open(ds_dir), derived)
 
 
-def _envelope(d: DerivedConfig, rails, corners, ls_default_on, notes) -> Envelope:
+def _envelope(d: DerivedConfig, rails, corners, ls_default_on, notes, ports=None) -> Envelope:
     """The validity envelope: what was actually characterized, not what was configured."""
     loads = {}
     for p in rails:
@@ -108,6 +108,11 @@ def _envelope(d: DerivedConfig, rails, corners, ls_default_on, notes) -> Envelop
         vset_codes=[int(c) for c in ((d.vset or {}).get("codes") or []) if c is not None],
         ls_default_on=list(ls_default_on),
         notes=list(notes),
+        # Every characterized port, rails AND biases AND the EN ramp's ports. Without this the
+        # envelope's "was this port characterized?" question is answered from the load map, which
+        # only rails appear in -- and every fully characterized bias row came out RED.
+        ports=sorted(set(ports) if ports else
+                     (set(rails) | set(d.biases or {}) | set(d.en or {}))),
     )
 
 
@@ -176,7 +181,8 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
             "Large-signal load-event terms are OFF by default on " + ", ".join(off) +
             " (instance parameter load_en_<rail>); the `ls` tier may only default on after the "
             "HB first-step residual check, which lives in the verify milestone.")
-    envelope = _envelope(d, rails_seen, corner_list, ls_default_on, env_notes)
+    envelope = _envelope(d, rails_seen, corner_list, ls_default_on, env_notes,
+                         ports=(set(rails_seen) | set(d.biases or {}) | set(d.en or {})))
     writer.write_scs(provenance=prov,
                      extra_lines=scs.extra_lines(modules, library=f"PMU_{project}",
                                                  ports_by_corner=ports_by_corner,
