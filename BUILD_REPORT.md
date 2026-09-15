@@ -461,3 +461,60 @@ $ pmukit fit demo
 `gdd/(1+s/wp) + jωC` 仍然跟不上。要做到轨那种零点几 dB，得把轨 PSRR 的有理式机制
 （SK 拟合 + 复极点段）也用到偏置传递上 —— 那是个更大的改动，**没有在凌晨做**。
 明早如果真件的偏置 PSRR 是关键量，这是第一件该做的事。
+
+## M7 — 发射器（**只用 HB 安全原语**，三个角在 VM 真 Spectre 上 0 error）
+
+`pmukit/emit/{primitives,va,scs,lint}.py` + `__init__.py`。
+
+**验收 1 —— 真 Spectre 编译**（`spectre -64`，在 scratch 目录编译副本）：
+```
+[tt] spectre completes with 0 errors, 0 warnings, and 4 notices.
+[ss] spectre completes with 0 errors, 0 warnings, and 4 notices.
+[ff] spectre completes with 0 errors, 0 warnings, and 4 notices.
+```
+再按**消费者的用法**驱动交付的 section 库 —— `include "PMU_demo_pmu.scs" section=ss` +
+`vset=3 load_en_VDD0P8_A=1` —— 同样 0 error / 0 warning，DC 3 次迭代收敛。
+
+**验收 2 —— AC 保真度（仿真 vs 拟合器自己的 `predict()`，10 Hz–2 GHz）**：
+
+| 角 | 端口 | 块 | max \|dB\| | max \|deg\| |
+|---|---|---|---|---|
+| tt | VDD0P8_A | zout | 0.00004 | 0.0001 |
+| tt | VDD0P8_A | psrr | 0.00044 | 0.5729 |
+| tt | VDD0P8_B | psrr | **0.00497** | 0.5729 |
+| tt | IB_PTAT | yout | 0.00003 | 0.0002 |
+| tt | 轨/偏置 | dc(T) −40..125 °C | 0.00000 (µV / pA) | — |
+| ss / ff | | | 与 tt 五位小数一致 | |
+
+**全角全块最差 0.00497 dB，验收线是 ≤ 0.01 dB —— 过。** 残留相位是电源 DC 跟踪器在扫频第一个点
+（10 Hz 处 0.573°，按 1/f 衰减）的高通，不是反相。
+
+**验收 3 —— 数值条件 lint 会响，也会闭嘴**（2 GHz，16 次谐波）：
+```
+PMU_demo_pmu_tt:                   worst node admittance range 1.531e+05 (limit 1e+06) -- PASS
+PMU_demo_pmu_tt (hb_robust=False): worst range 2.399e+10                -- FAIL: 2 finding(s)
+  [FAIL] element_extreme: inductor VDD0P8_A.psrr.Lpc = 8890 H, |Y| = 8.951e-15 S -- SYNTHESIZED
+```
+那个 **8890 H 不是手塞进去的数**：测试挑 `pc_w0 = 1/sqrt(8890·1pF)`，让被否决的 R-L-C 实现**自己推出来**。
+gm-C 实现 1.5e5 vs R-L-C 2.4e10 —— 判别得干干净净。
+
+**验收 4 —— PSRR 符号**：仿真 `−11.8341 dB / +81.452°` vs 拟合 `−11.8341 dB / +81.452°`（100 kHz）。
+接反了会差 180°。
+
+**验收 5 —— hybrid 噪声**（VM 上真跑 `.noise`）：100 Hz 处 **3.899 µV/√Hz** vs 解析 3.899 µV/√Hz
+（**+0.0009 dB**），全带最差 0.0103 dB，1/f 尾从 100 Hz 到 1 MHz 有 76.9×。
+**同一条轨按老的漏发方式（只发 Norton 白噪）读出来是 1.217 pV/√Hz —— 低 3.2e6 倍。**
+那就是老仓那个"1/f 尾整个消失"的 bug，这次是被量出来的。
+
+**验收 6 —— 禁用构造扫描**：没有 `laplace`、没有 `$table_model`、发射出的电感全部 < 1 H、
+没有裸 `**`、每个 `pow()` 的底都做了 sqrt 下限、没有对称的 `|vhi−Vo|` 门、
+**没有一个纯电容节点缺 `Gleak`**。`Netlist.text()` 在返回前重扫一遍并抛错 —— 以后有人手滑也挡得住。
+
+**白名单 18 条原语，每条一行写明"不用它会炸成什么样"**，整份也印进每个 `hb_check.txt`。
+
+**关于 `flicker_noise()`（我在开工单里问的那个判断题）——代理给了实测证据**：
+同一条 hybrid 轨，真 Spectre `.noise`，`bank`（默认）全带最差 **0.0103 dB / 48 个内部节点**；
+`native`（一行 `flicker_noise()`）**0.0002 dB / 26 个节点**。准 50 倍、少 22 个节点。
+**但默认仍然是 `bank`** —— `.noise` 是线性解，唯一没验的是它在**真正的耦合振荡器 pnoise/hbnoise**
+里、在周期大信号调制下的行为是否和 Lorentzian 组一致。那是唯一还需要盒子的一件事；
+`flicker_mode="native"` 已经实现好了，等那个证据到位再换默认值。
