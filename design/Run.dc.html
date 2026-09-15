@@ -1,0 +1,182 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap">
+  <style>
+body{margin:0;background:#f7f6f3;color:#1c1b18;font-family:'IBM Plex Sans',system-ui,'Segoe UI',sans-serif;font-size:13px;line-height:1.45}
+a{color:#1f6f9f}a:hover{color:#16506f}
+.mono{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace}
+.app{width:1440px;height:900px;display:flex;flex-direction:column;background:#f7f6f3;overflow:hidden;box-sizing:border-box}
+.nav{height:48px;display:flex;align-items:center;gap:8px;padding:0 20px;background:#ffffff;border-bottom:1px solid #dedbd3;flex:none}
+.brand{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-weight:600;font-size:14px;letter-spacing:.02em}
+.proj{color:#5d5a53;font-size:12.5px;padding-left:12px;border-left:1px solid #dedbd3;margin-left:4px}
+.steps{display:flex;gap:2px;margin-left:28px}
+.step{display:flex;align-items:center;gap:8px;padding:5px 12px;border-radius:4px;color:#8a867d;font-size:12.5px}
+.step.cur{background:#e8f1f7;color:#1f6f9f;font-weight:600}
+.step .n{width:18px;height:18px;border-radius:50%;border:1px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:11px;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.step.done{color:#1c1b18}.step.done .n{background:#1c1b18;color:#fff;border-color:#1c1b18}
+.navr{margin-left:auto;display:flex;gap:16px;color:#8a867d;font-size:12px}
+.main{flex:1;display:flex;gap:16px;padding:16px 20px;min-height:0}
+.col{display:flex;flex-direction:column;gap:16px;min-height:0}
+.panel{background:#ffffff;border:1px solid #dedbd3;border-radius:4px;display:flex;flex-direction:column;min-height:0}
+.ph{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 14px;border-bottom:1px solid #ebe8e1;font-weight:600;font-size:13px;flex:none}
+.ph .sub{font-weight:400;color:#8a867d;font-size:12px}
+.pb{padding:12px 14px;overflow:auto;flex:1;min-height:0}
+table.t{width:100%;border-collapse:collapse;font-size:12.5px}
+.t th{text-align:left;font-weight:600;color:#5d5a53;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid #dedbd3;white-space:nowrap}
+.t td{padding:6px 8px;border-bottom:1px solid #ebe8e1;vertical-align:middle}
+.t tr.sel td{background:#e8f1f7}
+.t tr.click{cursor:pointer}.t tr.click:hover td{background:#f3f1ec}
+.t tr.sel.click:hover td{background:#e8f1f7}
+.num{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.id{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;white-space:nowrap}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:1px 7px;border-radius:3px;font-size:11px;font-weight:600;border:1px solid;white-space:nowrap;line-height:16px}
+.b-ok{color:#2f7d4f;border-color:#bfe0cb;background:#eef8f1}
+.b-warn{color:#b7791f;border-color:#ecd9a8;background:#fbf5e6}
+.b-bad{color:#b3362e;border-color:#efc2bd;background:#fdeeec}
+.b-mute{color:#8a867d;border-color:#dedbd3;background:#f3f1ec}
+.b-acc{color:#1f6f9f;border-color:#bcd7e8;background:#e8f1f7}
+.b-ink{color:#1c1b18;border-color:#cfccc4;background:#f3f1ec}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:4px;border:1px solid #cfccc4;background:#ffffff;color:#1c1b18;font:inherit;font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap}
+.btn:hover{background:#f3f1ec}
+.btn.pri{background:#1f6f9f;border-color:#1f6f9f;color:#ffffff}.btn.pri:hover{background:#16506f}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.sm{height:26px;padding:0 10px;font-size:12px}
+.chip{display:inline-flex;align-items:center;height:24px;padding:0 10px;border-radius:12px;border:1px solid #cfccc4;background:#ffffff;font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.chip.on{background:#1c1b18;color:#ffffff;border-color:#1c1b18}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:5px 12px;font-size:12.5px}
+.kv .k{color:#5d5a53}
+.field{display:flex;flex-direction:column;gap:5px}
+.lbl{font-size:10.5px;font-weight:600;color:#5d5a53;letter-spacing:.05em;text-transform:uppercase}
+.inp{height:30px;border:1px solid #cfccc4;border-radius:4px;padding:0 8px;font:inherit;background:#ffffff;box-sizing:border-box}
+.hint{color:#8a867d;font-size:12px}
+.foot{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#ffffff;border-top:1px solid #dedbd3;flex:none}
+.stat{display:flex;flex-direction:column;gap:2px;padding:0 18px 0 0;margin-right:18px;border-right:1px solid #ebe8e1}
+.stat:last-child{border-right:0}
+.stat .v{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:20px;font-weight:600;line-height:1.1}
+.stat .l{font-size:11px;color:#8a867d;text-transform:uppercase;letter-spacing:.05em}
+.callout{border:1px solid #dedbd3;border-radius:4px;padding:10px 12px;background:#faf9f6;font-size:12.5px}
+.callout.warn{border-color:#ecd9a8;background:#fbf5e6}
+.callout.bad{border-color:#efc2bd;background:#fdeeec}
+.trust{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.trust .box{border:1px solid #dedbd3;border-radius:4px;padding:10px 12px;background:#ffffff}
+.trust .h{font-size:10.5px;font-weight:600;color:#5d5a53;letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px}
+.code{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;background:#1c1b18;color:#e9e6de;padding:10px 12px;border-radius:4px;white-space:pre;overflow:auto;line-height:1.5}
+.bar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:#ebe8e1}
+.seg{height:100%}
+.grid{display:grid;gap:4px}
+.cell{height:30px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid transparent;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cell.sel{outline:2px solid #1c1b18;outline-offset:1px}
+.c-ok{background:#eef8f1;color:#2f7d4f;border-color:#bfe0cb}
+.c-warn{background:#fbf5e6;color:#b7791f;border-color:#ecd9a8}
+.c-bad{background:#fdeeec;color:#b3362e;border-color:#efc2bd}
+.c-mute{background:#f3f1ec;color:#8a867d;border-color:#dedbd3}
+.c-head{background:transparent;color:#5d5a53;font-size:10.5px;cursor:default;font-weight:600;letter-spacing:.04em}
+.legend{display:flex;gap:14px;font-size:12px;color:#5d5a53;align-items:center}
+.sw{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
+</style>
+</helmet>
+<div class="app">
+<div class="nav"><span class="brand">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step done"><span class="n">1</span><span>New</span></div><div class="step done"><span class="n">2</span><span>Plan</span></div><div class="step cur"><span class="n">3</span><span>Run</span></div><div class="step"><span class="n">4</span><span>Model</span></div><div class="step"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span></div></div>
+
+<div class="main">
+  <div class="col" style="flex:1">
+    <div class="panel" style="flex:none">
+      <div class="pb" style="padding:14px 18px;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex">
+          <div class="stat"><span class="v">{{ c.done }}</span><span class="l">done</span></div>
+          <div class="stat"><span class="v" style="color:#1f6f9f">{{ c.running }}</span><span class="l">running</span></div>
+          <div class="stat"><span class="v">{{ c.queued }}</span><span class="l">queued</span></div>
+          <div class="stat"><span class="v" style="color:#b3362e">{{ c.failed }}</span><span class="l">failed</span></div>
+          <div class="stat"><span class="v" style="color:#8a867d">{{ c.cached }}</span><span class="l">cached</span></div>
+          <div class="stat"><span class="v">{{ c.cpuh }}</span><span class="l">CPU-h used</span></div>
+          <div style="margin-left:auto;align-self:center;display:flex;gap:8px"><span class="hint">ETA {{ c.eta }}</span><button class="btn sm" onClick="{{ retryAll }}"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M13 8a5 5 0 1 1-1.5-3.6"></path><path d="M13 2.5v3h-3"></path></svg> Retry failed</button><button class="btn sm">Pause queue</button></div>
+        </div>
+        <div class="bar"><div class="seg" style="background:#2f7d4f;width:{{ w.done }}%"></div><div class="seg" style="background:#1f6f9f;width:{{ w.running }}%"></div><div class="seg" style="background:#b3362e;width:{{ w.failed }}%"></div><div class="seg" style="background:#bdb9b0;width:{{ w.cached }}%"></div></div>
+      </div>
+    </div>
+    <div class="panel" style="flex:1">
+      <div class="ph"><span>Ledger</span><div style="display:flex;gap:6px"><sc-for list="{{ filters }}" as="f" hint-placeholder-count="4"><span class="chip {{ f.cls }}" onClick="{{ f.pick }}">{{ f.name }}</span></sc-for></div></div>
+      <div class="pb" style="padding:0">
+        <table class="t">
+          <thead><tr><th>Run</th><th>Cell</th><th>Analysis</th><th>Status</th><th class="num" style="text-align:right">Elapsed</th><th class="num" style="text-align:right">CPU-h</th><th></th></tr></thead>
+          <tbody>
+            <sc-for list="{{ rows }}" as="r" hint-placeholder-count="12">
+              <tr class="click {{ r.cls }}" onClick="{{ r.select }}"><td class="id">{{ r.id }}</td><td class="mono" style="font-size:12px">{{ r.cell }}</td><td>{{ r.an }}</td><td><span class="badge {{ r.bcls }}">{{ r.status }}</span></td><td class="num">{{ r.el }}</td><td class="num">{{ r.cpu }}</td><td><sc-if value="{{ r.isFailed }}" hint-placeholder-val="{{ false }}"><button class="btn sm" onClick="{{ r.retry }}"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M13 8a5 5 0 1 1-1.5-3.6"></path><path d="M13 2.5v3h-3"></path></svg> Retry</button></sc-if></td></tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col" style="flex:0 0 420px">
+    <div class="panel" style="flex:1">
+      <div class="ph"><span>Run <span class="id">{{ sel.id }}</span></span><span class="badge {{ sel.bcls }}">{{ sel.status }}</span></div>
+      <div class="pb" style="display:flex;flex-direction:column;gap:12px">
+        <div class="kv"><span class="k">Cell</span><span class="mono">{{ sel.cell }}</span><span class="k">Analysis</span><span>{{ sel.an }}</span><span class="k">Feeds</span><span class="mono">{{ sel.feeds }}</span><span class="k">Job</span><span class="mono">donau 48812903 · rf_short · 8 cpu</span><span class="k">Netlist</span><span class="mono">…/ss_125c_v3/{{ sel.id }}/input.scs</span><span class="k">PSF</span><span class="mono">{{ sel.psf }}</span></div>
+        <div><div class="lbl" style="margin-bottom:6px">Log tail</div><div class="code" style="height:300px">{{ sel.log }}</div></div>
+        <sc-if value="{{ sel.isFailed }}" hint-placeholder-val="{{ false }}"><div class="callout bad">Failed twice with the same message. If it fails again pmukit stops retrying and the fit proceeds with <b>tran_load_off.B @ ss/125 °C = NOT RUN</b>, flagged in the report.</div></sc-if>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="foot"><span class="hint">Runs write to <span class="mono">~/pmukit_data/demo_pmu/runs.sqlite</span> · closing this page does not stop the queue</span><button class="btn pri" disabled="{{ notDone }}">Fit model <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"></path></svg></button></div>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{}'>
+const ROWS = [{"id": "7c3e91a04bd2", "cell": "tt / 25 \u00b0C / 3", "an": "noise VDD0P8_A \u00b7 500 \u00b5", "status": "done", "el": "4m 12s", "cpu": "0.56"}, {"id": "b19f0c72e4a8", "cell": "ss / 125 \u00b0C / 3", "an": "ac \u00b7 inject AVDD1P0 \u00b7 2 m", "status": "running", "el": "1m 03s", "cpu": "\u2014"}, {"id": "e4d27a5c1f90", "cell": "ss / 125 \u00b0C / 3", "an": "tran \u00b7 load-EN B \u00b7 off", "status": "failed", "el": "12m 40s", "cpu": "1.69"}, {"id": "02aa8e6b7d31", "cell": "ff / \u221240 \u00b0C / 3", "an": "noise IB_CONST", "status": "running", "el": "0m 41s", "cpu": "\u2014"}, {"id": "5f6c1d9e2ab7", "cell": "tt / 25 \u00b0C / 3", "an": "dc_load VDD0P8_B", "status": "cached", "el": "\u2014", "cpu": "0.00"}, {"id": "a8e05b3c9d14", "cell": "ss / 25 \u00b0C / 3", "an": "ac \u00b7 inject VDD0P8_A \u00b7 100 \u00b5", "status": "done", "el": "3m 08s", "cpu": "0.42"}, {"id": "c73b2f8e6a05", "cell": "ff / 125 \u00b0C / 3", "an": "tran \u00b7 EN", "status": "queued", "el": "\u2014", "cpu": "\u2014"}, {"id": "d1e94a7f0c26", "cell": "tt / 125 \u00b0C / 3", "an": "noise VDD0P8_B \u00b7 4 m", "status": "done", "el": "5m 51s", "cpu": "0.78"}, {"id": "39f8c6b1e2d7", "cell": "ss / \u221240 \u00b0C / 3", "an": "dc_iv IB_PTAT", "status": "done", "el": "0m 22s", "cpu": "0.05"}, {"id": "6b2d0e9a4c83", "cell": "ff / 25 \u00b0C / 3", "an": "tran \u00b7 load-EN A \u00b7 on", "status": "queued", "el": "\u2014", "cpu": "\u2014"}, {"id": "f0a7c4d2b8e1", "cell": "ss / 125 \u00b0C / 3", "an": "tran \u00b7 load-EN B \u00b7 on", "status": "failed", "el": "12m 38s", "cpu": "1.68"}, {"id": "8e1b5f3a7d09", "cell": "tt / \u221240 \u00b0C / 3", "an": "dc_temp", "status": "done", "el": "1m 47s", "cpu": "0.24"}];
+const LOGS = {
+  failed: `alps 2026.03.hf1  -mt 8  -format ps
+tran: tstop=10u  step=2n (load-EN off, 2 m -> 20 u)
+  t=1.9998e-06  step reduced 128x at VDD0P8_B (dV/dt)
+  t=2.0011e-06  ERROR: timestep too small (1.2e-19)
+  convergence failure near IL_VDD0P8_B edge
+job FAILED  rc=1  12m 38s  peak mem 1.9 GB`,
+  running: `alps 2026.03.hf1  -mt 8  -format ps
+ac: 10 Hz -> 20 GHz  20 pts/dec  (acm_VS_AVDD1P0=1)
+  dc op converged in 214 iterations
+  ac sweep 41% ... 63% ... 78%`,
+  done: `alps 2026.03.hf1  -mt 8  -format ps
+noise: 10 Hz -> 100 MHz  oprobe=VDD0P8_A
+  dc op converged in 190 iterations
+  noise sweep complete (161 pts)
+  wrote psf/noise.noise  .simDone
+job DONE  rc=0  4m 12s  peak mem 1.4 GB`,
+  queued: `waiting for a rf_short slot (71 ahead)`,
+  cached: `identical run_id already in ledger (2026-09-14 18:02) -> reused`,
+};
+const BCLS = { done:'b-ok', running:'b-acc', failed:'b-bad', queued:'b-mute', cached:'b-mute' };
+class Component extends DCLogic {
+  constructor(p){ super(p); this.state = { rows: ROWS.map(r => ({...r})), sel: 'e4d27a5c1f90', filter: 'All', counts: {done:191, running:8, queued:71, failed:2, cached:10} }; }
+  componentDidMount(){ this.timer = setInterval(() => { const c = Object.assign({}, this.state.counts); if (c.queued > 0) { c.queued -= 1; c.done += 1; this.setState({counts:c}); } }, 1800); }
+  componentWillUnmount(){ clearInterval(this.timer); }
+  renderVals(){
+    const s = this.state, c = s.counts, total = 282;
+    const pct = k => (100 * c[k] / total).toFixed(1);
+    const rows = s.rows.filter(r => s.filter === 'All' || r.status === s.filter.toLowerCase()).map(r => ({ ...r,
+      cls: r.id === s.sel ? 'sel' : '', bcls: BCLS[r.status], isFailed: r.status === 'failed',
+      select: () => this.setState({sel: r.id}),
+      retry: (e) => { if (e && e.stopPropagation) e.stopPropagation(); const rows = s.rows.map(x => x.id === r.id ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.failed = Math.max(0, cc.failed - 1); cc.queued += 1; this.setState({rows, counts: cc}); } }));
+    const selRow = s.rows.find(r => r.id === s.sel) || s.rows[0];
+    const sel = { ...selRow, bcls: BCLS[selRow.status], isFailed: selRow.status === 'failed', log: LOGS[selRow.status],
+      feeds: selRow.an.startsWith('noise') ? 'noise block' : selRow.an.startsWith('ac') ? 'zout / psrr blocks' : selRow.an.startsWith('tran') ? 'load_en (large-signal)' : 'dc tables',
+      psf: selRow.status === 'done' || selRow.status === 'cached' ? '…/psf/' + selRow.id + '/' : '—' };
+    const filters = ['All','Running','Failed','Queued'].map(n => ({ name:n, cls: s.filter === n ? 'on' : '', pick: () => this.setState({filter:n}) }));
+    const cpuh = (c.done * 0.052).toFixed(1);
+    return { c: { ...c, cpuh, eta: c.queued > 0 ? Math.ceil(c.queued * 4.2 / 8) + ' min' : 'done' }, w: { done: pct('done'), running: pct('running'), failed: pct('failed'), cached: pct('cached') },
+      rows, sel, filters, notDone: c.queued > 0 || c.running > 0,
+      retryAll: () => { const rows = s.rows.map(x => x.status === 'failed' ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.queued += cc.failed; cc.failed = 0; this.setState({rows, counts: cc}); } };
+  }
+}
+
+</script>
+</body>
+</html>

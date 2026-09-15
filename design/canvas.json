@@ -1,0 +1,61 @@
+{
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "title": "1 · New project",
+      "x": 0,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "is_interactive": true
+    },
+    {
+      "file": "Plan.dc.html",
+      "title": "2 · Plan",
+      "x": 1540,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "is_interactive": true
+    },
+    {
+      "file": "Run.dc.html",
+      "title": "3 · Run",
+      "x": 3080,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "is_interactive": true
+    },
+    {
+      "file": "Model.dc.html",
+      "title": "4 · Model",
+      "x": 0,
+      "y": 1070,
+      "w": 1440,
+      "h": 900,
+      "is_interactive": true
+    },
+    {
+      "file": "Deliver.dc.html",
+      "title": "5 · Deliver",
+      "x": 1540,
+      "y": 1070,
+      "w": 1440,
+      "h": 900,
+      "is_interactive": true
+    }
+  ],
+  "annotations": [
+    {
+      "id": "journey",
+      "x": 3080,
+      "y": 1070,
+      "w": 520,
+      "text": "pmukit — the sub-block designer's journey.\nThe PMU is a black box to them. They bring one netlist built to the naming convention and answer three questions; everything else is derived and shown, never asked.\n\nAll data is synthetic (PMU_DEMO). Each screen is clickable on its own: load the sample netlist, untick a plan group, retry a failed run, click a grade cell, pick a file."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}
