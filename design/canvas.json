@@ -44,15 +44,24 @@
       "w": 1440,
       "h": 900,
       "is_interactive": true
+    },
+    {
+      "file": "Digest.dc.html",
+      "title": "4b · Copy for desk (from Model / Run)",
+      "x": 3080,
+      "y": 1070,
+      "w": 1440,
+      "h": 900,
+      "is_interactive": true
     }
   ],
   "annotations": [
     {
       "id": "journey",
-      "x": 3080,
-      "y": 1070,
-      "w": 520,
-      "text": "pmukit — the sub-block designer's journey.\nThe PMU is a black box to them. They bring one netlist built to the naming convention and answer three questions; everything else is derived and shown, never asked.\n\nAll data is synthetic (PMU_DEMO). Each screen is clickable on its own: load the sample netlist, untick a plan group, retry a failed run, click a grade cell, pick a file."
+      "x": 0,
+      "y": 2140,
+      "w": 620,
+      "text": "pmukit — the sub-block designer's journey.\nThe PMU is a black box to them. They bring one netlist built to the naming convention and answer three questions; everything else is derived and shown, never asked.\n\nAll data is synthetic (PMU_DEMO). Each screen is clickable on its own: load the sample netlist, untick a plan group, retry a failed run, click a grade cell, pick a file, change the digest budget.\n\n4b is reached from the Copy-for-desk buttons on Model and Run: the air-gap return channel (plain text through the relay, budgeted by priority, dropped blocks named)."
     }
   ],
   "launch": {
