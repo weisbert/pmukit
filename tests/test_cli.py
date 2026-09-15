@@ -293,3 +293,39 @@ def test_duplicate_ground_pins_do_not_collapse(capsys):
     pins = json.loads(capsys.readouterr().out)["pins"]
     grounds = [k for k, v in pins.items() if v["is_ground"]]
     assert len(grounds) == 3, grounds
+
+
+# ------------------------------------------------- `pmukit site`: which simulator this machine has
+def test_site_shows_the_engine_and_how_to_change_it(workspace, capsys):
+    run(["site"])
+    out = capsys.readouterr().out
+    assert "engine" in out and "spectre_ssh" in out
+    assert "donau_alps" in out                       # the box's engine is named
+    assert "PMUKIT_ENGINE" in out                    # and the env override
+
+
+def test_site_persists_a_change(workspace, capsys):
+    tmp, _nl = workspace
+    run(["site", "--engine", "donau_alps", "--queue", "short", "--cpus", "8"])
+    capsys.readouterr()
+    run(["--json", "site"])
+    d = json.loads(capsys.readouterr().out)
+    assert d["engine"] == "donau_alps" and d["queue"] == "short" and d["cpus"] == 8
+    assert (tmp / "data" / "site.json").exists()
+
+
+def test_site_is_not_part_of_a_project(workspace, capsys):
+    """Which simulator this machine can reach is a property of the MACHINE, not the project."""
+    tmp, nl = workspace
+    new_project(nl)
+    capsys.readouterr()
+    cfg = json.loads((tmp / "data" / "demo_pmu" / "config.json").read_text(encoding="utf-8"))
+    assert "engine" not in cfg and "queue" not in cfg
+    der = json.loads((tmp / "data" / "demo_pmu" / "derived.json").read_text(encoding="utf-8"))
+    assert "site" in der                             # recorded for provenance...
+    # ...but deliberately excluded from the hash, so the same characterization hashes the same
+    # on the desk and in the red zone
+    from pmukit.config import DerivedConfig
+    a = DerivedConfig.from_dict({**der, "site": {"engine": "spectre_ssh"}})
+    b = DerivedConfig.from_dict({**der, "site": {"engine": "donau_alps"}})
+    assert a.sha() == b.sha()

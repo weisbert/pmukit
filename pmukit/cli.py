@@ -249,6 +249,47 @@ def cmd_pins(a) -> int:
     return 0
 
 
+def cmd_site(a) -> int:
+    """Show or change the SITE configuration -- engine, queue, CPUs. Set once per install.
+
+    This is deliberately not part of a project: which simulator this machine can reach is a
+    property of the machine. The default (`spectre_ssh` to a VM) is a DESK default; on a submit
+    host it should be `donau_alps`, and on the simulator host itself an ssh-to-self is the wrong
+    answer -- which is exactly what `/api/machine` reports when it happens.
+    """
+    smod = _need("site", "site")
+    site = smod.SiteConfig.load()
+    changed = []
+    for name in ("engine", "queue", "ssh_host", "remote_workdir", "spectre_cmd",
+                 "project_account"):
+        val = getattr(a, name, None)
+        if val is not None:
+            setattr(site, name, val)
+            changed.append(f"{name}={val}")
+    if a.cpus is not None:
+        site.cpus = int(a.cpus)
+        changed.append(f"cpus={a.cpus}")
+    if changed:
+        site.validate() if hasattr(site, "validate") else None
+        path = site.save()
+        print(f"site updated ({', '.join(changed)}) -> {path}")
+    if a.json:
+        _out(site.to_dict(), True)
+        return 0
+    rows = [[k, v] for k, v in sorted(site.to_dict().items()) if k != "provenance"]
+    print(_table(rows, ["setting", "value"]))
+    print()
+    print(f"  engines: {', '.join(smod.ENGINES)}")
+    print("    spectre_ssh  run Spectre over ssh on another machine (the desk default)")
+    print("    donau_alps   submit to the Donau queue with ALPS (the box)")
+    print("    fake         analytic stand-in, no simulator -- for smoke tests only")
+    print("    dry_run      write the decks and the recipes, run nothing")
+    print(f"\n  Change it:  {PROG} site --engine donau_alps --queue short --cpus 8")
+    print(f"  Or per run: {PROG} run <project> --engine donau_alps")
+    print("  Environment overrides: PMUKIT_ENGINE, PMUKIT_SSH_HOST, PMUKIT_CPUS")
+    return 0
+
+
 def cmd_check(a) -> int:
     """Read a netlist and say whether it satisfies the convention -- before any project exists.
 
@@ -679,6 +720,16 @@ def build_parser() -> argparse.ArgumentParser:
                         "(repeatable)")
     p.add_argument("--note", help="what state the testbench was in (goes into provenance)")
     p.set_defaults(fn=cmd_new)
+
+    p = sub.add_parser("site", help="show or set this machine's simulator, queue and CPU count")
+    p.add_argument("--engine", help="spectre_ssh | donau_alps | fake | dry_run")
+    p.add_argument("--queue")
+    p.add_argument("--cpus", type=int)
+    p.add_argument("--ssh-host", dest="ssh_host")
+    p.add_argument("--remote-workdir", dest="remote_workdir")
+    p.add_argument("--spectre-cmd", dest="spectre_cmd")
+    p.add_argument("--account", dest="project_account", help="Donau -A account")
+    p.set_defaults(fn=cmd_site)
 
     p = sub.add_parser("check", help="does this netlist satisfy the convention? (creates nothing)")
     p.add_argument("netlist")

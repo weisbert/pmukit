@@ -546,3 +546,26 @@ $ pmukit deliver d3
   PMU_d3_tt.va:  //   stub VDD0P8_C: stub, not modeled -- ideal 0.8 V source, ground VSS_B
 ```
   不给就还是弱连 + 报告写明。**工具不编这个值。**
+
+## 最终装机彩排（含 emit + web 的完整代码，真 Linux）
+
+把当前代码重新打包（76 个文件 + 8 个轮子）→ scp 到 `ewave-vm` → `bash apply` → 在**装好的那一份**上跑完整链：
+
+```
+$ pmukit check .../input.scs --pmu-inst PMU_TOP        -> Convention OK
+$ pmukit new r ... --port VDD0P8_C=stub --stub VDD0P8_C=0.8
+$ pmukit plan r --submit && pmukit run r --engine fake
+$ pmukit fit r        -> fitted -> /home/yusheng/pmk_data/r/fit.json
+$ pmukit deliver r    -> envelope.json  grades.json  hb_check.json  hb_check.txt
+                         PMU_r.scs  PMU_r_tt.va  provenance.json  report.md
+$ pmukit ui --port 8801
+  pmukit 0.1.0 -- http://127.0.0.1:8801/     index: http 200, 128412 bytes
+  /api/projects -> 真项目 r                  /api/machine -> engine 探测如实报失败（见下）
+```
+
+⇒ **`git clone` → `bash apply` → `pmukit ui` → 走完整条链，在真 Linux 上验过了。**
+
+这一轮还顺手暴露了一脚：在**仿真机本机**上跑时，`/api/machine` 的 engine 探测失败 ——
+因为默认站点配置是 `spectre_ssh` 到 `ewave-vm`，也就是**让它 ssh 自己**。那是**桌面的**默认值。
+所以加了 `pmukit site`（看/改 engine、queue、cpus、账号），并把它写进首跑清单第 0 步：
+盒子上第一件事是 `pmukit site --engine donau_alps --queue short --cpus 8 --account <账号>`。
