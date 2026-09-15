@@ -216,7 +216,7 @@ NEW_BODY = f"""
               <span class="k">DC temp sweep</span><span class="mono">−40 → 125 °C step 5 (continuous T inside each corner)</span>
               <span class="k">Bias I-V sweep</span><span class="mono">0 → 1.0 V, 21 pts (compliance from VB_ dc)</span>
               <span class="k">Load-EN edge</span><span class="mono">2 ns (measured) · tstop set after the Zout fit</span>
-              <span class="k">Cells</span><span class="mono">3 corners × 3 temps × 1 VSET = 9</span>
+              <span class="k">Cells</span><span class="mono">{{{{ cellsText }}}}</span>
             </div>
           </sc-if>
         </div>
@@ -232,7 +232,7 @@ class Component extends DCLogic {
   constructor(p){ super(p); this.state = { loaded: false, adv: false,
     corners: ['tt','ss','ff'], cornersOn: {tt:true, ss:true, ff:true},
     temps: ['-40','25','125'], tempsOn: {'-40':true,'25':true,'125':true},
-    sw: {VDD0P8_A: true, VDD0P8_B: false} }; }
+    sw: {VDD0P8_A: true, VDD0P8_B: true} }; }
   renderVals(){
     const s = this.state;
     const pins = [
@@ -259,6 +259,7 @@ class Component extends DCLogic {
       load: () => this.setState({loaded:true}), toggleAdv: (e) => { if (e && e.preventDefault) e.preventDefault(); this.setState({adv: !s.adv}); },
       pins, rails, corners: chips(s.corners, s.cornersOn, 'cornersOn'), temps: chips(s.temps, s.tempsOn, 'tempsOn'),
       footText: s.loaded ? `${nc} corners × ${nt} temps × 1 VSET = ${nc*nt} cells · 2 rails · 2 biases · EN` : 'Load a netlist to continue',
+      cellsText: `${nc} corners × ${nt} temps × 1 VSET = ${nc*nt}`,
     };
   }
 }
@@ -266,29 +267,29 @@ class Component extends DCLogic {
 
 # ------------------------------------------------------------------ 2 Plan
 PLAN_GROUPS = [
-    dict(id="g1", an="dc_load", ports="VDD0P8_A, VDD0P8_B", runs=18, stim="IL_* swept 0 → 2×on", reads="vout(load)", feeds="vout table · dropout · ilimit", h=0.3,
+    dict(id="g1", an="dc_load", ports="VDD0P8_A, VDD0P8_B", runs=18, stim="IL_* swept 0 → 2×on", reads="vout(load)", feeds="vout table · dropout · ilimit", h=3.1,
          why="Every rail's DC level at every load and corner. Also finds dropout and the current limit, which the hot corner can cut by 8×.", cons="Rail DC unknown → nothing else can be fit. Cannot be skipped."),
-    dict(id="g2", an="dc_temp", ports="all ports", runs=3, stim="temp −40 → 125 step 5", reads="vout(T), idc(T)", feeds="continuous-T tables", h=0.2,
+    dict(id="g2", an="dc_temp", ports="all ports", runs=3, stim="temp −40 → 125 step 5", reads="vout(T), idc(T)", feeds="continuous-T tables", h=19.4,
          why="One sweep per corner makes temperature continuous inside the .va, so you can set any temperature, not just the three points.", cons="Model valid only at −40/25/125 exactly; any other temperature is refused."),
-    dict(id="g3", an="dc_iv", ports="IB_PTAT, IB_CONST", runs=18, stim="VB_* swept 0 → 1.0 V", reads="I(Vpin)", feeds="idc · compliance · gds", h=0.3,
+    dict(id="g3", an="dc_iv", ports="IB_PTAT, IB_CONST", runs=18, stim="VB_* swept 0 → 1.0 V", reads="I(Vpin)", feeds="idc · compliance · gds", h=3.1,
          why="Bias current vs pin voltage: the PTAT slope goes straight into KVCO drift, and the knee sets the compliance range.", cons="Bias ports emitted as ideal current sources with no knee and no temperature slope."),
-    dict(id="g4", an="ac · inject VDD0P8_A", ports="VDD0P8_A", runs=36, stim="IL_VDD0P8_A ac=1 (9 cells × 4 loads)", reads="Zout.A", feeds="zout.A ladder", h=1.8,
+    dict(id="g4", an="ac · inject VDD0P8_A", ports="VDD0P8_A", runs=36, stim="IL_VDD0P8_A ac=1 (9 cells × 4 loads)", reads="Zout.A", feeds="zout.A ladder", h=19.4,
          why="Output impedance vs frequency. Your block's current ripple × Zout = rail ripple = AM-PM.", cons="zout.A NOT RUN → rail A emitted as an ideal voltage source; spur/pushing paths missing."),
-    dict(id="g5", an="ac · inject VDD0P8_B", ports="VDD0P8_B", runs=36, stim="IL_VDD0P8_B ac=1", reads="Zout.B", feeds="zout.B ladder", h=1.8,
+    dict(id="g5", an="ac · inject VDD0P8_B", ports="VDD0P8_B", runs=36, stim="IL_VDD0P8_B ac=1", reads="Zout.B", feeds="zout.B ladder", h=19.4,
          why="Same as above for rail B.", cons="zout.B NOT RUN → rail B emitted as an ideal voltage source."),
-    dict(id="g6", an="ac · inject AVDD1P0", ports="all outputs", runs=36, stim="VS_AVDD1P0 ac=1", reads="PSRR.A, PSRR.B, psrr.IB_PTAT, psrr.IB_CONST", feeds="4 psrr blocks", h=1.8,
+    dict(id="g6", an="ac · inject AVDD1P0", ports="all outputs", runs=36, stim="VS_AVDD1P0 ac=1 (9 cells × 4 loads)", reads="PSRR.A, PSRR.B, psrr.IB_PTAT, psrr.IB_CONST", feeds="4 psrr blocks", h=1.8,
          why="One supply injection is read at every output at once (AC superposition), so 4 transfers cost 1 run per cell.", cons="All 4 PSRR blocks NOT RUN → supply ripple never reaches the outputs in your sim."),
-    dict(id="g7", an="noise VDD0P8_A", ports="VDD0P8_A", runs=36, stim="—", reads="noise_v.A", feeds="noise.A (white + 1/f + shaped)", h=2.4,
+    dict(id="g7", an="noise VDD0P8_A", ports="VDD0P8_A", runs=36, stim="—", reads="noise_v.A", feeds="noise.A (white + 1/f + shaped)", h=20.2,
          why="Rail voltage noise; supply pushing turns it into phase noise. Depends on load, hence 4 loads.", cons="noise.A NOT RUN → rail A is noiseless in .noise / pnoise / hbnoise. Report will be red."),
-    dict(id="g8", an="noise VDD0P8_B", ports="VDD0P8_B", runs=36, stim="—", reads="noise_v.B", feeds="noise.B", h=2.4,
+    dict(id="g8", an="noise VDD0P8_B", ports="VDD0P8_B", runs=36, stim="—", reads="noise_v.B", feeds="noise.B", h=20.2,
          why="Same for rail B.", cons="noise.B NOT RUN → rail B noiseless."),
-    dict(id="g9", an="noise IB_*", ports="IB_PTAT, IB_CONST", runs=18, stim="—", reads="noise_i.PTAT, noise_i.CONST", feeds="bias noise blocks", h=1.2,
+    dict(id="g9", an="noise IB_*", ports="IB_PTAT, IB_CONST", runs=18, stim="—", reads="noise_i.PTAT, noise_i.CONST", feeds="bias noise blocks", h=10.1,
          why="Bias current noise up-converts into VCO phase noise and is often the dominant term.", cons="Bias ports noiseless → phase noise optimistic by up to 10 dB close-in."),
-    dict(id="g10", an="tran · load-EN A", ports="VDD0P8_A", runs=18, stim="IL_VDD0P8_A pwl 2 µ ↔ 500 µ, 2 ns edge", reads="tran_load_on.A, tran_load_off.A", feeds="load_en.A (large-signal, opt-in)", h=1.6,
+    dict(id="g10", an="tran · load-EN A", ports="VDD0P8_A", runs=18, stim="IL_VDD0P8_A pwl 2 µ ↔ 500 µ, 2 ns edge", reads="tran_load_on.A, tran_load_off.A", feeds="load_en.A (large-signal, opt-in)", h=30.4,
          why="Your block switching on: how deep the rail dips and how it overshoots on switch-off (the LDO cannot sink).", cons="load_en.A not fit → rail A stays linear; dips under-predicted for mA steps. HB deliverable unaffected."),
-    dict(id="g11", an="tran · load-EN B", ports="VDD0P8_B", runs=18, stim="IL_VDD0P8_B pwl 20 µ ↔ 2 m, 2 ns edge", reads="tran_load_on.B, tran_load_off.B", feeds="load_en.B", h=1.6,
+    dict(id="g11", an="tran · load-EN B", ports="VDD0P8_B", runs=18, stim="IL_VDD0P8_B pwl 20 µ ↔ 2 m, 2 ns edge", reads="tran_load_on.B, tran_load_off.B", feeds="load_en.B", h=30.4,
          why="Same for rail B.", cons="load_en.B not fit → rail B stays linear."),
-    dict(id="g12", an="tran · EN", ports="all outputs", runs=9, stim="VEN_EN 0 → 1", reads="tran_en", feeds="en.ramp (usable, not sign-off)", h=0.9,
+    dict(id="g12", an="tran · EN", ports="all outputs", runs=9, stim="VEN_EN 0 → 1", reads="tran_en", feeds="en.ramp (usable, not sign-off)", h=8.1,
          why="Rails and biases come up with the measured rise time so a testbench that toggles EN does not blow up. Startup sign-off still uses the real LDO.", cons="EN pin emitted as an instant switch."),
 ]
 
@@ -300,9 +301,9 @@ PLAN_BODY = f"""
         <div class="stat"><span class="v">9</span><span class="l">cells</span></div>
         <div class="stat"><span class="v">{{{{ runs }}}}</span><span class="l">runs</span></div>
         <div class="stat"><span class="v">{{{{ cpuh }}}}</span><span class="l">CPU-h est.</span></div>
-        <div class="stat"><span class="v">0</span><span class="l">cached</span></div>
+        <div class="stat"><span class="v">10</span><span class="l">cached</span></div>
         <div class="stat"><span class="v">{{{{ nGroups }}}}</span><span class="l">groups on</span></div>
-        <div style="margin-left:auto;align-self:center" class="hint">Estimates from the last 3 projects on this queue. Groups merge runs by AC superposition; nothing here is duplicated.</div>
+        <div style="margin-left:auto;align-self:center" class="hint">Estimates from the last 3 projects on this queue (8 CPU × wall time). 10 runs already in the ledger will be skipped. Groups merge runs by AC superposition; nothing here is duplicated.</div>
       </div>
     </div>
     <div class="panel" style="flex:1">
@@ -328,7 +329,7 @@ PLAN_BODY = f"""
         <div><div class="lbl" style="margin-bottom:6px">If you skip it</div><div class="callout warn">{{{{ sel.cons }}}}</div></div>
       </div>
     </div>
-    <div class="panel" style="flex:none">
+    <div class="panel" style="flex:0 1 auto;max-height:380px">
       <div class="ph"><span>Consequences of current selection</span></div>
       <div class="pb">
         <sc-if value="{{{{ allOn }}}}" hint-placeholder-val="{{{{ true }}}}"><div style="display:flex;gap:8px;align-items:center;color:#2f7d4f">{ICONS['check']}<span>Every block in the model spec has its data. Nothing will be reported as NOT RUN.</span></div></sc-if>
@@ -414,7 +415,7 @@ RUN_BODY = f"""
     <div class="panel" style="flex:1">
       <div class="ph"><span>Run <span class="id">{{{{ sel.id }}}}</span></span><span class="badge {{{{ sel.bcls }}}}">{{{{ sel.status }}}}</span></div>
       <div class="pb" style="display:flex;flex-direction:column;gap:12px">
-        <div class="kv"><span class="k">Cell</span><span class="mono">{{{{ sel.cell }}}}</span><span class="k">Analysis</span><span>{{{{ sel.an }}}}</span><span class="k">Feeds</span><span class="mono">{{{{ sel.feeds }}}}</span><span class="k">Job</span><span class="mono">donau 48812903 · rf_short · 8 cpu</span><span class="k">Netlist</span><span class="mono">…/ss_125c_v3/{{{{ sel.id }}}}/input.scs</span><span class="k">PSF</span><span class="mono">{{{{ sel.psf }}}}</span></div>
+        <div class="kv"><span class="k">Cell</span><span class="mono">{{{{ sel.cell }}}}</span><span class="k">Analysis</span><span>{{{{ sel.an }}}}</span><span class="k">Feeds</span><span class="mono">{{{{ sel.feeds }}}}</span><span class="k">Job</span><span class="mono">donau {{{{ sel.job }}}} · rf_short · 8 cpu</span><span class="k">Netlist</span><span class="mono">…/{{{{ sel.cellDir }}}}/{{{{ sel.id }}}}/input.scs</span><span class="k">PSF</span><span class="mono">{{{{ sel.psf }}}}</span></div>
         <div><div class="lbl" style="margin-bottom:6px">Log tail</div><div class="code" style="height:300px">{{{{ sel.log }}}}</div></div>
         <sc-if value="{{{{ sel.isFailed }}}}" hint-placeholder-val="{{{{ false }}}}"><div class="callout bad">Failed twice with the same message. If it fails again pmukit stops retrying and the fit proceeds with <b>tran_load_off.B @ ss/125 °C = NOT RUN</b>, flagged in the report.</div></sc-if>
       </div>
@@ -426,29 +427,29 @@ RUN_BODY = f"""
 
 RUN_SCRIPT = "const ROWS = " + json.dumps([dict(id=a, cell=b, an=c, status=d, el=e, cpu=f) for a, b, c, d, e, f in RUN_ROWS]) + """;
 const LOGS = {
-  failed: `alps 2026.03.hf1  -mt 8  -format ps
-tran: tstop=10u  step=2n (load-EN off, 2 m -> 20 u)
+  failed: (r) => `alps 2026.03.hf1  -mt 8  -format ps
+tran: tstop=10u  step=2n (${r.an.endsWith('off') ? 'load-EN off, 2 m -> 20 u' : 'load-EN on, 20 u -> 2 m'})
   t=1.9998e-06  step reduced 128x at VDD0P8_B (dV/dt)
   t=2.0011e-06  ERROR: timestep too small (1.2e-19)
   convergence failure near IL_VDD0P8_B edge
-job FAILED  rc=1  12m 38s  peak mem 1.9 GB`,
-  running: `alps 2026.03.hf1  -mt 8  -format ps
+job FAILED  rc=1  ${r.el}  peak mem 1.9 GB`,
+  running: (r) => `alps 2026.03.hf1  -mt 8  -format ps
 ac: 10 Hz -> 20 GHz  20 pts/dec  (acm_VS_AVDD1P0=1)
   dc op converged in 214 iterations
   ac sweep 41% ... 63% ... 78%`,
-  done: `alps 2026.03.hf1  -mt 8  -format ps
+  done: (r) => `alps 2026.03.hf1  -mt 8  -format ps
 noise: 10 Hz -> 100 MHz  oprobe=VDD0P8_A
   dc op converged in 190 iterations
   noise sweep complete (161 pts)
   wrote psf/noise.noise  .simDone
-job DONE  rc=0  4m 12s  peak mem 1.4 GB`,
-  queued: `waiting for a rf_short slot (71 ahead)`,
-  cached: `identical run_id already in ledger (2026-09-14 18:02) -> reused`,
+job DONE  rc=0  ${r.el}  peak mem 1.4 GB`,
+  queued: (r, c) => `waiting for a rf_short slot (${c.queued} ahead)`,
+  cached: (r) => `identical run_id already in ledger (2026-09-14 18:02) -> reused`,
 };
 const BCLS = { done:'b-ok', running:'b-acc', failed:'b-bad', queued:'b-mute', cached:'b-mute' };
 class Component extends DCLogic {
   constructor(p){ super(p); this.state = { rows: ROWS.map(r => ({...r})), sel: 'e4d27a5c1f90', filter: 'All', counts: {done:191, running:8, queued:71, failed:2, cached:10} }; }
-  componentDidMount(){ this.timer = setInterval(() => { const c = Object.assign({}, this.state.counts); if (c.queued > 0) { c.queued -= 1; c.done += 1; this.setState({counts:c}); } }, 1800); }
+  componentDidMount(){ this.timer = setInterval(() => { const c = Object.assign({}, this.state.counts); if (c.running > 0) { c.running -= 1; c.done += 1; } if (c.queued > 0) { c.queued -= 1; c.running += 1; } if (c.running !== this.state.counts.running || c.queued !== this.state.counts.queued) this.setState({counts:c}); }, 1800); }
   componentWillUnmount(){ clearInterval(this.timer); }
   renderVals(){
     const s = this.state, c = s.counts, total = 282;
@@ -458,11 +459,11 @@ class Component extends DCLogic {
       select: () => this.setState({sel: r.id}),
       retry: (e) => { if (e && e.stopPropagation) e.stopPropagation(); const rows = s.rows.map(x => x.id === r.id ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.failed = Math.max(0, cc.failed - 1); cc.queued += 1; this.setState({rows, counts: cc}); } }));
     const selRow = s.rows.find(r => r.id === s.sel) || s.rows[0];
-    const sel = { ...selRow, bcls: BCLS[selRow.status], isFailed: selRow.status === 'failed', log: LOGS[selRow.status],
+    const sel = { ...selRow, bcls: BCLS[selRow.status], isFailed: selRow.status === 'failed', log: LOGS[selRow.status](selRow, c), cellDir: selRow.cell.replace(/ \/ /g, '_').replace(' °C', 'c').replace('−', 'm'), job: '4881' + parseInt(selRow.id.slice(0,4), 16).toString().slice(0,4),
       feeds: selRow.an.startsWith('noise') ? 'noise block' : selRow.an.startsWith('ac') ? 'zout / psrr blocks' : selRow.an.startsWith('tran') ? 'load_en (large-signal)' : 'dc tables',
       psf: selRow.status === 'done' || selRow.status === 'cached' ? '…/psf/' + selRow.id + '/' : '—' };
     const filters = ['All','Running','Failed','Queued'].map(n => ({ name:n, cls: s.filter === n ? 'on' : '', pick: () => this.setState({filter:n}) }));
-    const cpuh = (c.done * 0.052).toFixed(1);
+    const cpuh = (c.done * 0.58).toFixed(1);
     return { c: { ...c, cpuh, eta: c.queued > 0 ? Math.ceil(c.queued * 4.2 / 8) + ' min' : 'done' }, w: { done: pct('done'), running: pct('running'), failed: pct('failed'), cached: pct('cached') },
       rows, sel, filters, notDone: c.queued > 0 || c.running > 0,
       retryAll: () => { const rows = s.rows.map(x => x.status === 'failed' ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.queued += cc.failed; cc.failed = 0; this.setState({rows, counts: cc}); } };
@@ -527,17 +528,17 @@ MODEL_BODY = f"""
             </svg>
             <sc-if value="{{{{ hov.on }}}}" hint-placeholder-val="{{{{ false }}}}"><div style="position:absolute;left:{{{{ hov.tx }}}}px;top:8px;background:#1c1b18;color:#e9e6de;padding:6px 8px;border-radius:4px;font-size:11px;white-space:nowrap;pointer-events:none" class="mono">{{{{ hov.text }}}}</div></sc-if>
           </div>
-          <div class="legend"><span><span class="sw" style="background:{GT}"></span>ground truth (transistor PMU)</span><span><span class="sw" style="background:{ACC}"></span>model (.va)</span><span class="hint">|Zout| in Ω vs frequency · log–log · hover for values</span></div>
+          <div class="legend"><span><span class="sw" style="background:{GT}"></span>ground truth (transistor PMU)</span><span><span class="sw" style="background:{ACC}"></span>model (.va)</span><span class="hint">{{{{ chartNote }}}}</span></div>
         </sc-if>
         <sc-if value="{{{{ isTable }}}}" hint-placeholder-val="{{{{ false }}}}">
-          <table class="t"><thead><tr><th>Frequency</th><th class="num" style="text-align:right">GT |Z| Ω</th><th class="num" style="text-align:right">Model |Z| Ω</th><th class="num" style="text-align:right">Δ dB</th></tr></thead>
+          <table class="t"><thead><tr><th>Frequency</th><th class="num" style="text-align:right">GT ({{{{ unit }}}})</th><th class="num" style="text-align:right">Model ({{{{ unit }}}})</th><th class="num" style="text-align:right">Δ dB</th></tr></thead>
           <tbody><sc-for list="{{{{ tableRows }}}}" as="t" hint-placeholder-count="8"><tr><td class="mono">{{{{ t.f }}}}</td><td class="num">{{{{ t.g }}}}</td><td class="num">{{{{ t.m }}}}</td><td class="num">{{{{ t.d }}}}</td></tr></sc-for></tbody></table>
         </sc-if>
       </div>
     </div>
   </div>
 </div>
-<div class="foot"><span class="hint">Fit from dataset <span class="mono">a91f…c3</span> · 271 of 282 runs consumed · 11 cached</span><div style="display:flex;gap:8px"><button class="btn">Open report.md</button><button class="btn pri">Deliver {ICONS['arrow']}</button></div></div>
+<div class="foot"><span class="hint">Fit from dataset <span class="mono">a91f…c3</span> · 280 of 282 runs consumed (2 failed, marked not run) · 10 reused from the ledger</span><div style="display:flex;gap:8px"><button class="btn">Open report.md</button><button class="btn pri">Deliver {ICONS['arrow']}</button></div></div>
 """
 
 MODEL_SCRIPT = """
@@ -562,36 +563,46 @@ function blocksFor(port, g){
     {name:'psrr', metric:'|H| RMS', val:'1.0 dB', lim:'2 dB', grade:'ok'},
   ];
 }
-// |Zout| model vs GT: 2nd-order peak + cap roll-off, log axes
-function zGT(f){ const w = f/1.78e6; const peak = 388/Math.sqrt(Math.pow(1-w*w,2)+Math.pow(w/2.6,2)); const lf = 23/Math.sqrt(1+Math.pow(f/4e4,2)); const hf = 1/(2*Math.PI*f*1e-9) + 0.4; return Math.min(peak+lf, 1e4) + (f>3e7 ? 0 : 0) + (f>1e8 ? hf : 0); }
-function zModel(f){ const w = f/1.74e6; const peak = 380/Math.sqrt(Math.pow(1-w*w,2)+Math.pow(w/2.5,2)); const lf = 23.4/Math.sqrt(1+Math.pow(f/4.2e4,2)); const hf = 1/(2*Math.PI*f*1e-9) + 0.4; return Math.min(peak+lf, 1e4) + (f>1e8 ? hf : 0); }
-const FMIN = 1e1, FMAX = 1e10, ZMIN = 0.1, ZMAX = 1e3;
+// |Zout| (rails) and bias current-noise PSD (biases): model vs GT, log axes
+function zPeak(f, f0, q, a){ const w = f/f0; return a/Math.sqrt(Math.pow(1-w*w,2)+Math.pow(w/q,2)); }
+function zRail(f, k){ const lf = 23*k.lf/Math.sqrt(1+Math.pow(f/4e4,2)); const loop = zPeak(f, k.f0, k.q, 388*k.a); const cap = 1/(2*Math.PI*f*1e-9); return Math.sqrt(Math.pow(1/(1/(loop+lf) + 1/cap), 2) + 0.16); }
+function nBias(f, k){ return 1e-24*k.w*(1 + 9e3/f) + 1e-22*k.p/(1+Math.pow(f/2e6,2)); }
+const FMIN = 1e1, FMAX = 1e10;
 const X0 = 48, X1 = 512, Y0 = 14, Y1 = 216;
 const xOf = f => X0 + (X1-X0) * (Math.log10(f)-1)/9;
-const yOf = z => Y1 - (Y1-Y0) * (Math.log10(Math.max(z, ZMIN))-Math.log10(ZMIN))/4;
+function scaleY(lo, hi){ return z => Y1 - (Y1-Y0) * (Math.log10(Math.max(z, lo))-Math.log10(lo))/(Math.log10(hi)-Math.log10(lo)); }
 const FS = []; for (let i = 0; i <= 180; i++) FS.push(Math.pow(10, 1 + i/20));
-const pathOf = fn => FS.map((f,i) => (i?'L':'M') + xOf(f).toFixed(1) + ' ' + yOf(fn(f)).toFixed(1)).join(' ');
+const pathOf = (fn, yOf) => FS.map((f,i) => (i?'L':'M') + xOf(f).toFixed(1) + ' ' + yOf(fn(f)).toFixed(1)).join(' ');
 const fmtF = f => f >= 1e9 ? (f/1e9).toFixed(f>=1e10?0:1)+' GHz' : f >= 1e6 ? (f/1e6).toFixed(0)+' MHz' : f >= 1e3 ? (f/1e3).toFixed(0)+' kHz' : f.toFixed(0)+' Hz';
 class Component extends DCLogic {
-  constructor(p){ super(p); this.state = { port:'VDD0P8_B', corner:'ss', temp:'25', block:'zout', view:'chart', hov:null }; }
+  constructor(p){ super(p); this.state = { port:'VDD0P8_B', corner:'ss', temp:'25', view:'chart', hov:null }; }
   renderVals(){
     const s = this.state;
     const heads = []; CORNERS.forEach(c => TEMPS.forEach(t => heads.push(c + ' ' + t)));
     const rows = PORTS.map(p => ({ name:p, cells: CORNERS.flatMap(c => TEMPS.map(t => { const g = GRADE[p+'|'+c+'|'+t] || 'ok'; const sel = s.port===p && s.corner===c && s.temp===t;
       return { cls: CLS[g] + (sel ? ' sel' : ''), label: LBL[g], pick: () => this.setState({port:p, corner:c, temp:t, hov:null}) }; })) }));
+    const rail = s.port.startsWith('VDD');
+    const kGT = rail ? { f0: 1.78e6, q: 2.6, a: 1, lf: 1 } : { w: 1, p: 1 };
+    const marg = (GRADE[s.port+'|'+s.corner+'|'+s.temp] || 'ok') === 'warn';
+    const kM = rail ? { f0: marg ? 1.56e6 : 1.75e6, q: marg ? 2.1 : 2.5, a: marg ? 0.8 : 0.98, lf: 1.02 } : { w: marg ? 1.35 : 1.05, p: marg ? 0.7 : 0.95 };
+    const gtFn = rail ? (f => zRail(f, kGT)) : (f => nBias(f, kGT)), mFn = rail ? (f => zRail(f, kM)) : (f => nBias(f, kM));
+    const yOf = rail ? scaleY(0.1, 1e4) : scaleY(1e-26, 1e-20);
+    const unit = rail ? 'Ω' : 'A²/Hz';
+    const fmtV = v => rail ? v.toFixed(v < 10 ? 2 : 1) : v.toExponential(2);
     const g = GRADE[s.port+'|'+s.corner+'|'+s.temp] || 'ok';
-    const blocks = blocksFor(s.port, g).map(b => ({ ...b, gcls: BADGE[b.grade], grade: LBL[b.grade], cls: b.name === s.block ? 'sel' : '', pick: () => this.setState({block:b.name}) }));
-    const hov = s.hov ? { on:true, x: s.hov.x, yg: yOf(zGT(s.hov.f)), ym: yOf(zModel(s.hov.f)), tx: Math.min(s.hov.x + 10, 360), text: fmtF(s.hov.f) + '  GT ' + zGT(s.hov.f).toFixed(1) + ' Ω  model ' + zModel(s.hov.f).toFixed(1) + ' Ω' } : { on:false };
+    const chartBlock = rail ? 'zout' : 'noise';
+    const blocks = blocksFor(s.port, g).map(b => ({ ...b, gcls: BADGE[b.grade], grade: LBL[b.grade], cls: b.name === chartBlock ? 'sel' : '', pick: () => {} }));
+    const hov = s.hov ? { on:true, x: s.hov.x.toFixed(1), yg: yOf(gtFn(s.hov.f)).toFixed(1), ym: yOf(mFn(s.hov.f)).toFixed(1), tx: Math.min(s.hov.x + 12, 330).toFixed(0), text: fmtF(s.hov.f) + '  GT ' + fmtV(gtFn(s.hov.f)) + '  model ' + fmtV(mFn(s.hov.f)) + ' ' + unit } : { on:false };
     const gridV = [1e1,1e2,1e3,1e4,1e5,1e6,1e7,1e8,1e9,1e10].map(f => ({ x: xOf(f).toFixed(1), t: f>=1e9 ? (f/1e9)+'G' : f>=1e6 ? (f/1e6)+'M' : f>=1e3 ? (f/1e3)+'k' : f }));
-    const gridH = [0.1,1,10,100,1000].map(z => ({ y: yOf(z).toFixed(1), ty: (yOf(z)+3.5).toFixed(1), t: z>=1 ? z : z }));
-    const tableRows = [1e2,1e4,1e5,1e6,1.78e6,1e7,1e8,1e9,1e10].map(f => { const gv = zGT(f), mv = zModel(f); return { f: fmtF(f), g: gv.toFixed(2), m: mv.toFixed(2), d: (20*Math.log10(mv/gv)).toFixed(2) }; });
+    const gridH = (rail ? [0.1,1,10,100,1e3,1e4] : [1e-26,1e-24,1e-22,1e-20]).map(z => ({ y: yOf(z).toFixed(1), ty: (yOf(z)+3.5).toFixed(1), t: rail ? (z >= 1e3 ? (z/1e3)+'k' : String(z)) : '1e' + Math.round(Math.log10(z)) }));
+    const tableRows = [1e2,1e4,1e5,1e6,1.78e6,1e7,1e8,1e9,1e10].map(f => { const gv = gtFn(f), mv = mFn(f); return { f: fmtF(f), g: fmtV(gv), m: fmtV(mv), d: ((rail ? 20 : 10)*Math.log10(mv/gv)).toFixed(2) }; });
     return { heads, rows, blocks, selPort: s.port, selCell: s.corner + ' / ' + s.temp + ' °C / VSET 3', selGrade: LBL[g], selCls: BADGE[g],
-      chartTitle: s.block === 'zout' ? '|Zout| · load ' + (s.port === 'VDD0P8_A' ? '500 µA' : '2 mA') : s.block + ' · model vs ground truth',
+      chartTitle: rail ? '|Zout| · load ' + (s.port === 'VDD0P8_A' ? '500 µA' : '2 mA') : 'current noise PSD · ' + s.port, chartNote: rail ? '|Zout| in Ω vs frequency · log–log · hover for values' : 'A²/Hz vs frequency · log–log · hover for values', unit,
       isChart: s.view === 'chart', isTable: s.view === 'table', viewChartCls: s.view === 'chart' ? 'on' : '', viewTableCls: s.view === 'table' ? 'on' : '',
       showChart: () => this.setState({view:'chart'}), showTable: () => this.setState({view:'table'}),
-      pathGT: pathOf(zGT), pathModel: pathOf(zModel), lblGT: { x: xOf(3e3).toFixed(0), y: (yOf(zGT(3e3)) - 8).toFixed(0) }, lblM: { x: xOf(2e8).toFixed(0), y: (yOf(zModel(2e8)) + 14).toFixed(0) },
+      pathGT: pathOf(gtFn, yOf), pathModel: pathOf(mFn, yOf), lblGT: { x: xOf(3e3).toFixed(0), y: (yOf(gtFn(3e3)) - 8).toFixed(0) }, lblM: { x: xOf(2e8).toFixed(0), y: (yOf(mFn(2e8)) + 14).toFixed(0) },
       hov, gridV, gridH, tableRows,
-      hover: (e) => { const svg = e.currentTarget, r = svg.getBoundingClientRect(); const x = Math.max(X0, Math.min(X1, e.clientX - r.left)); const f = Math.pow(10, 1 + 9*(x-X0)/(X1-X0)); this.setState({hov:{x: x.toFixed(1), f}}); },
+      hover: (e) => { const svg = e.currentTarget, r = svg.getBoundingClientRect(); const x = Math.max(X0, Math.min(X1, e.clientX - r.left)); const f = Math.pow(10, 1 + 9*(x-X0)/(X1-X0)); this.setState({hov:{x, f}}); },
       unhover: () => this.setState({hov:null}) };
   }
 }
@@ -622,12 +633,12 @@ DELIVER_BODY = f"""
     </div>
     <div class="panel" style="flex:none">
       <div class="ph"><span>Use it in your testbench</span><button class="btn sm" onClick="{{{{ copy }}}}">{ICONS['copy']} {{{{ copyLabel }}}}</button></div>
-      <div class="pb"><div class="code">// model setup — pick the section with the same corner variable as the PDK
+      <div class="pb"><div class="code" style="white-space:pre-wrap">// model setup — pick the section with the same corner variable as the PDK
 include "~/pmukit_data/demo_pmu/deliver/2026-09-15T14-02/PMU_demo_pmu.scs" section=tt
 
 // instance — same pins as PMU_DEMO, plus per-rail switches
-PMU_TOP (AVDD1P0 VDD0P8_A VDD0P8_B IB_PTAT IB_CONST EN VSS_A VSS_B AGND) PMU_demo_pmu \\
-    vset=3  load_en_A=1  load_en_B=0</div>
+PMU_TOP (AVDD1P0 VDD0P8_A VDD0P8_B IB_PTAT IB_CONST EN TESTMODE VSS_A VSS_B AGND) PMU_demo_pmu \\
+    vset=3  load_en_A=1  load_en_B=1</div>
         <div class="hint" style="margin-top:8px">Temperature comes from your <span class="mono">options temp=</span>. Anything outside envelope.json is reported, never silently extrapolated.</div>
       </div>
     </div>
@@ -639,7 +650,7 @@ PMU_TOP (AVDD1P0 VDD0P8_A VDD0P8_B IB_PTAT IB_CONST EN VSS_A VSS_B AGND) PMU_dem
     </div>
     <div class="panel" style="flex:none">
       <div class="ph"><span>Provenance</span><span class="badge b-ok">{ICONS['check']} reproducible</span></div>
-      <div class="pb"><div class="kv"><span class="k">Config</span><span class="mono">demo_pmu.json · sha 5d8c…a1</span><span class="k">Dataset</span><span class="mono">a91f…c3 · 271 runs consumed · 2026-09-15</span><span class="k">pmukit</span><span class="mono">0.1.0 · emitter hb_safe</span><span class="k">TB state</span><span>RX mode, register 0x12 = 0x03 (as characterized)</span><span class="k">Header</span><span class="hint">every .va repeats this block in its first 12 lines</span></div></div>
+      <div class="pb"><div class="kv"><span class="k">Config</span><span class="mono">demo_pmu.json · sha 5d8c…a1</span><span class="k">Dataset</span><span class="mono">a91f…c3 · 280 runs consumed · 2026-09-15</span><span class="k">pmukit</span><span class="mono">0.1.0 · emitter hb_safe</span><span class="k">TB state</span><span>RX mode, register 0x12 = 0x03 (as characterized)</span><span class="k">Header</span><span class="hint">every .va repeats this block in its first 12 lines</span></div></div>
     </div>
   </div>
 </div>
@@ -665,9 +676,9 @@ endlibrary PMU_demo_pmu`,
 // valid: load_A 2u..1m  load_B 20u..4m  temp -40..125  f<=20G  vset 3
 // large-signal: load_en_A ON (HB check 7.7e-3)  load_en_B OFF (default)  en_ramp usable-only
 \\`include "disciplines.vams"
-module PMU_demo_pmu(AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, VSS_A, VSS_B, AGND);
-  inout AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, VSS_A, VSS_B, AGND;
-  electrical AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, VSS_A, VSS_B, AGND;
+module PMU_demo_pmu(AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND);
+  inout AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND;  // TESTMODE: pass-through, no role
+  electrical AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, TESTMODE, VSS_A, VSS_B, AGND;
   parameter integer vset = 3;
   parameter integer load_en_A = 1, load_en_B = 0;
   // ---- rail A: dc table(T) · zout ladder · psrr gm-C biquad · noise · load_en (opt-in)
@@ -678,7 +689,7 @@ module PMU_demo_pmu(AVDD1P0, VDD0P8_A, VDD0P8_B, IB_PTAT, IB_CONST, EN, VSS_A, V
   "freq_hz_max": 2e10,
   "corners": ["tt", "ss", "ff"],
   "vset": [3],
-  "large_signal_default_on": {"load_en_A": true, "load_en_B": false},
+  "large_signal_default_on": {"load_en_A": true, "load_en_B": true},
   "usable_not_signoff": ["en_ramp"],
   "not_run": [["tran_load_off.B", "ss", 125, 3]]
 }`,
@@ -690,13 +701,14 @@ Not run: tran_load_off.B @ ss / 125 °C (failed twice)
 HB health: first-step residual 7.7e-3, all large-signal terms individually checked
 
 | port | tt −40 | tt 25 | tt 125 | ss −40 | ss 25 | ss 125 | ff −40 | ff 25 | ff 125 |
+|---|---|---|---|---|---|---|---|---|---|
 | VDD0P8_A | OK | OK | OK | OK | OK | MARG | OK | OK | OK |
 ...`,
   'provenance.json': `{
   "pmukit": "0.1.0",
   "config_sha": "5d8c…a1",
   "dataset_sha": "a91f…c3",
-  "runs_consumed": 271,
+  "runs_consumed": 280,
   "tb_state": "RX mode, register 0x12 = 0x03",
   "created": "2026-09-15T14:02:11"
 }`,
@@ -707,7 +719,8 @@ class Component extends DCLogic {
     const s = this.state;
     const files = FILES.map(f => ({ ...f, cls: f.name === s.sel ? 'sel' : '', pick: () => this.setState({sel: f.name}) }));
     const f = FILES.find(x => x.name === s.sel);
-    return { files, sel: { ...f, body: BODIES[f.name] || BODIES['PMU_demo_pmu_tt.va'] }, copyLabel: s.copied ? 'Copied' : 'Copy',
+    const body = BODIES[f.name] || BODIES['PMU_demo_pmu_tt.va'].replace(/corner tt/, 'corner ' + f.name.slice(-5, -3)).replace('HB check 7.7e-3', f.name.includes('_ss') ? 'HB check 9.1e-3' : 'HB check 6.4e-3');
+    return { files, sel: { ...f, body }, copyLabel: s.copied ? 'Copied' : 'Copy',
       copy: () => { this.setState({copied:true}); setTimeout(() => this.setState({copied:false}), 1500); } };
   }
 }
