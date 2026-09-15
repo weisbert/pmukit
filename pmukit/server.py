@@ -2126,7 +2126,9 @@ class Api:
             st.save()
             job.say("done", 1.0)
             return {"verify": str(pr.verify_path), "grades": payload.get("grades", [])[:200],
-                    "hb": payload.get("hb")}
+                    # verify_project's key is `hb_check`; reading "hb" silently returned None.
+                    "hb": payload.get("hb_check"),
+                    "rollup": payload.get("rollup"), "worst": payload.get("worst")}
 
         return {"job": JOBS.submit("verify", project, "verify the model", work).id}
 

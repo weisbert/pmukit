@@ -559,9 +559,13 @@ def cmd_fit(a) -> int:
 def cmd_verify(a) -> int:
     cfg, der, d = _load(a.project)
     vmod = _need("verify", "verify")
-    out = vmod.verify_project(a.project, root=d)
+    out = vmod.verify_project(a.project, root=d, hb=not a.no_hb, system=a.system)
     jsonio.write(d / "verify.json", out)
-    _out(out, a.json, json.dumps(out, indent=2, default=str))
+    # render() is the human view; the raw document is ~24 KB and belongs behind --json.
+    _out(out, a.json, vmod.render(out))
+    if not a.json:
+        print()
+        print(f"written -> {d / 'verify.json'}")
     return 0
 
 
@@ -581,8 +585,29 @@ def cmd_report(a) -> int:
 def cmd_deliver(a) -> int:
     cfg, der, d = _load(a.project)
     emod = _need("emit", "deliver")
+    dmod = _need("deliverable", "deliver")
+    # Pick up whatever `pmukit verify` already decided. Without this the report says "nothing was
+    # graded" even when verify.json is sitting right next to it, and every large-signal term stays
+    # off because nothing told deliver() which ones cleared the HB check.
+    kw: dict = {}
+    vpath = d / "verify.json"
+    if vpath.exists():
+        v = jsonio.read(vpath)
+        grades = [dmod.Grade(port=g["port"], corner=g["corner"], block=g["block"],
+                             grade=g["grade"], detail=g.get("detail", ""), score=g.get("score"))
+                  for g in (v.get("grades") or []) if g.get("port") and g.get("block")]
+        if grades:
+            kw["grades"] = grades
+        if v.get("ls_default_on"):
+            kw["ls_default_on"] = list(v["ls_default_on"])
+        if v.get("not_run"):
+            kw["not_run"] = [str(x) for x in v["not_run"]]
+        print(f"using the grades from {vpath} ({len(grades)} rows)")
+    else:
+        print(f"no {vpath} yet -- the report will say nothing was graded.")
+        print(f"  Run `{PROG} verify {a.project}` first to fill it in.")
     # `root` is the $PMUKIT_DATA ROOT -- deliver() appends <project>/deliver/<stamp> itself.
-    path = emod.deliver(a.project, root=paths.data_root(), derived=der)
+    path = emod.deliver(a.project, root=paths.data_root(), derived=der, **kw)
     print(f"delivered -> {path}")
     print(f"\nAdd to your corner setup:\n  include \"{path}/PMU_{a.project}.scs\" section=<corner>")
     return 0
@@ -777,6 +802,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("verify", help="grades, envelope and the HB health check")
     p.add_argument("project")
+    p.add_argument("--no-hb", action="store_true",
+                   help="skip the HB health check (works with no simulator at all)")
+    p.add_argument("--system", action="store_true",
+                   help="also run the self-oscillating bench (needs a simulator)")
     p.set_defaults(fn=cmd_verify)
 
     p = sub.add_parser("report", help="print the latest deliverable's report.md")

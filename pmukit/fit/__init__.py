@@ -188,10 +188,20 @@ def fit_port(dataset, port: str, port_type: str, cell: dict, derived=None,
     and the fit is therefore necessarily joint.
     """
     blocks = [b for b in spec.blocks_for(port_type) if b.tier in tiers]
+    # The EN ramp is measured PER RAIL AND PER BIAS -- `tran_en.<rail>` is a curve of that RAIL
+    # coming up, not of the EN pin, which has no curve of its own. So `en/ramp` is an extra BLOCK
+    # on a port that has one, not a port type anybody is fitted as. Without this the plan really
+    # runs the tran_en simulations, the dataset really stores them, and contract 1's `en` tier
+    # never reaches a report -- simulator time feeding nothing.
+    if "en" in tiers and port_type in ("rail", "bias"):
+        if spec.variable_name("tran_en", port) in set(dataset.variables()):
+            blocks = list(blocks) + [b for b in spec.blocks_for("en") if b.tier in tiers]
     out: dict = {}
     zparams = None
     for blk in blocks:
-        bcell = block_cell(blk.name, port_type, cell)
+        # `blk.port_type` is where the block lives in the spec; `port_type` is what this PORT is.
+        # They differ for exactly one block: `en/ramp`, which is measured on a rail or a bias.
+        bcell = block_cell(blk.name, blk.port_type, cell)
         key = _key(port, blk.name, bcell)
         if not blk.params:
             # An emitter constant (the rail's one-way conduction): no observable, so the plan
@@ -199,9 +209,9 @@ def fit_port(dataset, port: str, port_type: str, cell: dict, derived=None,
             out[blk.name] = BlockFit(port=port, block=blk.name, cell=bcell,
                                      params={}, score=float("nan"), metric="", n_points=0,
                                      notes=[f"{blk.name} is an emitter constant: "
-                                            + spec.WHAT[(port_type, blk.name)]])
+                                            + spec.WHAT[(blk.port_type, blk.name)]])
             continue
-        mod = _MODULES.get((port_type, blk.name))
+        mod = _MODULES.get((port_type, blk.name)) or _MODULES.get((blk.port_type, blk.name))
         if mod is None:                                   # pragma: no cover - guarded by spec
             continue
         if cache is not None and key in cache:
@@ -237,6 +247,8 @@ def fit_port(dataset, port: str, port_type: str, cell: dict, derived=None,
                 bf = mod.fit(dataset, port, cell, derived, zout_by_load=zmap or None)
         elif port_type == "rail" and blk.name == "load_en":
             bf = mod.fit(dataset, port, cell, derived, zout_params=zparams)
+        elif blk.port_type == "en":
+            bf = mod.fit(dataset, port, cell, derived)
         elif port_type == "bias":
             bf = mod.fit(dataset, port, cell, derived, block=blk.name)
         else:

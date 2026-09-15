@@ -114,6 +114,11 @@ class Envelope:
     vset_codes: list[int]
     ls_default_on: list[str]                    # large-signal items that passed the HB check
     notes: list[str] = field(default_factory=list)
+    #: Every port that was characterized, INCLUDING those with no load axis. A bias pin IS
+    #: characterized but has no load range, so `load_a` alone cannot answer "was this port
+    #: characterized?" -- asking it that marked every fully-characterized bias RED in report.md.
+    #: Empty means "fall back to the rails", so an older envelope still reads correctly.
+    ports: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         try:
@@ -124,6 +129,7 @@ class Envelope:
             self.vset_codes = [int(v) for v in self.vset_codes]
             self.ls_default_on = [str(s) for s in self.ls_default_on]
             self.notes = [str(s) for s in self.notes]
+            self.ports = [str(s) for s in self.ports]
         except (TypeError, ValueError, IndexError, KeyError) as exc:
             raise PmuError(
                 what="the validity envelope is malformed.",
@@ -149,14 +155,16 @@ class Envelope:
                 why.append(f"temperature {_num(temp_c)} C is outside the characterized range "
                            f"{_num(lo)} to {_num(hi)} C")
 
-        known_ports = ", ".join(sorted(self.load_a)) or "(none)"
-        if port is not None and port not in self.load_a:
+        characterized = list(self.ports) or list(self.load_a)
+        known_ports = ", ".join(sorted(characterized)) or "(none)"
+        rails = ", ".join(sorted(self.load_a)) or "(none)"
+        if port is not None and port not in characterized:
             why.append(f"port {port!r} was not characterized (characterized: {known_ports})")
 
         if load_a is not None:
             if port is None:
                 why.append(f"load {_num(load_a)} A was given without a port, so it cannot be "
-                           f"checked against a per-rail range (rails: {known_ports})")
+                           f"checked against a per-rail range (rails: {rails})")
             elif port in self.load_a:
                 lo, hi = self.load_a[port]
                 if not (lo <= float(load_a) <= hi):
@@ -188,6 +196,7 @@ class Envelope:
             "corners": list(self.corners),
             "vset_codes": list(self.vset_codes),
             "ls_default_on": list(self.ls_default_on),
+            "ports": list(self.ports),
             "notes": list(self.notes),
         }
 
@@ -197,6 +206,7 @@ class Envelope:
             return cls(freq_max_hz=obj["freq_max_hz"], load_a=obj["load_a"],
                        temp_c=obj["temp_c"], corners=obj["corners"],
                        vset_codes=obj["vset_codes"], ls_default_on=obj.get("ls_default_on", []),
+                       ports=obj.get("ports", []),
                        notes=obj.get("notes", []))
         except KeyError as exc:
             raise PmuError(

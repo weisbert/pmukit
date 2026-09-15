@@ -569,3 +569,101 @@ $ pmukit ui --port 8801
 因为默认站点配置是 `spectre_ssh` 到 `ewave-vm`，也就是**让它 ssh 自己**。那是**桌面的**默认值。
 所以加了 `pmukit site`（看/改 engine、queue、cpus、账号），并把它写进首跑清单第 0 步：
 盒子上第一件事是 `pmukit site --engine donau_alps --queue short --cpus 8 --account <账号>`。
+
+## M8 — 验证：等级、HB 体检、自激振荡台、15 个 LDO 回归
+
+`pmukit/verify/{grades,hb,system,regression}.py` + `__init__.py`。
+`hb` / `system` / `regression` **惰性导入** —— 没有仿真器的机器照样能 import 并给一份 fit 打分。
+
+**1. 合成 PMU 的等级（真 Spectre，218 条 run，0 失败，49 秒）** —— 四种颜色都出现了，全是真数据：
+
+```
+rail              ss          tt   worst block
+IB_POLY          red      yellow   idc
+IB_PTAT          red         red   psrr
+VDD0P8_A         red         red   load_en
+VDD0P8_B         red         red   load_en
+```
+
+`VDD0P8_A` 的 zout 0.016 dB / psrr 0.073 dB —— **全项目拟合得最好的两个块，被「假绿」规则压成 yellow**，
+因为数据没把 `Rpl`、`G0` 钉住。这条规则咬到自己最好的块上，正是它该干的事。
+
+**2. HB 体检（VM 上真跑）**，两条实测结论改了设计：
+
+```
+term                       initial    first step     ratio  iters  conv  verdict
+(all off)                      787      1.58e-06        --      2   yes  baseline
+load_en_VDD0P8_A               787           180  1.14e+08      9   yes  FAIL
+load_en_VDD0P8_B               787          4.73  2.99e+06      7   yes  FAIL
+terms this check lets deliver() default ON: (none)
+```
+
+- **「初始残差」当不了判据**：开与不开，787 逐位相同 —— 因为 `ls` 项在工作点上**值和斜率都为零**，
+  而 HB 的初值**就是**工作点。有判别力的是**牛顿第一步之后**的残差。两个数都报出来：
+  一个项要是把**初始**残差弄动了，那是更糟的缺陷。
+- **这道门天然严格，输出里就这么写**：全关的基线是个纯线性模型，一步就收敛到数值噪声。
+  所以 FAIL 的含义是「这一项让消费者多花牛顿步」（9 步和 7 步 vs 2 步，**两个都收敛了**），
+  不是「这一项把 HB 弄炸了」。**那正是 `ls` 档的定义。**
+
+**3. 自激振荡台（autonomous `hb`，真 Spectre）—— 这个台子发现了东西**：
+
+```
+rail        supply           converged    f_osc [Hz]  iters  final resid
+VDD0P8_A    through model           NO       1.2e+09    100         11.5   <- 迭代上限
+            ideal source           yes       1.2e+09      5     1.14e-12
+VDD0P8_B    through model          yes       1.2e+09      7     0.000577
+            ideal source           yes       1.2e+09      5     1.91e-12
+```
+
+**峰型、低 ESR 的轨 A 在自治求解里卡在迭代上限，而 ESR 阻尼的轨 B 七步收敛** ——
+同一个角，驱动式 HB 里轨 A 九步就收敛了，`emit.lint` 也报 PASS（2.9e4，限 1e6）。
+100 MHz / 300 MHz / 600 MHz / 1.2 GHz 都复现。两个手工诊断：去掉 2·f0 的电源泵**不解决**；
+把振荡器挪到理想源上、模型仍留在网表里，**也不解决**。
+这就是老仓记录的那个特征 ——「单独跑收敛、驱动式 HB 收敛、耦合起来不收敛」，在桌面尺度上的复现。
+**要定性得在真 oschb 里看**（那类失败历史上都出现在**模型以外**的地方）。代理没有去动发射器，对。
+
+**4. `tests/regression/baseline.json` —— 15 个合成 LDO，真 Spectre，600 条 run，96 秒 CPU**
+（engine 和台子条件都记进文件；台子跑到 **1 GHz** 而不是 fixture 的 100 MHz，因为 v7/v8 的缺陷藏在那以上）：
+
+| variant | dc | load_en | noise | psrr | zout |
+|---|---|---|---|---|---|
+| ldo_gt（对照） | 0.00207 | 19.8 | 1.4 | 0.224 | 0.434 |
+| ldo_v4_ffpsrr | 0.00207 | 6.59 | 1.14 | 3.97 | 0.1 |
+| ldo_v3_miller | 1.62 | 446 | 2.08 | 0.416 | 0.907 |
+| ldo_v10_3lc | 0.00207 | 96.2 | 4.4 | 5.36 | 11.2 |
+| ldo_v9_vldo | 0.00823 | 7.99 | 1.49 | 0.114 | 0.00887 |
+| …（其余 10 个同表） | | | | | |
+
+15 个里有 14 个带一段 `known_hard` 说明（从 fixture 自己的头注里来）—— **一个不能表达
+「这个本来就难」的回归套件会教出错误的结论**。重跑分数逐位相同，所以容差是给跨版本漂移的，不是给噪声的。
+
+**门限表**（一行一个指标，理由都写在 `grades.LIMITS` 里）：Zout / PSRR / gdd / |Y| 绿 ≤ 1.0 dB、黄 ≤ 3.0；
+噪声 Sv / In 绿 ≤ 2.0、黄 ≤ 6.0（**故意放宽**：`spec.py` 里记着一条挂起的 ~3 dB 噪声相关性误差，
+比一个没人测过的系统误差还紧的门是做样子）；vout 0.5 % / 2 %；I-V 1 % / 3 %；
+负载阶跃 10 % / 25 %（最松的一行 —— 非线性层是**安全网**，职责是**兜住** excursion）；
+EN 斜坡 15 % / 40 %（`en` 档按契约就是「能用不签核」，把它打得很紧等于暗示了一个契约不给的签核）。
+
+## M8 交回的四个缺陷（全在别人的模块里，**都已修**）
+
+代理按要求**只报告不打补丁**，我来修：
+
+1. **`server.py` 读 `payload["hb"]`，而 verify 的键是 `hb_check`** → 永远拿到 `None`。已修，并把
+   `rollup`/`worst` 也带上。
+2. **`pmukit verify` 把 24 KB 原始 JSON 糊到终端上**（人也看这个）。已改成 `verify.render(out)`；
+   原始文档留给 `--json`。顺手加了 `--no-hb`（没有仿真器也能用）和 `--system`。
+3. **有效包络里没有「偏置端口」这个概念，于是 `report.md` 里每一行偏置都被标成 RED，理由还是假的。**
+   `Envelope.load_a` 只有轨，而 `contains(port=...)` 拿它回答「这个端口表征过吗」。
+   证据（代理写出来的真交付件）：一个**完全表征过的、yellow 的**偏置脚被渲染成红的。
+   已修：`Envelope` 增加 `ports`（所有表征过的端口），`load_a` 只管负载量程。修完那两行变成：
+   `| IB_POLY | tt | yellow | idc | the residual is inside the green limit, but the data does not pin vknee, knee_p and vhi ... |`
+4. **`fit_project` 从来不拟合 `en/ramp` 块** —— 计划真的跑了 6 条 `tran_en`，数据集真的存了
+   （`tran_en.* = {declared: 6, filled: 6}`），但 `_ports()` 只从 `rails`/`biases` 建表，
+   所以**契约 1 的 `en` 档从未进过任何一份报告**，那些机时白花了。
+   已修，但**不是按「加一个 en 端口」修的**：`tran_en.<rail>` 是**那条轨**上电的曲线，
+   EN 脚本身没有曲线。所以 `en/ramp` 是挂在已有端口上的**额外一个块**。
+   现在四个真端口都有 ramp（0.00343 % RMS），**stub 端口没有**。
+
+另外补上一个集成缺口：`pmukit deliver` 之前不读 `verify.json`，于是报告写 "nothing was graded"
+而旁边就躺着等级。现在自动读，并把 `ls_default_on` / `not_run` 一起带过去。
+
+**全套 900 passed, 6 skipped。**
