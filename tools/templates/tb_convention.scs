@@ -1,0 +1,45 @@
+// pmukit testbench template -- the convention in one file.
+//
+// Copy this, replace PMU_CELL / the pin names / the currents and voltages with yours, and export
+// it from ADE at the NOMINAL corner.  pmukit rewrites this one netlist into every corner,
+// temperature, VSET code, load point and stimulus it needs -- you never export a second one.
+//
+// Validate before you start a project:   pmukit check <this file> --pmu-inst PMU_TOP
+
+simulator lang=spectre
+
+// ---------------------------------------------------------------- what pmukit rewrites
+parameters VSET=3                              // output code; rewritten per --vset
+include "pdk/toplevel.scs" section=tt          // process corner; rewritten per --corners
+include "pdk/rc.scs"       section=typ         // a second include, for composite corners
+
+// ---------------------------------------------------------------- the PMU under test
+// The instance NAME is what you pass as --pmu-inst.  Roles are read from the pins of the
+// SUBCIRCUIT, and the sources below are matched by the pin name, not the net name.
+PMU_TOP (VDDA_1V0 VDD0P8_A VDD0P8_B IB_PTAT IB_POLY EN TESTMODE 0 0 0) PMU_CELL
+
+// ---------------------------------------------------------------- the convention sources
+// supply pin  -> VS_<pin>  vsource   dc = nominal supply
+VS_VDDA_1V0 (VDDA_1V0 0) vsource dc=1.0
+
+// voltage rail -> IL_<pin>  ISOURCE   dc = the typical load in YOUR bench
+//   a rail is read as a voltage under a current injection, so it MUST be an isource
+IL_VDD0P8_A (VDD0P8_A 0) isource dc=500u
+IL_VDD0P8_B (VDD0P8_B 0) isource dc=2m
+
+// current bias -> VB_<pin>  VSOURCE   dc = the pin's operating voltage (its compliance point)
+//   a bias is read as a probe current under a voltage drive, so it MUST be a vsource
+VB_IB_PTAT (IB_PTAT 0) vsource dc=0.4
+VB_IB_POLY (IB_POLY 0) vsource dc=0.4
+
+// enable pin -> VEN_<pin>  vsource
+VEN_EN (EN 0) vsource dc=1.0
+
+// A pin with no role needs no source. pmukit reports it as unclassifiable and you mark it
+// `ignore` -- it is wired through untouched.  It is never guessed at.
+Rtm (TESTMODE 0) resistor r=1meg
+
+// ---------------------------------------------------------------- your own analyses
+// Optional. pmukit strips every analysis statement and writes its own, so leave whatever you
+// were using -- it will be commented out with a visible marker, not deleted.
+dcOp dc

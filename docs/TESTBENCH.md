@@ -1,0 +1,90 @@
+# 搭台子：pmukit 和你之间的唯一接口
+
+> 你只交**一份**网表（标称角导出就行）。工艺角、温度、VSET 档、负载点、激励，全部由工具改写这一份。
+> 这一页就是你明早要做的那件事。做完跑一次 `pmukit check`，绿了再开项目。
+
+## 一、命名约定（工具靠这个认引脚，认不出就报错，不猜）
+
+| PMU 的每个引脚上挂什么 | 名字 | 工具从它认出 |
+|---|---|---|
+| 电压轨引脚 → 一个**电流源** | `IL_<引脚名>`，`dc` = 你台子里的典型负载 | 这是电压轨；典型负载值 |
+| 电流偏置引脚 → 一个**电压源** | `VB_<引脚名>`，`dc` = 该脚工作电压 | 这是电流偏置；顺从电压 |
+| 电源引脚 → 一个**电压源** | `VS_<引脚名>`，`dc` = 标称电源 | 这是电源；标称值 |
+| EN 引脚（若有）→ 一个**电压源** | `VEN_<引脚名>` | 有 EN，要表征上电 |
+
+方向很重要，**不是随便挑一个源**：
+- 轨是「注入电流、读电压」→ 必须是 `isource`；
+- 偏置是「加电压、读探针电流」→ 必须是 `vsource`。
+
+挂反了工具会直接报错（而不是默默算出错的数）。
+
+除此之外还要有：
+
+```
+parameters VSET=3                          // 输出档位，工具按 vset_codes 逐档改写
+include "<pdk>/toplevel.scs" section=tt    // 带 section= 的 PDK include，工具按 corners 逐角改写
+```
+
+分析语句可有可无 —— 工具会把台子里所有分析语句剥掉，自己写。
+
+## 二、文本模板
+
+`tools/templates/tb_convention.scs` 是一份可以直接改的样例。把 `PMU_CELL` / 引脚名 / 电流电压换成你的就行。
+
+## 三、从 Virtuoso 生成（省掉手连）
+
+`tools/skill/pmukit_tb.il` 给定 PMU 的 cell 和一张角色表，生成带上述命名源的测试台 schematic。
+
+```skill
+load("/path/to/pmukit/tools/skill/pmukit_tb.il")
+pmukitBuildTB("我的TB库" "pmu_tb" "PMU所在库" "PMU_CELL" "PMU_TOP"
+  list(
+    list("VDDA_1V0"  "supply" 1.0)      ; VS_VDDA_1V0  vsource dc=1.0
+    list("VDD0P8_A"  "rail"   500u)     ; IL_VDD0P8_A  isource dc=500u
+    list("VDD0P8_B"  "rail"   2m)
+    list("IB_PTAT"   "bias"   0.4)      ; VB_IB_PTAT   vsource dc=0.4
+    list("IB_POLY"   "bias"   0.4)
+    list("EN"        "en"     1.0)      ; VEN_EN       vsource dc=1.0
+    list("TESTMODE"  "none"   0)        ; 无角色，工具原样接线
+  ))
+```
+
+> ⚠️ 这个 `.il` **在开发机上没法跑**（桌面没有 Virtuoso）。它按老仓
+> `cadence/skill/pmu_top_symbol.il` / `ldo_cellview.il` 的既有写法写成，第一次真跑是在你的
+> Virtuoso 会话里。跑完**务必**用下面第四节校一遍 —— 校验器才是判据，脚本只是省手工。
+> 手连一个台子同样合格；这个脚本只是懒人路径。
+
+## 四、导出后先校验，再开项目
+
+```
+pmukit check <导出的 input.scs> --pmu-inst PMU_TOP
+```
+
+它会把引脚表打出来：每个引脚的网、角色、源、dc、地，以及**认不出来的引脚和原因**。
+认不出来不是错误 —— 有些引脚（测试脚、配置脚）本来就没角色，标 `ignore` 就行。
+但**你想建模的引脚必须认得出来**。
+
+校验通过之后：
+
+```
+pmukit new <项目名> --netlist <input.scs> --pmu-inst PMU_TOP \
+    --corners tt,ss,ff --temps -40,25,125 --vset 3 \
+    --care-up-to 2e10 \
+    --load VDD0P8_A=5e-4,2e-6 --load VDD0P8_B=2e-3,5e-6 \
+    --note "RX 模式，寄存器 0x12=0x03"
+```
+
+三问就是这三组参数：跑哪些角/温度/档、**你自己的模块吃多少电流**（开态、关态，可选边沿）、
+在乎到多高频率。`--note` 会印进每个 `.va` 的溯源头。
+
+`--load` 只写你真的会开关的轨。没写的轨照样表征小信号，只是负载 EN 事件会在报告里写「未跑」。
+
+## 五、常见的四个坑
+
+1. **源挂反了**（轨挂了 vsource / 偏置挂了 isource）→ 报错点名，改 master 即可。
+2. **PDK include 没有 `section=`** → 工具没法生成工艺角，报错时会把当前带 section 的 include 行列给你看。
+3. **引脚名 ≠ 网名**：工具按 PMU 实例的**引脚**报角色，按它连到的**网**找源。两者不同名没关系，
+   前缀跟着**引脚名**走（`IL_<引脚名>`）。
+4. **地**：台子里接到 `0` 的那些 PMU 引脚被认成地引脚；哪条轨回哪个地，是从子电路内部的器件图
+   读出来的（就近原则）。如果网表里没有 PMU 的子电路定义（黑盒 include），工具会**明说**读不到，
+   要你在 New 屏指定，而不是瞎配一个。

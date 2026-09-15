@@ -407,7 +407,13 @@ class Netlist:
             table.notes.append(
                 f"subcircuit '{master}' is not defined in this netlist -- pin names fall back to "
                 "the connected net names, and per-pin grounds cannot be read from the wiring")
-            port_names = list(nodes)
+            # Several pins can share a net (every ground tied to 0), so de-duplicate positionally
+            # rather than let one pin silently swallow the others.
+            port_names, seen = [], {}
+            for i, net in enumerate(nodes):
+                n = seen.get(net, 0)
+                seen[net] = n + 1
+                port_names.append(net if n == 0 else f"{net}#{i}")
 
         if len(port_names) != len(nodes):
             raise PmuError(
@@ -438,12 +444,15 @@ class Netlist:
                     prefix = next(pre for pre, r in PREFIX_ROLE.items() if r == role)
                     raise PmuError(
                         what=f"source '{src_name}' on net '{net}' is a {src_master}, but the "
-                             f"'{prefix}' prefix means '{role}', which must be a "
+                             f"'{prefix}' prefix means '{role}', which must be "
+                             f"{'an' if ROLE_MASTER[role][0] in 'aeiou' else 'a'} "
                              f"{ROLE_MASTER[role]}.",
                         why="The read math depends on the master: a rail is read as a voltage "
                             "under a current injection (isource), a bias is read as a probe "
                             "current under a voltage drive (vsource).",
-                        do=[f"Change '{src_name}' to a {ROLE_MASTER[role]}.",
+                        do=[f"Change '{src_name}' to "
+                            f"{'an' if ROLE_MASTER[role][0] in 'aeiou' else 'a'} "
+                            f"{ROLE_MASTER[role]}.",
                             f"Or rename it if it is not the {role} source for this pin."],
                         where=f"{self.path or 'netlist'}: instance {src_name}")
                 p.role, p.src, p.src_master = role, src_name, src_master
