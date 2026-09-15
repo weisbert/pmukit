@@ -162,8 +162,12 @@ def test_compare_is_exact_on_an_identical_refit():
 def test_reproduce_without_a_fitter_still_rebuilds_and_says_so(tmp_path, monkeypatch):
     """A desk with no fitter installed must not fail -- the box's params are still usable."""
     import sys
-    # A None entry in sys.modules is exactly how Python reports "this submodule is not here",
-    # so `from . import fit` raises ImportError whether or not the fitter is installed.
+
+    import pmukit
+    # `from . import fit` resolves via the package ATTRIBUTE once the submodule has been imported
+    # anywhere in the session, so hiding it needs both: drop the attribute and poison the
+    # sys.modules entry (a None entry is how Python says "this submodule is not here").
+    monkeypatch.delattr(pmukit, "fit", raising=False)
     monkeypatch.setitem(sys.modules, "pmukit.fit", None)
     payload = dg.parse(dg.export(box_payload(), budget=64000, project="demo_pmu"))
     out = rp.reproduce(payload, workdir=tmp_path)
