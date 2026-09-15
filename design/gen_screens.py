@@ -84,6 +84,16 @@ table.t{width:100%;border-collapse:collapse;font-size:12.5px}
 .legend{display:flex;gap:14px;font-size:12px;color:#5d5a53;align-items:center}
 .sw{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
 input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
+.app{position:relative}
+.ctx-veil{position:absolute;inset:0;z-index:40}
+.ctx{position:absolute;z-index:41;min-width:220px;background:#ffffff;border:1px solid #cfccc4;border-radius:4px;box-shadow:0 6px 20px rgba(28,27,24,.14);padding:4px;font-size:12.5px}
+.ctx .ttl{padding:5px 10px 6px;color:#8a867d;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;border-bottom:1px solid #ebe8e1;margin-bottom:3px;white-space:nowrap}
+.ctx .it{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:6px 10px;border-radius:3px;cursor:pointer;white-space:nowrap}
+.ctx .it:hover{background:#e8f1f7;color:#1f6f9f}
+.ctx .it.dis{color:#bdb9b0;cursor:default}.ctx .it.dis:hover{background:transparent;color:#bdb9b0}
+.ctx .it .k{color:#8a867d;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11px}
+.ctx .sep{height:1px;background:#ebe8e1;margin:3px 6px}
+.rc{cursor:context-menu}
 """
 
 ICONS = {
@@ -99,6 +109,27 @@ ICONS = {
     "spin": '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 2.5a5.5 5.5 0 1 1-5.2 3.7"></path></svg>',
     "upload": '<svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 11V3.5M4.5 7L8 3.5 11.5 7"></path><path d="M2.5 11.5v2h11v-2"></path></svg>',
 }
+
+CTX_JS = r"""
+// Right-click menus: every interactive object has one. Buttons carry the common verbs; the menu carries all of them.
+class CtxLogic extends DCLogic {
+  openMenu(e, title, items){
+    if (e && e.preventDefault) { e.preventDefault(); e.stopPropagation(); }
+    const app = e.currentTarget.closest('.app'); const r = app.getBoundingClientRect();
+    const x = Math.min(e.clientX - r.left, r.width - 250), y = Math.min(e.clientY - r.top, r.height - 40 - items.length * 30);
+    this.setState({ _menu: { title, items, x: Math.max(0, x), y: Math.max(0, y) } });
+  }
+  closeMenu(e){ if (e && e.preventDefault) e.preventDefault(); this.setState({ _menu: null }); }
+  menuVals(){
+    const m = this.state._menu;
+    return { noNativeMenu: (e) => { if (e && e.preventDefault) e.preventDefault(); },
+      menu: m ? { on: true, title: m.title, x: m.x.toFixed(0), y: m.y.toFixed(0), close: (e) => this.closeMenu(e),
+        items: m.items.map(it => it === '-' ? { sep: true, item: false } : { sep: false, item: true, label: it.label, key: it.key || '', cls: it.disabled ? 'dis' : '',
+          run: (e) => { if (e && e.stopPropagation) e.stopPropagation(); if (it.disabled) return; this.setState({ _menu: null }); if (it.action) it.action(); } }) }
+      : { on: false, items: [] } };
+  }
+}
+"""
 
 STEPS = [("1", "New"), ("2", "Plan"), ("3", "Run"), ("4", "Model"), ("5", "Deliver")]
 
@@ -126,12 +157,23 @@ def page(title, cur, body, script, props="{}"):
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap">
   <style>{CSS}</style>
 </helmet>
-<div class="app">
+<div class="app" onContextMenu="{{{{ noNativeMenu }}}}">
 {nav(cur)}
 {body}
+<sc-if value="{{{{ menu.on }}}}" hint-placeholder-val="{{{{ false }}}}">
+  <div class="ctx-veil" onClick="{{{{ menu.close }}}}" onContextMenu="{{{{ menu.close }}}}"></div>
+  <div class="ctx" style="left:{{{{ menu.x }}}}px;top:{{{{ menu.y }}}}px">
+    <div class="ttl">{{{{ menu.title }}}}</div>
+    <sc-for list="{{{{ menu.items }}}}" as="m" hint-placeholder-count="5">
+      <sc-if value="{{{{ m.sep }}}}" hint-placeholder-val="{{{{ false }}}}"><div class="sep"></div></sc-if>
+      <sc-if value="{{{{ m.item }}}}" hint-placeholder-val="{{{{ true }}}}"><div class="it {{{{ m.cls }}}}" onClick="{{{{ m.run }}}}"><span>{{{{ m.label }}}}</span><span class="k">{{{{ m.key }}}}</span></div></sc-if>
+    </sc-for>
+  </div>
+</sc-if>
 </div>
 </x-dc>
 <script data-dc-script data-props='{props}'>
+{CTX_JS}
 {script}
 </script>
 </body>
@@ -167,7 +209,7 @@ NEW_BODY = f"""
             <thead><tr><th>Pin</th><th>Net</th><th>Role</th><th>From source</th><th>DC</th><th>Status</th></tr></thead>
             <tbody>
               <sc-for list="{{{{ pins }}}}" as="p" hint-placeholder-count="6">
-                <tr><td class="mono">{{{{ p.pin }}}}</td><td class="mono" style="color:#5d5a53">{{{{ p.net }}}}</td><td><span class="badge {{{{ p.roleCls }}}}">{{{{ p.role }}}}</span></td><td class="mono">{{{{ p.src }}}}</td><td class="num" style="text-align:left">{{{{ p.dc }}}}</td><td><span class="badge {{{{ p.stCls }}}}">{{{{ p.st }}}}</span></td></tr>
+                <tr class="rc" onContextMenu="{{{{ p.menu }}}}"><td class="mono">{{{{ p.pin }}}}</td><td class="mono" style="color:#5d5a53">{{{{ p.net }}}}</td><td><span class="badge {{{{ p.roleCls }}}}">{{{{ p.role }}}}</span></td><td class="mono">{{{{ p.src }}}}</td><td class="num" style="text-align:left">{{{{ p.dc }}}}</td><td><span class="badge {{{{ p.stCls }}}}">{{{{ p.st }}}}</span></td></tr>
               </sc-for>
             </tbody>
           </table>
@@ -182,11 +224,11 @@ NEW_BODY = f"""
       <div class="pb" style="display:flex;flex-direction:column;gap:18px">
         <div class="field"><span class="lbl">1 · Corners and temperatures you simulate at</span>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="hint" style="width:70px">corners</span>
-            <sc-for list="{{{{ corners }}}}" as="c" hint-placeholder-count="3"><span class="chip {{{{ c.cls }}}}" onClick="{{{{ c.toggle }}}}">{{{{ c.name }}}}</span></sc-for>
+            <sc-for list="{{{{ corners }}}}" as="c" hint-placeholder-count="3"><span class="chip rc {{{{ c.cls }}}}" onClick="{{{{ c.toggle }}}}" onContextMenu="{{{{ c.menu }}}}">{{{{ c.name }}}}</span></sc-for>
             <input class="inp mono" style="width:150px;height:24px" placeholder="MOSff_RCss">
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="hint" style="width:70px">temp °C</span>
-            <sc-for list="{{{{ temps }}}}" as="c" hint-placeholder-count="3"><span class="chip {{{{ c.cls }}}}" onClick="{{{{ c.toggle }}}}">{{{{ c.name }}}}</span></sc-for>
+            <sc-for list="{{{{ temps }}}}" as="c" hint-placeholder-count="3"><span class="chip rc {{{{ c.cls }}}}" onClick="{{{{ c.toggle }}}}" onContextMenu="{{{{ c.menu }}}}">{{{{ c.name }}}}</span></sc-for>
             <input class="inp mono" style="width:70px;height:24px" placeholder="85">
           </div>
           <div style="display:flex;gap:6px;align-items:center"><span class="hint" style="width:70px">VSET codes</span><input class="inp mono" style="width:90px;height:24px" value="3"><span class="hint">from <span class="mono">parameters VSET=3</span></span></div>
@@ -196,7 +238,7 @@ NEW_BODY = f"""
             <thead><tr><th>Rail</th><th>On</th><th>Off</th><th>Switches on/off</th><th></th></tr></thead>
             <tbody>
               <sc-for list="{{{{ rails }}}}" as="r" hint-placeholder-count="2">
-                <tr><td class="mono">{{{{ r.name }}}}</td><td><input class="inp mono" style="width:90px;height:26px" value="{{{{ r.on }}}}"></td><td><input class="inp mono" style="width:90px;height:26px" value="{{{{ r.off }}}}"></td><td><input type="checkbox" checked="{{{{ r.sw }}}}" onChange="{{{{ r.toggle }}}}"> <span class="hint">{{{{ r.swText }}}}</span></td><td><button class="btn sm" onClick="{{{{ r.measure }}}}">Measure from netlist</button></td></tr>
+                <tr class="rc" onContextMenu="{{{{ r.menu }}}}"><td class="mono">{{{{ r.name }}}}</td><td><input class="inp mono" style="width:90px;height:26px" value="{{{{ r.on }}}}"></td><td><input class="inp mono" style="width:90px;height:26px" value="{{{{ r.off }}}}"></td><td><input type="checkbox" checked="{{{{ r.sw }}}}" onChange="{{{{ r.toggle }}}}"> <span class="hint">{{{{ r.swText }}}}</span></td><td><button class="btn sm" onClick="{{{{ r.measure }}}}">Measure from netlist</button></td></tr>
               </sc-for>
             </tbody>
           </table>
@@ -228,7 +270,7 @@ NEW_BODY = f"""
 """
 
 NEW_SCRIPT = """
-class Component extends DCLogic {
+class Component extends CtxLogic {
   constructor(p){ super(p); this.state = { loaded: false, adv: false,
     corners: ['tt','ss','ff'], cornersOn: {tt:true, ss:true, ff:true},
     temps: ['-40','25','125'], tempsOn: {'-40':true,'25':true,'125':true},
@@ -244,16 +286,25 @@ class Component extends DCLogic {
       {pin:'EN', net:'en', role:'enable', roleCls:'b-ink', src:'VEN_EN', dc:'0 → 1 V', st:'ok', stCls:'b-ok'},
       {pin:'VSS_A · VSS_B · AGND', net:'(3 grounds)', role:'ground', roleCls:'b-mute', src:'from wiring', dc:'—', st:'ok', stCls:'b-ok'},
       {pin:'TESTMODE', net:'testmode', role:'none', roleCls:'b-warn', src:'—', dc:'—', st:'unclassified', stCls:'b-warn'},
-    ];
+    ].map(p => ({ ...p, menu: (e) => this.openMenu(e, 'pin ' + p.pin, [
+      { label: 'Set role: rail', action: () => {} }, { label: 'Set role: bias' }, { label: 'Set role: supply' }, { label: 'Set role: enable' }, { label: 'Ignore this pin' }, '-',
+      { label: 'Show in netlist', key: 'line ' + (40 + p.pin.length) }, { label: 'Copy pin name' }, { label: 'Copy net name' } ]) }));
     const chips = (names, on, key) => names.map(n => ({ name:n, cls: on[n] ? 'on' : '',
-      toggle: () => { const o = Object.assign({}, on); o[n] = !o[n]; this.setState({[key]: o}); } }));
+      toggle: () => { const o = Object.assign({}, on); o[n] = !o[n]; this.setState({[key]: o}); },
+      menu: (e) => this.openMenu(e, (key === 'cornersOn' ? 'corner ' : 'temp ') + n, [
+        { label: 'Only this', action: () => { const o = {}; names.forEach(x => o[x] = x === n); this.setState({[key]: o}); } },
+        { label: 'All', action: () => { const o = {}; names.forEach(x => o[x] = true); this.setState({[key]: o}); } }, '-',
+        { label: key === 'cornersOn' ? 'Set as nominal corner' : 'Set as nominal temperature' }, { label: 'Remove from list' } ]) }));
     const rails = [
       {name:'VDD0P8_A', on:'500 µA', off:'2 µA'}, {name:'VDD0P8_B', on:'2.0 mA', off:'20 µA'},
     ].map(r => ({ ...r, sw: !!s.sw[r.name], swText: s.sw[r.name] ? 'load-EN on/off characterized' : 'static load only',
       toggle: () => { const o = Object.assign({}, s.sw); o[r.name] = !o[r.name]; this.setState({sw:o}); },
-      measure: () => {} }));
+      measure: () => {},
+      menu: (e) => this.openMenu(e, 'rail ' + r.name, [ { label: 'Measure on/off/edge from netlist' }, { label: 'Copy values from the other rail' }, '-',
+        { label: s.sw[r.name] ? 'Static load only (no load-EN)' : 'Characterize load-EN on/off', action: () => { const o = Object.assign({}, s.sw); o[r.name] = !o[r.name]; this.setState({sw:o}); } },
+        { label: 'Show the IL_ source line' } ]) }));
     const nc = s.corners.filter(c => s.cornersOn[c]).length, nt = s.temps.filter(t => s.tempsOn[t]).length;
-    return {
+    return { ...this.menuVals(),
       loaded: s.loaded, notLoaded: !s.loaded, adv: s.adv,
       advLabel: s.adv ? 'Hide derived settings' : 'Show derived settings (pmukit decided these)',
       load: () => this.setState({loaded:true}), toggleAdv: (e) => { if (e && e.preventDefault) e.preventDefault(); this.setState({adv: !s.adv}); },
@@ -313,7 +364,7 @@ PLAN_BODY = f"""
           <thead><tr><th style="width:28px"></th><th>Analysis</th><th>Ports</th><th class="num" style="text-align:right">Runs</th><th>Stimulus</th><th>Reads</th><th>Feeds</th><th class="num" style="text-align:right">CPU-h</th></tr></thead>
           <tbody>
             <sc-for list="{{{{ groups }}}}" as="g" hint-placeholder-count="12">
-              <tr class="click {{{{ g.cls }}}}" onClick="{{{{ g.select }}}}"><td><input type="checkbox" checked="{{{{ g.on }}}}" onChange="{{{{ g.toggle }}}}" onClick="{{{{ g.stop }}}}"></td><td class="mono" style="{{{{ g.style }}}}">{{{{ g.an }}}}</td><td class="mono" style="color:#5d5a53">{{{{ g.ports }}}}</td><td class="num">{{{{ g.runs }}}}</td><td class="hint">{{{{ g.stim }}}}</td><td class="mono" style="font-size:11.5px">{{{{ g.reads }}}}</td><td style="font-size:12px">{{{{ g.feeds }}}}</td><td class="num">{{{{ g.h }}}}</td></tr>
+              <tr class="click rc {{{{ g.cls }}}}" onClick="{{{{ g.select }}}}" onContextMenu="{{{{ g.menu }}}}"><td><input type="checkbox" checked="{{{{ g.on }}}}" onChange="{{{{ g.toggle }}}}" onClick="{{{{ g.stop }}}}"></td><td class="mono" style="{{{{ g.style }}}}">{{{{ g.an }}}}</td><td class="mono" style="color:#5d5a53">{{{{ g.ports }}}}</td><td class="num">{{{{ g.runs }}}}</td><td class="hint">{{{{ g.stim }}}}</td><td class="mono" style="font-size:11.5px">{{{{ g.reads }}}}</td><td style="font-size:12px">{{{{ g.feeds }}}}</td><td class="num">{{{{ g.h }}}}</td></tr>
             </sc-for>
           </tbody>
         </table>
@@ -335,7 +386,7 @@ PLAN_BODY = f"""
         <div style="overflow:auto;max-height:240px;flex:none;border-bottom:1px solid #ebe8e1">
           <table class="t">
             <thead><tr><th>Run</th><th>Corner</th><th class="num" style="text-align:right">T °C</th><th class="num" style="text-align:right">VSET</th><th>Load</th><th>Edits</th></tr></thead>
-            <tbody><sc-for list="{{{{ runList }}}}" as="r" hint-placeholder-count="8"><tr class="click {{{{ r.cls }}}}" onClick="{{{{ r.pick }}}}"><td class="id">{{{{ r.id }}}}</td><td class="mono">{{{{ r.corner }}}}</td><td class="num">{{{{ r.temp }}}}</td><td class="num">{{{{ r.vset }}}}</td><td class="mono">{{{{ r.load }}}}</td><td class="hint">{{{{ r.edits }}}}</td></tr></sc-for></tbody>
+            <tbody><sc-for list="{{{{ runList }}}}" as="r" hint-placeholder-count="8"><tr class="click rc {{{{ r.cls }}}}" onClick="{{{{ r.pick }}}}" onContextMenu="{{{{ r.menu }}}}"><td class="id">{{{{ r.id }}}}</td><td class="mono">{{{{ r.corner }}}}</td><td class="num">{{{{ r.temp }}}}</td><td class="num">{{{{ r.vset }}}}</td><td class="mono">{{{{ r.load }}}}</td><td class="hint">{{{{ r.edits }}}}</td></tr></sc-for></tbody>
           </table>
         </div>
         <div style="padding:10px 14px;display:flex;flex-direction:column;gap:6px;min-height:0;overflow:auto">
@@ -413,7 +464,7 @@ function recipeOf(g, r){
   L.push('# dsub -A rf_short -R "cpu=8;mem=8000" -x all -EP <dir> -J alps input.scs -format ps -o ../psf/' + r.id + ' -I $PDK/alps -mt 8 -ade');
   return L.join('\\n');
 }
-class Component extends DCLogic {
+class Component extends CtxLogic {
   constructor(p){ super(p); const on = {}; GROUPS.forEach(g => on[g.id] = true); this.state = { on, sel: 'g7', tab: 'why', runSel: null }; }
   renderVals(){
     const s = this.state;
@@ -421,14 +472,21 @@ class Component extends DCLogic {
       style: s.on[g.id] ? '' : 'text-decoration:line-through;color:#8a867d',
       select: () => this.setState({sel: g.id, runSel: null}),
       toggle: () => { const o = Object.assign({}, s.on); o[g.id] = !o[g.id]; this.setState({on:o}); },
-      stop: (e) => { if (e && e.stopPropagation) e.stopPropagation(); } }));
+      stop: (e) => { if (e && e.stopPropagation) e.stopPropagation(); },
+      menu: (e) => this.openMenu(e, g.an, [
+        { label: 'Why this run exists', action: () => this.setState({sel: g.id, tab: 'why'}) }, { label: 'Show its runs per corner', action: () => this.setState({sel: g.id, tab: 'runs', runSel: null}) }, '-',
+        { label: 'Only this group', action: () => { const o = {}; GROUPS.forEach(x => o[x.id] = x.id === g.id); this.setState({on:o}); } },
+        { label: 'Everything except this', action: () => { const o = {}; GROUPS.forEach(x => o[x.id] = x.id !== g.id); this.setState({on:o}); } },
+        { label: 'All groups on', action: () => { const o = {}; GROUPS.forEach(x => o[x.id] = true); this.setState({on:o}); } }, '-',
+        { label: 'Dry-run: write one netlist, no submit' }, { label: 'Export this group as CSV' } ]) }));
     const onG = groups.filter(g => g.on);
     const runs = onG.reduce((a,g) => a + g.runs, 0), cpuh = onG.reduce((a,g) => a + g.h, 0);
     const offList = groups.filter(g => !g.on);
     const selG = GROUPS.find(g => g.id === s.sel);
     const rl = runsOf(selG); const runSel = rl.find(r => r.id === s.runSel) || rl[0];
-    const runList = rl.map(r => ({ ...r, cls: r.id === runSel.id ? 'sel' : '', pick: () => this.setState({runSel: r.id}) }));
-    return { groups, runs, cpuh: cpuh.toFixed(1), nGroups: onG.length + ' / ' + GROUPS.length,
+    const runList = rl.map(r => ({ ...r, cls: r.id === runSel.id ? 'sel' : '', pick: () => this.setState({runSel: r.id}),
+      menu: (e) => this.openMenu(e, 'run ' + r.id, [ { label: 'Show recipe', action: () => this.setState({runSel: r.id}) }, { label: 'Copy recipe' }, { label: 'Copy dsub command' }, { label: 'Open input.scs' }, '-', { label: 'Run only this one' }, { label: 'Skip this run (mark NOT RUN)' }, '-', { label: 'Copy run id', key: r.id.slice(0,6) + '…' } ]) }));
+    return { ...this.menuVals(), groups, runs, cpuh: cpuh.toFixed(1), nGroups: onG.length + '/' + GROUPS.length,
       sel: selG, allOn: offList.length === 0, anyOff: offList.length > 0, offList,
       isWhy: s.tab === 'why', isRuns: s.tab === 'runs', tabWhyCls: s.tab === 'why' ? 'on' : '', tabRunsCls: s.tab === 'runs' ? 'on' : '',
       showWhy: () => this.setState({tab:'why'}), showRuns: () => this.setState({tab:'runs'}),
@@ -477,7 +535,7 @@ RUN_BODY = f"""
           <thead><tr><th>Run</th><th>Cell</th><th>Analysis</th><th>Status</th><th class="num" style="text-align:right">Elapsed</th><th class="num" style="text-align:right">CPU-h</th><th></th></tr></thead>
           <tbody>
             <sc-for list="{{{{ rows }}}}" as="r" hint-placeholder-count="12">
-              <tr class="click {{{{ r.cls }}}}" onClick="{{{{ r.select }}}}"><td class="id">{{{{ r.id }}}}</td><td class="mono" style="font-size:12px">{{{{ r.cell }}}}</td><td>{{{{ r.an }}}}</td><td><span class="badge {{{{ r.bcls }}}}">{{{{ r.status }}}}</span></td><td class="num">{{{{ r.el }}}}</td><td class="num">{{{{ r.cpu }}}}</td><td><sc-if value="{{{{ r.isFailed }}}}" hint-placeholder-val="{{{{ false }}}}"><button class="btn sm" onClick="{{{{ r.retry }}}}">{ICONS['retry']} Retry</button></sc-if></td></tr>
+              <tr class="click rc {{{{ r.cls }}}}" onClick="{{{{ r.select }}}}" onContextMenu="{{{{ r.menu }}}}"><td class="id">{{{{ r.id }}}}</td><td class="mono" style="font-size:12px">{{{{ r.cell }}}}</td><td>{{{{ r.an }}}}</td><td><span class="badge {{{{ r.bcls }}}}">{{{{ r.status }}}}</span></td><td class="num">{{{{ r.el }}}}</td><td class="num">{{{{ r.cpu }}}}</td><td><sc-if value="{{{{ r.isFailed }}}}" hint-placeholder-val="{{{{ false }}}}"><button class="btn sm" onClick="{{{{ r.retry }}}}">{ICONS['retry']} Retry</button></sc-if></td></tr>
             </sc-for>
           </tbody>
         </table>
@@ -535,7 +593,7 @@ function recipeRow(r){
   L.push('# dsub -A rf_short -R "cpu=8;mem=8000" -x all -EP <dir> -J alps input.scs -format ps -o ../psf/' + r.id + ' -I $PDK/alps -mt 8 -ade');
   return L.join('\\n');
 }
-class Component extends DCLogic {
+class Component extends CtxLogic {
   constructor(p){ super(p); this.state = { rows: ROWS.map(r => ({...r})), sel: 'e4d27a5c1f90', filter: 'All', counts: {done:191, running:8, queued:71, failed:2, cached:10} }; }
   componentDidMount(){ this.timer = setInterval(() => { const c = Object.assign({}, this.state.counts); if (c.running > 0) { c.running -= 1; c.done += 1; } if (c.queued > 0) { c.queued -= 1; c.running += 1; } if (c.running !== this.state.counts.running || c.queued !== this.state.counts.queued) this.setState({counts:c}); }, 1800); }
   componentWillUnmount(){ clearInterval(this.timer); }
@@ -545,14 +603,19 @@ class Component extends DCLogic {
     const rows = s.rows.filter(r => s.filter === 'All' || r.status === s.filter.toLowerCase()).map(r => ({ ...r,
       cls: r.id === s.sel ? 'sel' : '', bcls: BCLS[r.status], isFailed: r.status === 'failed',
       select: () => this.setState({sel: r.id}),
-      retry: (e) => { if (e && e.stopPropagation) e.stopPropagation(); const rows = s.rows.map(x => x.id === r.id ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.failed = Math.max(0, cc.failed - 1); cc.queued += 1; this.setState({rows, counts: cc}); } }));
+      retry: (e) => { if (e && e.stopPropagation) e.stopPropagation(); const rows = s.rows.map(x => x.id === r.id ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.failed = Math.max(0, cc.failed - 1); cc.queued += 1; this.setState({rows, counts: cc}); },
+      menu: (e) => this.openMenu(e, 'run ' + r.id + ' · ' + r.status, [
+        { label: 'Show details', action: () => this.setState({sel: r.id}) }, { label: 'Open log' }, { label: 'Open PSF dir', disabled: !(r.status === 'done' || r.status === 'cached') }, { label: 'Open input.scs' }, '-',
+        { label: 'Retry', disabled: r.status !== 'failed', action: () => { const rows = s.rows.map(x => x.id === r.id ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.failed = Math.max(0, cc.failed - 1); cc.queued += 1; this.setState({rows, counts: cc, sel: r.id}); } },
+        { label: 'Skip (mark NOT RUN)', disabled: r.status === 'done' || r.status === 'cached' }, { label: 'Kill job', disabled: r.status !== 'running' }, { label: 'Re-run even if cached', disabled: r.status !== 'cached' }, '-',
+        { label: 'Copy recipe' }, { label: 'Copy run id', key: r.id.slice(0,6) + '…' }, { label: 'Copy failure bundle for desk', disabled: r.status !== 'failed' } ]) }));
     const selRow = s.rows.find(r => r.id === s.sel) || s.rows[0];
     const sel = { ...selRow, bcls: BCLS[selRow.status], isFailed: selRow.status === 'failed', log: LOGS[selRow.status](selRow, c), recipe: recipeRow(selRow), cellDir: selRow.cell.replace(/ \/ /g, '_').replace(' °C', 'c').replace('−', 'm'), job: '4881' + parseInt(selRow.id.slice(0,4), 16).toString().slice(0,4),
       feeds: selRow.an.startsWith('noise') ? 'noise block' : selRow.an.startsWith('ac') ? 'zout / psrr blocks' : selRow.an.startsWith('tran') ? 'load_en (large-signal)' : 'dc tables',
       psf: selRow.status === 'done' || selRow.status === 'cached' ? '…/psf/' + selRow.id + '/' : '—' };
     const filters = ['All','Running','Failed','Queued'].map(n => ({ name:n, cls: s.filter === n ? 'on' : '', pick: () => this.setState({filter:n}) }));
     const cpuh = (c.done * 0.58).toFixed(1);
-    return { c: { ...c, cpuh, eta: c.queued > 0 ? Math.ceil(c.queued * 4.2 / 8) + ' min' : 'done' }, w: { done: pct('done'), running: pct('running'), failed: pct('failed'), cached: pct('cached') },
+    return { ...this.menuVals(), c: { ...c, cpuh, eta: c.queued > 0 ? Math.ceil(c.queued * 4.2 / 8) + ' min' : 'done' }, w: { done: pct('done'), running: pct('running'), failed: pct('failed'), cached: pct('cached') },
       rows, sel, filters, notDone: c.queued > 0 || c.running > 0,
       retryAll: () => { const rows = s.rows.map(x => x.status === 'failed' ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.queued += cc.failed; cc.failed = 0; this.setState({rows, counts: cc}); } };
   }
@@ -582,7 +645,7 @@ MODEL_BODY = f"""
           <sc-for list="{{{{ heads }}}}" as="h" hint-placeholder-count="9"><div class="cell c-head">{{{{ h }}}}</div></sc-for>
           <sc-for list="{{{{ rows }}}}" as="r" hint-placeholder-count="4">
             <div class="cell c-head" style="justify-content:flex-start;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;color:#1c1b18">{{{{ r.name }}}}</div>
-            <sc-for list="{{{{ r.cells }}}}" as="c" hint-placeholder-count="9"><div class="cell {{{{ c.cls }}}}" onClick="{{{{ c.pick }}}}">{{{{ c.label }}}}</div></sc-for>
+            <sc-for list="{{{{ r.cells }}}}" as="c" hint-placeholder-count="9"><div class="cell rc {{{{ c.cls }}}}" onClick="{{{{ c.pick }}}}" onContextMenu="{{{{ c.menu }}}}">{{{{ c.label }}}}</div></sc-for>
           </sc-for>
         </div>
         <div class="legend" style="margin-top:12px"><span><span class="badge b-ok">OK</span> all blocks within tolerance</span><span><span class="badge b-warn">MARG</span> one block near its limit</span><span><span class="badge b-bad">FAIL</span> block outside tolerance</span><span><span class="badge b-mute">N/R</span> data not run</span></div>
@@ -595,11 +658,11 @@ MODEL_BODY = f"""
       <div class="pb" style="display:flex;flex-direction:column;gap:12px">
         <table class="t">
           <thead><tr><th>Block</th><th>Metric</th><th class="num" style="text-align:right">Model vs GT</th><th class="num" style="text-align:right">Limit</th><th>Grade</th></tr></thead>
-          <tbody><sc-for list="{{{{ blocks }}}}" as="b" hint-placeholder-count="5"><tr class="click {{{{ b.cls }}}}" onClick="{{{{ b.pick }}}}"><td class="mono">{{{{ b.name }}}}</td><td class="hint">{{{{ b.metric }}}}</td><td class="num">{{{{ b.val }}}}</td><td class="num" style="color:#8a867d">{{{{ b.lim }}}}</td><td><span class="badge {{{{ b.gcls }}}}">{{{{ b.grade }}}}</span></td></tr></sc-for></tbody>
+          <tbody><sc-for list="{{{{ blocks }}}}" as="b" hint-placeholder-count="5"><tr class="click rc {{{{ b.cls }}}}" onClick="{{{{ b.pick }}}}" onContextMenu="{{{{ b.menu }}}}"><td class="mono">{{{{ b.name }}}}</td><td class="hint">{{{{ b.metric }}}}</td><td class="num">{{{{ b.val }}}}</td><td class="num" style="color:#8a867d">{{{{ b.lim }}}}</td><td><span class="badge {{{{ b.gcls }}}}">{{{{ b.grade }}}}</span></td></tr></sc-for></tbody>
         </table>
         <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600">{{{{ chartTitle }}}}</span><div style="display:flex;gap:6px"><span class="chip {{{{ viewChartCls }}}}" onClick="{{{{ showChart }}}}">Chart</span><span class="chip {{{{ viewTableCls }}}}" onClick="{{{{ showTable }}}}">Table</span></div></div>
         <sc-if value="{{{{ isChart }}}}" hint-placeholder-val="{{{{ true }}}}">
-          <div style="position:relative">
+          <div style="position:relative" class="rc" onContextMenu="{{{{ chartMenu }}}}">
             <svg width="520" height="250" viewBox="0 0 520 250" style="display:block;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:10.5px" onMouseMove="{{{{ hover }}}}" onMouseLeave="{{{{ unhover }}}}">
               <sc-for list="{{{{ gridV }}}}" as="g" hint-placeholder-count="9"><line x1="{{{{ g.x }}}}" x2="{{{{ g.x }}}}" y1="14" y2="216" stroke="#ebe8e1"></line><text x="{{{{ g.x }}}}" y="232" text-anchor="middle" fill="#8a867d">{{{{ g.t }}}}</text></sc-for>
               <sc-for list="{{{{ gridH }}}}" as="g" hint-placeholder-count="4"><line x1="48" x2="512" y1="{{{{ g.y }}}}" y2="{{{{ g.y }}}}" stroke="#ebe8e1"></line><text x="42" y="{{{{ g.ty }}}}" text-anchor="end" fill="#8a867d">{{{{ g.t }}}}</text></sc-for>
@@ -662,13 +725,16 @@ function scaleY(lo, hi){ return z => Y1 - (Y1-Y0) * (Math.log10(Math.max(z, lo))
 const FS = []; for (let i = 0; i <= 180; i++) FS.push(Math.pow(10, 1 + i/20));
 const pathOf = (fn, yOf) => FS.map((f,i) => (i?'L':'M') + xOf(f).toFixed(1) + ' ' + yOf(fn(f)).toFixed(1)).join(' ');
 const fmtF = f => f >= 1e9 ? (f/1e9).toFixed(f>=1e10?0:1)+' GHz' : f >= 1e6 ? (f/1e6).toFixed(0)+' MHz' : f >= 1e3 ? (f/1e3).toFixed(0)+' kHz' : f.toFixed(0)+' Hz';
-class Component extends DCLogic {
+class Component extends CtxLogic {
   constructor(p){ super(p); this.state = { port:'VDD0P8_B', corner:'ss', temp:'25', view:'chart', hov:null }; }
   renderVals(){
     const s = this.state;
     const heads = []; CORNERS.forEach(c => TEMPS.forEach(t => heads.push(c + ' ' + t)));
     const rows = PORTS.map(p => ({ name:p, cells: CORNERS.flatMap(c => TEMPS.map(t => { const g = GRADE[p+'|'+c+'|'+t] || 'ok'; const sel = s.port===p && s.corner===c && s.temp===t;
-      return { cls: CLS[g] + (sel ? ' sel' : ''), label: LBL[g], pick: () => this.setState({port:p, corner:c, temp:t, hov:null}) }; })) }));
+      return { cls: CLS[g] + (sel ? ' sel' : ''), label: LBL[g], pick: () => this.setState({port:p, corner:c, temp:t, hov:null}),
+        menu: (e) => this.openMenu(e, p + ' · ' + c + ' / ' + t + ' °C', [
+          { label: 'Show curves', action: () => this.setState({port:p, corner:c, temp:t, hov:null}) }, { label: 'Compare with tt / 25 °C' }, { label: 'Open the runs behind this cell' }, '-',
+          { label: 'Copy digest for this cell' }, { label: 'Re-fit this cell only' }, { label: g === 'nr' ? 'Retry the missing run' : 'Accept as-is (override, noted in report)', disabled: g === 'ok' } ]) }; })) }));
     const rail = s.port.startsWith('VDD');
     const kGT = rail ? { f0: 1.78e6, q: 2.6, a: 1, lf: 1 } : { w: 1, p: 1 };
     const marg = (GRADE[s.port+'|'+s.corner+'|'+s.temp] || 'ok') === 'warn';
@@ -679,12 +745,14 @@ class Component extends DCLogic {
     const fmtV = v => rail ? v.toFixed(v < 10 ? 2 : 1) : v.toExponential(2);
     const g = GRADE[s.port+'|'+s.corner+'|'+s.temp] || 'ok';
     const chartBlock = rail ? 'zout' : 'noise';
-    const blocks = blocksFor(s.port, g).map(b => ({ ...b, gcls: BADGE[b.grade], grade: LBL[b.grade], cls: b.name === chartBlock ? 'sel' : '', pick: () => {} }));
+    const blocks = blocksFor(s.port, g).map(b => ({ ...b, gcls: BADGE[b.grade], grade: LBL[b.grade], cls: b.name === chartBlock ? 'sel' : '', pick: () => {},
+      menu: (e) => this.openMenu(e, 'block ' + b.name, [ { label: 'Show chart' }, { label: 'Show fit parameters' }, { label: 'Copy numbers' }, '-', { label: 'Which runs fed this block' }, { label: 'Re-fit this block' } ]) }));
     const hov = s.hov ? { on:true, x: s.hov.x.toFixed(1), yg: yOf(gtFn(s.hov.f)).toFixed(1), ym: yOf(mFn(s.hov.f)).toFixed(1), tx: Math.min(s.hov.x + 12, 330).toFixed(0), text: fmtF(s.hov.f) + '  GT ' + fmtV(gtFn(s.hov.f)) + '  model ' + fmtV(mFn(s.hov.f)) + ' ' + unit } : { on:false };
     const gridV = [1e1,1e2,1e3,1e4,1e5,1e6,1e7,1e8,1e9,1e10].map(f => ({ x: xOf(f).toFixed(1), t: f>=1e9 ? (f/1e9)+'G' : f>=1e6 ? (f/1e6)+'M' : f>=1e3 ? (f/1e3)+'k' : f }));
     const gridH = (rail ? [0.1,1,10,100,1e3,1e4] : [1e-26,1e-24,1e-22,1e-20]).map(z => ({ y: yOf(z).toFixed(1), ty: (yOf(z)+3.5).toFixed(1), t: rail ? (z >= 1e3 ? (z/1e3)+'k' : String(z)) : '1e' + Math.round(Math.log10(z)) }));
     const tableRows = [1e2,1e4,1e5,1e6,1.78e6,1e7,1e8,1e9,1e10].map(f => { const gv = gtFn(f), mv = mFn(f); return { f: fmtF(f), g: fmtV(gv), m: fmtV(mv), d: ((rail ? 20 : 10)*Math.log10(mv/gv)).toFixed(2) }; });
-    return { heads, rows, blocks, selPort: s.port, selCell: s.corner + ' / ' + s.temp + ' °C / VSET 3', selGrade: LBL[g], selCls: BADGE[g],
+    return { ...this.menuVals(), chartMenu: (e) => this.openMenu(e, 'chart', [ { label: 'Copy data as CSV' }, { label: 'Export PNG' }, { label: s.view === 'chart' ? 'Show as table' : 'Show as chart', action: () => this.setState({view: s.view === 'chart' ? 'table' : 'chart'}) }, '-', { label: 'Overlay tt / 25 °C' }, { label: 'Show phase' } ]),
+      heads, rows, blocks, selPort: s.port, selCell: s.corner + ' / ' + s.temp + ' °C / VSET 3', selGrade: LBL[g], selCls: BADGE[g],
       chartTitle: rail ? '|Zout| · load ' + (s.port === 'VDD0P8_A' ? '500 µA' : '2 mA') : 'current noise PSD · ' + s.port, chartNote: rail ? '|Zout| in Ω vs frequency · log–log · hover for values' : 'A²/Hz vs frequency · log–log · hover for values', unit,
       isChart: s.view === 'chart', isTable: s.view === 'table', viewChartCls: s.view === 'chart' ? 'on' : '', viewTableCls: s.view === 'table' ? 'on' : '',
       showChart: () => this.setState({view:'chart'}), showTable: () => this.setState({view:'table'}),
@@ -715,7 +783,7 @@ DELIVER_BODY = f"""
       <div class="pb" style="padding:0">
         <table class="t">
           <thead><tr><th></th><th>File</th><th>What</th><th class="num" style="text-align:right">Size</th><th>sha</th></tr></thead>
-          <tbody><sc-for list="{{{{ files }}}}" as="f" hint-placeholder-count="7"><tr class="click {{{{ f.cls }}}}" onClick="{{{{ f.pick }}}}"><td style="color:#8a867d;width:20px">{ICONS['file']}</td><td class="mono">{{{{ f.name }}}}</td><td><div>{{{{ f.kind }}}}</div><div class="hint">{{{{ f.desc }}}}</div></td><td class="num">{{{{ f.size }}}}</td><td class="id" style="color:#8a867d">{{{{ f.sha }}}}</td></tr></sc-for></tbody>
+          <tbody><sc-for list="{{{{ files }}}}" as="f" hint-placeholder-count="7"><tr class="click rc {{{{ f.cls }}}}" onClick="{{{{ f.pick }}}}" onContextMenu="{{{{ f.menu }}}}"><td style="color:#8a867d;width:20px">{ICONS['file']}</td><td class="mono">{{{{ f.name }}}}</td><td><div>{{{{ f.kind }}}}</div><div class="hint">{{{{ f.desc }}}}</div></td><td class="num">{{{{ f.size }}}}</td><td class="id" style="color:#8a867d">{{{{ f.sha }}}}</td></tr></sc-for></tbody>
         </table>
       </div>
     </div>
@@ -801,14 +869,15 @@ HB health: first-step residual 7.7e-3, all large-signal terms individually check
   "created": "2026-09-15T14:02:11"
 }`,
 };
-class Component extends DCLogic {
+class Component extends CtxLogic {
   constructor(p){ super(p); this.state = { sel: 'PMU_demo_pmu.scs', copied: false }; }
   renderVals(){
     const s = this.state;
-    const files = FILES.map(f => ({ ...f, cls: f.name === s.sel ? 'sel' : '', pick: () => this.setState({sel: f.name}) }));
+    const files = FILES.map(f => ({ ...f, cls: f.name === s.sel ? 'sel' : '', pick: () => this.setState({sel: f.name}),
+      menu: (e) => this.openMenu(e, f.name, [ { label: 'Preview', action: () => this.setState({sel: f.name}) }, { label: 'Copy path' }, { label: 'Copy include line', disabled: !f.name.endsWith('.scs') }, '-', { label: 'Diff vs previous deliverable' }, { label: 'Show provenance' } ]) }));
     const f = FILES.find(x => x.name === s.sel);
     const body = BODIES[f.name] || BODIES['PMU_demo_pmu_tt.va'].replace(/corner tt/, 'corner ' + f.name.slice(-5, -3)).replace('HB check 7.7e-3', f.name.includes('_ss') ? 'HB check 9.1e-3' : 'HB check 6.4e-3');
-    return { files, sel: { ...f, body }, copyLabel: s.copied ? 'Copied' : 'Copy',
+    return { ...this.menuVals(), files, sel: { ...f, body }, copyLabel: s.copied ? 'Copied' : 'Copy',
       copy: () => { this.setState({copied:true}); setTimeout(() => this.setState({copied:false}), 1500); } };
   }
 }
@@ -846,7 +915,7 @@ DIGEST_BODY = f"""
           <thead><tr><th style="width:28px"></th><th>Block</th><th class="num" style="text-align:right">KB</th><th>Fate</th></tr></thead>
           <tbody>
             <sc-for list="{{{{ items }}}}" as="i" hint-placeholder-count="11">
-              <tr><td><input type="checkbox" checked="{{{{ i.on }}}}" disabled="{{{{ i.fixed }}}}" onChange="{{{{ i.toggle }}}}"></td><td style="{{{{ i.style }}}}"><div>{{{{ i.name }}}}</div><div class="hint">{{{{ i.desc }}}}</div></td><td class="num">{{{{ i.kb }}}}</td><td><span class="badge {{{{ i.fcls }}}}">{{{{ i.fate }}}}</span></td></tr>
+              <tr class="rc" onContextMenu="{{{{ i.menu }}}}"><td><input type="checkbox" checked="{{{{ i.on }}}}" disabled="{{{{ i.fixed }}}}" onChange="{{{{ i.toggle }}}}"></td><td style="{{{{ i.style }}}}"><div>{{{{ i.name }}}}</div><div class="hint">{{{{ i.desc }}}}</div></td><td class="num">{{{{ i.kb }}}}</td><td><span class="badge {{{{ i.fcls }}}}">{{{{ i.fate }}}}</span></td></tr>
             </sc-for>
           </tbody>
         </table>
@@ -875,7 +944,7 @@ pmukit report demo_pmu --cell ss/25c                # same report text as the bo
 """
 
 DIGEST_SCRIPT = "const ITEMS = " + json.dumps(DIGEST_ITEMS, ensure_ascii=False) + """;
-class Component extends DCLogic {
+class Component extends CtxLogic {
   constructor(p){ super(p); const on = {}; ITEMS.forEach(i => on[i.id] = i.id !== 'zpsrr_all'); this.state = { on, budget: 64, copied: false }; }
   renderVals(){
     const s = this.state;
@@ -886,7 +955,8 @@ class Component extends DCLogic {
     const dropped = sel.filter(i => !kept.has(i.id));
     const items = ITEMS.map(i => { const on = !!s.on[i.id]; const fate = !on ? 'off' : kept.has(i.id) ? 'kept' : 'dropped'; return { ...i, on, kb: i.kb.toFixed(1),
       fate, fcls: fate === 'kept' ? 'b-ok' : fate === 'dropped' ? 'b-warn' : 'b-mute', style: on ? '' : 'color:#8a867d',
-      toggle: () => { if (i.fixed) return; const o = Object.assign({}, s.on); o[i.id] = !o[i.id]; this.setState({on:o}); } }; });
+      toggle: () => { if (i.fixed) return; const o = Object.assign({}, s.on); o[i.id] = !o[i.id]; this.setState({on:o}); },
+      menu: (e) => this.openMenu(e, i.name, [ { label: 'Only this block (+ the fixed ones)', action: () => { const o = {}; ITEMS.forEach(x => o[x.id] = x.fixed || x.id === i.id); this.setState({on:o}); } }, { label: 'All curve blocks', action: () => { const o = {}; ITEMS.forEach(x => o[x.id] = true); this.setState({on:o}); } }, '-', { label: 'Preview this block only' }, { label: 'Raise priority for this paste' } ]) }; });
     const budgets = [32, 64, 128].map(b => ({ name: b + ' KB', cls: s.budget === b ? 'on' : '', pick: () => this.setState({budget:b}) }));
     const parts = Math.max(1, Math.ceil(acc / 32));
     const lines = [
@@ -907,7 +977,7 @@ class Component extends DCLogic {
     if (kept.has('tran')) lines.push('[D5 tran load-EN VDD0P8_A ss/25c on] t[s] V_gt V_model  (decimated 200 pts; extrema kept exactly: dip 0.7482 V @ 2.0031e-6)', '  …');
     if (kept.has('zpsrr_all')) lines.push('[D4 zout/psrr · 9 cells × 2 rails × 4 loads] …');
     lines.push('[D9 trailer] kept ' + kept.size + '/' + sel.length + ' blocks · ' + acc.toFixed(1) + ' KB' + (dropped.length ? ' · DROPPED (budget): ' + dropped.map(d => d.id).join(', ') : ' · nothing dropped') + ' · sha256 ' + Math.round(acc*7919 % 65536).toString(16).padStart(4,'0') + '…');
-    return { items, budgets, sizeKb: sizeKb.toFixed(1), keptKb: acc.toFixed(1), budgetKb: s.budget,
+    return { ...this.menuVals(), items, budgets, sizeKb: sizeKb.toFixed(1), keptKb: acc.toFixed(1), budgetKb: s.budget,
       barKept: Math.min(100, 100 * acc / Math.max(sizeKb, 0.1)).toFixed(1), barDrop: Math.min(100, 100 * (sizeKb - acc) / Math.max(sizeKb, 0.1)).toFixed(1),
       partsText: parts > 1 ? 'split into ' + parts + ' parts of ≤ 32 KB (relay-sized)' : 'one paste',
       partsBtn: parts > 1 ? 'part 1 of ' + parts : 'digest', preview: lines.join('\\n'),
@@ -936,7 +1006,7 @@ def main():
         ],
         "annotations": [
             {"id": "journey", "x": 0, "y": 2 * (H + GY), "w": 620,
-             "text": "pmukit — the sub-block designer's journey.\nThe PMU is a black box to them. They bring one netlist built to the naming convention and answer three questions; everything else is derived and shown, never asked.\n\nAll data is synthetic (PMU_DEMO). Each screen is clickable on its own: load the sample netlist, untick a plan group, retry a failed run, click a grade cell, pick a file, change the digest budget.\n\n4b is reached from the Copy-for-desk buttons on Model and Run: the air-gap return channel (plain text through the relay, budgeted by priority, dropped blocks named)."},
+             "text": "pmukit — the sub-block designer's journey.\nThe PMU is a black box to them. They bring one netlist built to the naming convention and answer three questions; everything else is derived and shown, never asked.\n\nAll data is synthetic (PMU_DEMO). Each screen is clickable on its own: load the sample netlist, untick a plan group, retry a failed run, click a grade cell, pick a file, change the digest budget. Right-click any row, chip, cell, chart or file: every interactive object has a context menu with all its verbs.\n\n4b is reached from the Copy-for-desk buttons on Model and Run: the air-gap return channel (plain text through the relay, budgeted by priority, dropped blocks named)."},
         ],
         "launch": {"view": "canvas"},
     }

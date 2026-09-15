@@ -81,9 +81,19 @@ table.t{width:100%;border-collapse:collapse;font-size:12.5px}
 .legend{display:flex;gap:14px;font-size:12px;color:#5d5a53;align-items:center}
 .sw{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
 input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
+.app{position:relative}
+.ctx-veil{position:absolute;inset:0;z-index:40}
+.ctx{position:absolute;z-index:41;min-width:220px;background:#ffffff;border:1px solid #cfccc4;border-radius:4px;box-shadow:0 6px 20px rgba(28,27,24,.14);padding:4px;font-size:12.5px}
+.ctx .ttl{padding:5px 10px 6px;color:#8a867d;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;border-bottom:1px solid #ebe8e1;margin-bottom:3px;white-space:nowrap}
+.ctx .it{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:6px 10px;border-radius:3px;cursor:pointer;white-space:nowrap}
+.ctx .it:hover{background:#e8f1f7;color:#1f6f9f}
+.ctx .it.dis{color:#bdb9b0;cursor:default}.ctx .it.dis:hover{background:transparent;color:#bdb9b0}
+.ctx .it .k{color:#8a867d;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11px}
+.ctx .sep{height:1px;background:#ebe8e1;margin:3px 6px}
+.rc{cursor:context-menu}
 </style>
 </helmet>
-<div class="app">
+<div class="app" onContextMenu="{{ noNativeMenu }}">
 <div class="nav"><span class="brand">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step done"><span class="n">1</span><span>New</span></div><div class="step done"><span class="n">2</span><span>Plan</span></div><div class="step done"><span class="n">3</span><span>Run</span></div><div class="step cur"><span class="n">4</span><span>Model</span></div><div class="step"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span></div></div>
 
 <div class="main">
@@ -101,7 +111,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
           <thead><tr><th style="width:28px"></th><th>Block</th><th class="num" style="text-align:right">KB</th><th>Fate</th></tr></thead>
           <tbody>
             <sc-for list="{{ items }}" as="i" hint-placeholder-count="11">
-              <tr><td><input type="checkbox" checked="{{ i.on }}" disabled="{{ i.fixed }}" onChange="{{ i.toggle }}"></td><td style="{{ i.style }}"><div>{{ i.name }}</div><div class="hint">{{ i.desc }}</div></td><td class="num">{{ i.kb }}</td><td><span class="badge {{ i.fcls }}">{{ i.fate }}</span></td></tr>
+              <tr class="rc" onContextMenu="{{ i.menu }}"><td><input type="checkbox" checked="{{ i.on }}" disabled="{{ i.fixed }}" onChange="{{ i.toggle }}"></td><td style="{{ i.style }}"><div>{{ i.name }}</div><div class="hint">{{ i.desc }}</div></td><td class="num">{{ i.kb }}</td><td><span class="badge {{ i.fcls }}">{{ i.fate }}</span></td></tr>
             </sc-for>
           </tbody>
         </table>
@@ -128,11 +138,41 @@ pmukit report demo_pmu --cell ss/25c                # same report text as the bo
 </div>
 <div class="foot"><span class="hint">Digests live under <span class="mono">~/pmukit_data/demo_pmu/digest/</span> on both machines · never in git</span><button class="btn pri" onClick="{{ copy }}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5.5" y="5.5" width="8" height="8" rx="1"></rect><path d="M10.5 5.5v-3h-8v8h3"></path></svg> Copy {{ partsBtn }}</button></div>
 
+<sc-if value="{{ menu.on }}" hint-placeholder-val="{{ false }}">
+  <div class="ctx-veil" onClick="{{ menu.close }}" onContextMenu="{{ menu.close }}"></div>
+  <div class="ctx" style="left:{{ menu.x }}px;top:{{ menu.y }}px">
+    <div class="ttl">{{ menu.title }}</div>
+    <sc-for list="{{ menu.items }}" as="m" hint-placeholder-count="5">
+      <sc-if value="{{ m.sep }}" hint-placeholder-val="{{ false }}"><div class="sep"></div></sc-if>
+      <sc-if value="{{ m.item }}" hint-placeholder-val="{{ true }}"><div class="it {{ m.cls }}" onClick="{{ m.run }}"><span>{{ m.label }}</span><span class="k">{{ m.key }}</span></div></sc-if>
+    </sc-for>
+  </div>
+</sc-if>
 </div>
 </x-dc>
 <script data-dc-script data-props='{}'>
+
+// Right-click menus: every interactive object has one. Buttons carry the common verbs; the menu carries all of them.
+class CtxLogic extends DCLogic {
+  openMenu(e, title, items){
+    if (e && e.preventDefault) { e.preventDefault(); e.stopPropagation(); }
+    const app = e.currentTarget.closest('.app'); const r = app.getBoundingClientRect();
+    const x = Math.min(e.clientX - r.left, r.width - 250), y = Math.min(e.clientY - r.top, r.height - 40 - items.length * 30);
+    this.setState({ _menu: { title, items, x: Math.max(0, x), y: Math.max(0, y) } });
+  }
+  closeMenu(e){ if (e && e.preventDefault) e.preventDefault(); this.setState({ _menu: null }); }
+  menuVals(){
+    const m = this.state._menu;
+    return { noNativeMenu: (e) => { if (e && e.preventDefault) e.preventDefault(); },
+      menu: m ? { on: true, title: m.title, x: m.x.toFixed(0), y: m.y.toFixed(0), close: (e) => this.closeMenu(e),
+        items: m.items.map(it => it === '-' ? { sep: true, item: false } : { sep: false, item: true, label: it.label, key: it.key || '', cls: it.disabled ? 'dis' : '',
+          run: (e) => { if (e && e.stopPropagation) e.stopPropagation(); if (it.disabled) return; this.setState({ _menu: null }); if (it.action) it.action(); } }) }
+      : { on: false, items: [] } };
+  }
+}
+
 const ITEMS = [{"id": "prov", "name": "Provenance + config", "kb": 1.1, "pri": 0, "fixed": true, "desc": "config sha, dataset sha, TB state, pmukit version"}, {"id": "ledger", "name": "Ledger summary", "kb": 2.8, "pri": 0, "fixed": true, "desc": "282 runs: status, cell, analysis, cpu · one line each"}, {"id": "params", "name": "Fitted parameters · all cells", "kb": 6.4, "pri": 1, "fixed": false, "desc": "lossless JSON: every block, every cell · the desk can re-emit the .va from this alone"}, {"id": "grades", "name": "Grades + trust summary", "kb": 0.9, "pri": 1, "fixed": false, "desc": "the Model screen, as text"}, {"id": "faillog", "name": "Failed-run logs + netlist diff", "kb": 4.6, "pri": 2, "fixed": false, "desc": "2 failed runs · last 40 log lines · only the lines pmukit changed in input.scs"}, {"id": "idc", "name": "Curves · bias idc(T), I-V", "kb": 3.2, "pri": 3, "fixed": false, "desc": "GT + model at the same points · 2 biases × 3 corners"}, {"id": "inoise", "name": "Curves · bias current noise", "kb": 4.1, "pri": 4, "fixed": false, "desc": "log-resampled 12 pts/dec · GT + model"}, {"id": "zpsrr", "name": "Curves · Zout + PSRR, selected cell", "kb": 5.6, "pri": 5, "fixed": false, "desc": "ss / 25 °C · 2 rails · GT + model at the same freqs"}, {"id": "vnoise", "name": "Curves · rail noise, selected cell", "kb": 3.8, "pri": 6, "fixed": false, "desc": "GT + model"}, {"id": "tran", "name": "Transients · load-EN, selected cell", "kb": 7.2, "pri": 7, "fixed": false, "desc": "decimated but keeps dip / overshoot / settle points exactly"}, {"id": "zpsrr_all", "name": "Curves · Zout + PSRR, all 9 cells", "kb": 50.4, "pri": 8, "fixed": false, "desc": "everything the fit saw · big"}];
-class Component extends DCLogic {
+class Component extends CtxLogic {
   constructor(p){ super(p); const on = {}; ITEMS.forEach(i => on[i.id] = i.id !== 'zpsrr_all'); this.state = { on, budget: 64, copied: false }; }
   renderVals(){
     const s = this.state;
@@ -143,7 +183,8 @@ class Component extends DCLogic {
     const dropped = sel.filter(i => !kept.has(i.id));
     const items = ITEMS.map(i => { const on = !!s.on[i.id]; const fate = !on ? 'off' : kept.has(i.id) ? 'kept' : 'dropped'; return { ...i, on, kb: i.kb.toFixed(1),
       fate, fcls: fate === 'kept' ? 'b-ok' : fate === 'dropped' ? 'b-warn' : 'b-mute', style: on ? '' : 'color:#8a867d',
-      toggle: () => { if (i.fixed) return; const o = Object.assign({}, s.on); o[i.id] = !o[i.id]; this.setState({on:o}); } }; });
+      toggle: () => { if (i.fixed) return; const o = Object.assign({}, s.on); o[i.id] = !o[i.id]; this.setState({on:o}); },
+      menu: (e) => this.openMenu(e, i.name, [ { label: 'Only this block (+ the fixed ones)', action: () => { const o = {}; ITEMS.forEach(x => o[x.id] = x.fixed || x.id === i.id); this.setState({on:o}); } }, { label: 'All curve blocks', action: () => { const o = {}; ITEMS.forEach(x => o[x.id] = true); this.setState({on:o}); } }, '-', { label: 'Preview this block only' }, { label: 'Raise priority for this paste' } ]) }; });
     const budgets = [32, 64, 128].map(b => ({ name: b + ' KB', cls: s.budget === b ? 'on' : '', pick: () => this.setState({budget:b}) }));
     const parts = Math.max(1, Math.ceil(acc / 32));
     const lines = [
@@ -164,7 +205,7 @@ class Component extends DCLogic {
     if (kept.has('tran')) lines.push('[D5 tran load-EN VDD0P8_A ss/25c on] t[s] V_gt V_model  (decimated 200 pts; extrema kept exactly: dip 0.7482 V @ 2.0031e-6)', '  …');
     if (kept.has('zpsrr_all')) lines.push('[D4 zout/psrr · 9 cells × 2 rails × 4 loads] …');
     lines.push('[D9 trailer] kept ' + kept.size + '/' + sel.length + ' blocks · ' + acc.toFixed(1) + ' KB' + (dropped.length ? ' · DROPPED (budget): ' + dropped.map(d => d.id).join(', ') : ' · nothing dropped') + ' · sha256 ' + Math.round(acc*7919 % 65536).toString(16).padStart(4,'0') + '…');
-    return { items, budgets, sizeKb: sizeKb.toFixed(1), keptKb: acc.toFixed(1), budgetKb: s.budget,
+    return { ...this.menuVals(), items, budgets, sizeKb: sizeKb.toFixed(1), keptKb: acc.toFixed(1), budgetKb: s.budget,
       barKept: Math.min(100, 100 * acc / Math.max(sizeKb, 0.1)).toFixed(1), barDrop: Math.min(100, 100 * (sizeKb - acc) / Math.max(sizeKb, 0.1)).toFixed(1),
       partsText: parts > 1 ? 'split into ' + parts + ' parts of ≤ 32 KB (relay-sized)' : 'one paste',
       partsBtn: parts > 1 ? 'part 1 of ' + parts : 'digest', preview: lines.join('\n'),

@@ -81,9 +81,19 @@ table.t{width:100%;border-collapse:collapse;font-size:12.5px}
 .legend{display:flex;gap:14px;font-size:12px;color:#5d5a53;align-items:center}
 .sw{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
 input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
+.app{position:relative}
+.ctx-veil{position:absolute;inset:0;z-index:40}
+.ctx{position:absolute;z-index:41;min-width:220px;background:#ffffff;border:1px solid #cfccc4;border-radius:4px;box-shadow:0 6px 20px rgba(28,27,24,.14);padding:4px;font-size:12.5px}
+.ctx .ttl{padding:5px 10px 6px;color:#8a867d;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;border-bottom:1px solid #ebe8e1;margin-bottom:3px;white-space:nowrap}
+.ctx .it{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:6px 10px;border-radius:3px;cursor:pointer;white-space:nowrap}
+.ctx .it:hover{background:#e8f1f7;color:#1f6f9f}
+.ctx .it.dis{color:#bdb9b0;cursor:default}.ctx .it.dis:hover{background:transparent;color:#bdb9b0}
+.ctx .it .k{color:#8a867d;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11px}
+.ctx .sep{height:1px;background:#ebe8e1;margin:3px 6px}
+.rc{cursor:context-menu}
 </style>
 </helmet>
-<div class="app">
+<div class="app" onContextMenu="{{ noNativeMenu }}">
 <div class="nav"><span class="brand">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step done"><span class="n">1</span><span>New</span></div><div class="step done"><span class="n">2</span><span>Plan</span></div><div class="step cur"><span class="n">3</span><span>Run</span></div><div class="step"><span class="n">4</span><span>Model</span></div><div class="step"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span></div></div>
 
 <div class="main">
@@ -109,7 +119,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
           <thead><tr><th>Run</th><th>Cell</th><th>Analysis</th><th>Status</th><th class="num" style="text-align:right">Elapsed</th><th class="num" style="text-align:right">CPU-h</th><th></th></tr></thead>
           <tbody>
             <sc-for list="{{ rows }}" as="r" hint-placeholder-count="12">
-              <tr class="click {{ r.cls }}" onClick="{{ r.select }}"><td class="id">{{ r.id }}</td><td class="mono" style="font-size:12px">{{ r.cell }}</td><td>{{ r.an }}</td><td><span class="badge {{ r.bcls }}">{{ r.status }}</span></td><td class="num">{{ r.el }}</td><td class="num">{{ r.cpu }}</td><td><sc-if value="{{ r.isFailed }}" hint-placeholder-val="{{ false }}"><button class="btn sm" onClick="{{ r.retry }}"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M13 8a5 5 0 1 1-1.5-3.6"></path><path d="M13 2.5v3h-3"></path></svg> Retry</button></sc-if></td></tr>
+              <tr class="click rc {{ r.cls }}" onClick="{{ r.select }}" onContextMenu="{{ r.menu }}"><td class="id">{{ r.id }}</td><td class="mono" style="font-size:12px">{{ r.cell }}</td><td>{{ r.an }}</td><td><span class="badge {{ r.bcls }}">{{ r.status }}</span></td><td class="num">{{ r.el }}</td><td class="num">{{ r.cpu }}</td><td><sc-if value="{{ r.isFailed }}" hint-placeholder-val="{{ false }}"><button class="btn sm" onClick="{{ r.retry }}"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M13 8a5 5 0 1 1-1.5-3.6"></path><path d="M13 2.5v3h-3"></path></svg> Retry</button></sc-if></td></tr>
             </sc-for>
           </tbody>
         </table>
@@ -130,9 +140,39 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
 </div>
 <div class="foot"><span class="hint">Runs write to <span class="mono">~/pmukit_data/demo_pmu/runs.sqlite</span> · closing this page does not stop the queue</span><div style="display:flex;gap:8px"><button class="btn"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5.5" y="5.5" width="8" height="8" rx="1"></rect><path d="M10.5 5.5v-3h-8v8h3"></path></svg> Copy failure bundle for desk</button><button class="btn pri" disabled="{{ notDone }}">Fit model <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"></path></svg></button></div></div>
 
+<sc-if value="{{ menu.on }}" hint-placeholder-val="{{ false }}">
+  <div class="ctx-veil" onClick="{{ menu.close }}" onContextMenu="{{ menu.close }}"></div>
+  <div class="ctx" style="left:{{ menu.x }}px;top:{{ menu.y }}px">
+    <div class="ttl">{{ menu.title }}</div>
+    <sc-for list="{{ menu.items }}" as="m" hint-placeholder-count="5">
+      <sc-if value="{{ m.sep }}" hint-placeholder-val="{{ false }}"><div class="sep"></div></sc-if>
+      <sc-if value="{{ m.item }}" hint-placeholder-val="{{ true }}"><div class="it {{ m.cls }}" onClick="{{ m.run }}"><span>{{ m.label }}</span><span class="k">{{ m.key }}</span></div></sc-if>
+    </sc-for>
+  </div>
+</sc-if>
 </div>
 </x-dc>
 <script data-dc-script data-props='{}'>
+
+// Right-click menus: every interactive object has one. Buttons carry the common verbs; the menu carries all of them.
+class CtxLogic extends DCLogic {
+  openMenu(e, title, items){
+    if (e && e.preventDefault) { e.preventDefault(); e.stopPropagation(); }
+    const app = e.currentTarget.closest('.app'); const r = app.getBoundingClientRect();
+    const x = Math.min(e.clientX - r.left, r.width - 250), y = Math.min(e.clientY - r.top, r.height - 40 - items.length * 30);
+    this.setState({ _menu: { title, items, x: Math.max(0, x), y: Math.max(0, y) } });
+  }
+  closeMenu(e){ if (e && e.preventDefault) e.preventDefault(); this.setState({ _menu: null }); }
+  menuVals(){
+    const m = this.state._menu;
+    return { noNativeMenu: (e) => { if (e && e.preventDefault) e.preventDefault(); },
+      menu: m ? { on: true, title: m.title, x: m.x.toFixed(0), y: m.y.toFixed(0), close: (e) => this.closeMenu(e),
+        items: m.items.map(it => it === '-' ? { sep: true, item: false } : { sep: false, item: true, label: it.label, key: it.key || '', cls: it.disabled ? 'dis' : '',
+          run: (e) => { if (e && e.stopPropagation) e.stopPropagation(); if (it.disabled) return; this.setState({ _menu: null }); if (it.action) it.action(); } }) }
+      : { on: false, items: [] } };
+  }
+}
+
 const ROWS = [{"id": "7c3e91a04bd2", "cell": "tt / 25 \u00b0C / 3", "an": "noise VDD0P8_A \u00b7 500 \u00b5", "status": "done", "el": "4m 12s", "cpu": "0.56"}, {"id": "b19f0c72e4a8", "cell": "ss / 125 \u00b0C / 3", "an": "ac \u00b7 inject AVDD1P0 \u00b7 2 m", "status": "running", "el": "1m 03s", "cpu": "\u2014"}, {"id": "e4d27a5c1f90", "cell": "ss / 125 \u00b0C / 3", "an": "tran \u00b7 load-EN B \u00b7 off", "status": "failed", "el": "12m 40s", "cpu": "1.69"}, {"id": "02aa8e6b7d31", "cell": "ff / \u221240 \u00b0C / 3", "an": "noise IB_CONST", "status": "running", "el": "0m 41s", "cpu": "\u2014"}, {"id": "5f6c1d9e2ab7", "cell": "tt / 25 \u00b0C / 3", "an": "dc_load VDD0P8_B", "status": "cached", "el": "\u2014", "cpu": "0.00"}, {"id": "a8e05b3c9d14", "cell": "ss / 25 \u00b0C / 3", "an": "ac \u00b7 inject VDD0P8_A \u00b7 100 \u00b5", "status": "done", "el": "3m 08s", "cpu": "0.42"}, {"id": "c73b2f8e6a05", "cell": "ff / 125 \u00b0C / 3", "an": "tran \u00b7 EN", "status": "queued", "el": "\u2014", "cpu": "\u2014"}, {"id": "d1e94a7f0c26", "cell": "tt / 125 \u00b0C / 3", "an": "noise VDD0P8_B \u00b7 4 m", "status": "done", "el": "5m 51s", "cpu": "0.78"}, {"id": "39f8c6b1e2d7", "cell": "ss / \u221240 \u00b0C / 3", "an": "dc_iv IB_PTAT", "status": "done", "el": "0m 22s", "cpu": "0.05"}, {"id": "6b2d0e9a4c83", "cell": "ff / 25 \u00b0C / 3", "an": "tran \u00b7 load-EN A \u00b7 on", "status": "queued", "el": "\u2014", "cpu": "\u2014"}, {"id": "f0a7c4d2b8e1", "cell": "ss / 125 \u00b0C / 3", "an": "tran \u00b7 load-EN B \u00b7 on", "status": "failed", "el": "12m 38s", "cpu": "1.68"}, {"id": "8e1b5f3a7d09", "cell": "tt / \u221240 \u00b0C / 3", "an": "dc_temp", "status": "done", "el": "1m 47s", "cpu": "0.24"}];
 const LOGS = {
   failed: (r) => `alps 2026.03.hf1  -mt 8  -format ps
@@ -169,7 +209,7 @@ function recipeRow(r){
   L.push('# dsub -A rf_short -R "cpu=8;mem=8000" -x all -EP <dir> -J alps input.scs -format ps -o ../psf/' + r.id + ' -I $PDK/alps -mt 8 -ade');
   return L.join('\n');
 }
-class Component extends DCLogic {
+class Component extends CtxLogic {
   constructor(p){ super(p); this.state = { rows: ROWS.map(r => ({...r})), sel: 'e4d27a5c1f90', filter: 'All', counts: {done:191, running:8, queued:71, failed:2, cached:10} }; }
   componentDidMount(){ this.timer = setInterval(() => { const c = Object.assign({}, this.state.counts); if (c.running > 0) { c.running -= 1; c.done += 1; } if (c.queued > 0) { c.queued -= 1; c.running += 1; } if (c.running !== this.state.counts.running || c.queued !== this.state.counts.queued) this.setState({counts:c}); }, 1800); }
   componentWillUnmount(){ clearInterval(this.timer); }
@@ -179,14 +219,19 @@ class Component extends DCLogic {
     const rows = s.rows.filter(r => s.filter === 'All' || r.status === s.filter.toLowerCase()).map(r => ({ ...r,
       cls: r.id === s.sel ? 'sel' : '', bcls: BCLS[r.status], isFailed: r.status === 'failed',
       select: () => this.setState({sel: r.id}),
-      retry: (e) => { if (e && e.stopPropagation) e.stopPropagation(); const rows = s.rows.map(x => x.id === r.id ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.failed = Math.max(0, cc.failed - 1); cc.queued += 1; this.setState({rows, counts: cc}); } }));
+      retry: (e) => { if (e && e.stopPropagation) e.stopPropagation(); const rows = s.rows.map(x => x.id === r.id ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.failed = Math.max(0, cc.failed - 1); cc.queued += 1; this.setState({rows, counts: cc}); },
+      menu: (e) => this.openMenu(e, 'run ' + r.id + ' · ' + r.status, [
+        { label: 'Show details', action: () => this.setState({sel: r.id}) }, { label: 'Open log' }, { label: 'Open PSF dir', disabled: !(r.status === 'done' || r.status === 'cached') }, { label: 'Open input.scs' }, '-',
+        { label: 'Retry', disabled: r.status !== 'failed', action: () => { const rows = s.rows.map(x => x.id === r.id ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.failed = Math.max(0, cc.failed - 1); cc.queued += 1; this.setState({rows, counts: cc, sel: r.id}); } },
+        { label: 'Skip (mark NOT RUN)', disabled: r.status === 'done' || r.status === 'cached' }, { label: 'Kill job', disabled: r.status !== 'running' }, { label: 'Re-run even if cached', disabled: r.status !== 'cached' }, '-',
+        { label: 'Copy recipe' }, { label: 'Copy run id', key: r.id.slice(0,6) + '…' }, { label: 'Copy failure bundle for desk', disabled: r.status !== 'failed' } ]) }));
     const selRow = s.rows.find(r => r.id === s.sel) || s.rows[0];
     const sel = { ...selRow, bcls: BCLS[selRow.status], isFailed: selRow.status === 'failed', log: LOGS[selRow.status](selRow, c), recipe: recipeRow(selRow), cellDir: selRow.cell.replace(/ \/ /g, '_').replace(' °C', 'c').replace('−', 'm'), job: '4881' + parseInt(selRow.id.slice(0,4), 16).toString().slice(0,4),
       feeds: selRow.an.startsWith('noise') ? 'noise block' : selRow.an.startsWith('ac') ? 'zout / psrr blocks' : selRow.an.startsWith('tran') ? 'load_en (large-signal)' : 'dc tables',
       psf: selRow.status === 'done' || selRow.status === 'cached' ? '…/psf/' + selRow.id + '/' : '—' };
     const filters = ['All','Running','Failed','Queued'].map(n => ({ name:n, cls: s.filter === n ? 'on' : '', pick: () => this.setState({filter:n}) }));
     const cpuh = (c.done * 0.58).toFixed(1);
-    return { c: { ...c, cpuh, eta: c.queued > 0 ? Math.ceil(c.queued * 4.2 / 8) + ' min' : 'done' }, w: { done: pct('done'), running: pct('running'), failed: pct('failed'), cached: pct('cached') },
+    return { ...this.menuVals(), c: { ...c, cpuh, eta: c.queued > 0 ? Math.ceil(c.queued * 4.2 / 8) + ' min' : 'done' }, w: { done: pct('done'), running: pct('running'), failed: pct('failed'), cached: pct('cached') },
       rows, sel, filters, notDone: c.queued > 0 || c.running > 0,
       retryAll: () => { const rows = s.rows.map(x => x.status === 'failed' ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.queued += cc.failed; cc.failed = 0; this.setState({rows, counts: cc}); } };
   }
