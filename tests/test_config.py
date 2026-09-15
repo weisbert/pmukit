@@ -611,3 +611,56 @@ def test_site_unknown_key_is_refused():
     with pytest.raises(PmuError) as e:
         SiteConfig.from_dict({"engine": "dry_run", "nodes": 4})
     assert "nodes" in str(e.value)
+
+
+# ---------------------------------------------------- stub_dc: the one number the netlist lacks
+def test_stub_dc_reaches_derive_as_volts_or_amps():
+    """A rail stub needs VOLTS and a bias stub needs AMPS -- the dual of what its source carries."""
+    from pmukit.config import ProjectConfig, derive
+
+    pins = {
+        "VDD0P8_A": {"role": "rail", "net": "VDD0P8_A", "src": "IL_VDD0P8_A", "dc": 5e-4},
+        "VDD0P8_C": {"role": "rail", "net": "VDD0P8_C", "src": "IL_VDD0P8_C", "dc": 1e-4},
+        "IB_POLY": {"role": "bias", "net": "IB_POLY", "src": "VB_IB_POLY", "dc": 0.4},
+        "VDDA_1V0": {"role": "supply", "net": "VDDA_1V0", "src": "VS_VDDA_1V0", "dc": 1.0},
+    }
+    cfg = ProjectConfig.from_dict({
+        "project": "p", "netlist": "tb.scs", "pmu_inst": "X",
+        "corners": ["tt"], "temps_c": [25], "vset_codes": [3],
+        "ports": {"VDD0P8_A": "model", "VDD0P8_C": "stub", "IB_POLY": "stub",
+                  "VDDA_1V0": "model"},
+        "my_load": {}, "care_up_to_hz": 1e9,
+        "stub_dc": {"VDD0P8_C": 0.8, "IB_POLY": 5e-6}})
+    d = derive(cfg, pins)
+    rail, bias = d.stubs["VDD0P8_C"], d.stubs["IB_POLY"]
+    assert rail["dc_v"] == 0.8 and rail["dc_a"] is None
+    assert bias["dc_a"] == 5e-6 and bias["dc_v"] is None
+    assert rail["dc_source"] == "config.stub_dc"
+
+
+def test_a_stub_without_a_declared_level_says_so():
+    from pmukit.config import ProjectConfig, derive
+
+    pins = {"VDD0P8_C": {"role": "rail", "net": "VDD0P8_C", "src": "IL_VDD0P8_C", "dc": 1e-4},
+            "VDD0P8_A": {"role": "rail", "net": "VDD0P8_A", "src": "IL_VDD0P8_A", "dc": 5e-4}}
+    cfg = ProjectConfig.from_dict({
+        "project": "p", "netlist": "tb.scs", "pmu_inst": "X",
+        "corners": ["tt"], "temps_c": [25], "vset_codes": [3],
+        "ports": {"VDD0P8_C": "stub", "VDD0P8_A": "model"},
+        "my_load": {}, "care_up_to_hz": 1e9})
+    s = derive(cfg, pins).stubs["VDD0P8_C"]
+    assert s["dc_v"] is None and s["dc_a"] is None
+    assert "weakly tied" in s["dc_source"]
+
+
+def test_stub_dc_round_trips_through_the_config_json():
+    from pmukit.config import ProjectConfig
+
+    base = {"project": "p", "netlist": "tb.scs", "pmu_inst": "X", "corners": ["tt"],
+            "temps_c": [25], "vset_codes": [3], "ports": {"A": "stub"}, "my_load": {},
+            "care_up_to_hz": 1e9, "stub_dc": {"A": 0.8}}
+    cfg = ProjectConfig.from_dict(base)
+    assert ProjectConfig.from_dict(cfg.to_dict()).stub_dc == {"A": 0.8}
+    # and it is part of the identity of the configuration
+    other = ProjectConfig.from_dict({**base, "stub_dc": {"A": 0.9}})
+    assert cfg.sha() != other.sha()
