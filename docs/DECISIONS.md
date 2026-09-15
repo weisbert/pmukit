@@ -37,3 +37,9 @@
 | D30 | M1 | D3（绿黄红）不在契约的优先级表里 —— 保持 `PRIORITY` 逐字不动，另给 D3 排在 D2 之后 | 它几百字节，却是用户唯一真正在问的那句"能不能信" | 易 |
 | D31 | M1 | D2 每行是 `2 空格缩进 + JSON 片段 + '|'` | relay 粘贴会吃掉行尾空白；结尾的 `|` 让这一块免疫，且不靠 `#` 过滤（JSON 片段可能就以 `#` 开头） | 易 |
 | D32 | M1 | 摘要正文非 ASCII 字符转写（`·`→`.`、`µ`→`u`、`→`→`->`），其余变 `?` | 摘要要穿过 relay 和 tcsh 终端；一个 UTF-8 字节就可能让 `sha256sum -c` 对不上 | 易 |
+| D33 | M12 | 安装前缀 `$PMUKIT_PREFIX`（默认 `$HOME/pmukit`）、数据 `$PMUKIT_DATA`、解释器 `$PMUKIT_PYTHON`，**不抄老仓那条含真项目号的路径** | 公开仓不能出现客户路径；且 `/opt` 在共享盒子上不可写 | 易 |
+| D34 | M12 | `apply` 额外支持 **git-clone 模式**：认出 `pyproject.toml + pmukit/` 就跳过完整性校验（本来就没打包），改走联网 pip | 明早的首跑清单第一条就是 `git clone` → `bash apply`，而 clone 出来没有 `wheels/` 也没有 `MANIFEST.json` | 易 |
+| D35 | M12 | pmukit 本身**不**装进 venv：venv 只放 numpy/scipy，源码放 `$PREFIX/app`，启动器设 `PYTHONPATH` | 离线装包不必再带 setuptools/wheel；`update.sh` 换掉 `app/` 就完事，不用重装 | 中 |
+| D36 | M12 | 打包用「文件系统遍历 + `git check-ignore`」而不是 `git ls-files` | 部署流水线必须在自己被提交之前就能打包自己 | 易 |
+| D37 | M12 | 新增 `audit_wheels.py --deep`：扫轮子里 `.so` 的 `GLIBC_x.y` 字符串 | 文件名声称 2.17、里面的 `.so` 却要 2.28 的轮子，光看 tag 抓不到；这是没有 docker 时 auditwheel 的替身 | 易 |
+| D38 | M12 | `tests/` 永不进包 | 开工单的拷贝清单里没有它，而且 fixtures 将来可能含真测量 | 易 |
