@@ -1,13 +1,114 @@
-# BUILD_REPORT — overnight build (2026-09-15 夜)
+# BUILD_REPORT — 整夜构建（2026-09-15 夜 → 09-16 晨）
 
-环境探测（开工第一件事）：**VM 通**。
-`ssh -o BatchMode=yes ewave-vm 'tcsh -c "source ~/.cshrc; which spectre"'` →
-`/home/yusheng/Program/eda/cadence/SPECTRE181/bin/spectre`，`spectre -W` → **sub-version 18.1.0.077**。
-⇒ 仿真相关里程碑（M3 M5 M7 M8）按真跑执行，不降级。
+**环境探测（开工第一件事）：VM 通。** `ssh ewave-vm` → `spectre -W` → **18.1.0.077**。
+⇒ 仿真相关的里程碑全部**按真跑执行，没有降级**。
 
-桌面：Windows 11，`C:\code\pmukit\.venv` = Python 3.11.7 / numpy 2.4.6 / scipy 1.17.1 / pytest 9.1.1，node v24.14.0。
+**M0 到 M13 全部完成。** 全套 **900 passed, 6 skipped**；提交闸 `tools/guard.py --all` **exit 0**；
+24 个 commit，每个里程碑一个，全部已 push 到 `origin/main`。
 
 ---
+
+## 一、一页总表
+
+| # | 里程碑 | 验收（数字都是量出来的） |
+|---|---|---|
+| M0 | 包骨架 + 提交闸 | 合成词自测 PASS；闸**真的咬了 3 次**（设计稿 / 报告自己 / vendored 的 ngspice 头注），每次都改文件 |
+| M1 | 五份契约落成代码 | 六个模块 + round-trip；`run_id` 是内容哈希（= resume）；NaN 分开「没跑」和「跑坏了」 |
+| M2 | `netlist.py` 按前缀认角色 | 合成 PMU 全部认出；`TESTMODE` 报不可归类；分地从子电路器件图 BFS 读出 |
+| M3 | 合成 PMU 真件 + 15 个 LDO 转 Spectre | **VM 上真跑**：轨在角间只动 0.3–0.7 mV（环路在干活），PTAT 6.66→10.30 µA，分地回流 2.17/4.35/5.50 µA；15 个 LDO 与**原 ngspice 卡片吻合 ≤ 0.004 %** |
+| M4 | `plan.py` 计划编译 | 一次 `VS_` 注入读 4 个端口（叠加合并生效）；242 run / 19 组 / 0.85 CPU-h；重新计划全部 `cached` |
+| M5 | 运行器 + 导入器 | **真 Spectre**：`ac_zout` 6.42 Ω@10 Hz → 39.47 Ω 峰@1 MHz → 0.30 Ω@1 GHz；resume 242/242；外部导入 132 填 / 0 不匹配 / 110 待跑 |
+| M6 | 拟合器（数学从老仓搬） | 对解析真值：Zout 梯形 **0.020 dB**、PSRR 复极点 **0.011 dB / 0.1°**、噪声 **0.002 dB**；识别性门点名不可辨识参数而不是给个自信的错数 |
+| M7 | 发射器（HB 安全原语） | **三个角编译 0 error**；AC 最差 **0.00497 dB**（门是 0.01）；lint 在被否决的 R-L-C 上报 2.4e10 / 在 gm-C 上报 1.5e5；hybrid 噪声 +0.0009 dB（旧 bug 低 3.2e6 倍） |
+| M8 | 验证 + HB 体检 + 回归 | 四种颜色都出现；HB 体检判据改成**牛顿第一步**残差（实测逼出来的）；**自激振荡台发现轨 A 卡在迭代上限**；15 个 LDO 基线，14 个标了 `known_hard` |
+| M9 | 摘要往返 | D2 参数**逐位**回来；超预算丢块在 trailer **点名** + `dropped.json` 复述；每段 ASCII 无 `\r` |
+| M10 | web 壳 | 38 条路由；e2e 24 步（21 过 / 3 跳）；`model/curve` GT vs 模型同频点差 **0.016 dB** |
+| M11 | CLI | 16 个动词；`pmukit help <screen>` 与帮助面板**逐字相同**（验收条件，有测试锁） |
+| M12 | 盒子打包 | 轮子审计 **8/8 PASS @ glibc 2.17**，REJECT 路径也验过；CR 字节 **0**；**在真 Rocky 8 上装+跑通** |
+| M13 | 本报告 + 首跑清单 | `docs/FIRST_RUN.md` |
+
+**最要紧的一个数**：模型对**真器件级 Spectre 测量**的拟合（不是对解析真值）——
+轨 A（峰型）**Zout 0.0394 dB / PSRR 0.0439 dB**；轨 B（ESR 平台型）Zout 1.82 / PSRR 0.565；
+偏置 `yout` 0.0012 / 0.313 dB。发射出来的 `.va` 三个角**编译 0 error**，AC 最差 **0.005 dB**。
+
+---
+
+## 二、把模块接起来时找到的真缺陷（**这是今晚最有价值的部分**）
+
+没有一个是读代码读出来的，全是**跑出来**的。
+
+| # | 缺陷 | 后果（如果没发现） |
+|---|---|---|
+| 1 | `pmukit/web/index.html` 不会进 wheel（`pyproject.toml` 缺 package-data） | 明早 `pmukit ui` **一片空白** |
+| 2 | `.tmpdata/` 没进 `.gitignore`（我自己冒烟测试造的） | 公开仓里的**真测量泄漏路径** |
+| 3 | 远端 Spectre 找不到 PDK（`SFE-868`）：台子相对 include，run 目录在别处 | 真跑**全挂** |
+| 4 | 两处退化 DC 扫描（`SPECTRE-16108`）：单负载点 / 单温度 | 这两组 run **全失败** |
+| 5 | `fake` 后端的 DUT **物理上不可能**（Zout→0 @DC 而 PSRR 平坦） | 每次拟合都 ~20 dB，**看着像拟合器的 bug**。改完 PSRR 30→0.024 dB、噪声 5.5→0.0069 dB |
+| 6 | 偏置 PSRR 缺**馈通电容**项（实测上升 500 倍到 +90°，28 fF） | 拿下降形拟合上升曲线，21.8 dB；而这正是**做 VCO 杂散**的那个频段。加 `c_ft` 后 9.49 dB |
+| 7 | 有效包络没有「偏置端口」概念 | `report.md` 里**每一行偏置都被标成 RED**，理由还是假的 |
+| 8 | `fit_project` 从不拟合 `en/ramp` | 计划真跑了 6 条 `tran_en`、数据集真存了，但**契约 1 的 `en` 档从未进过任何报告** —— 机时白花 |
+| 9 | 反着接的约定源（`VB_x (0 pin)`）认不出来 | 人手画很容易这么接，整个引脚**静默丢失** |
+| 10 | 简单角写法「改过头」：把 RC skew 文件也改成 `tt` | Spectre `No section found with name 'tt'` |
+| 11 | `server.py` 读 `payload["hb"]`（键其实是 `hb_check`） | web 的 HB 结果**永远是空** |
+| 12 | `pmukit verify` 把 24 KB 原始 JSON 糊到终端 | 人没法看 |
+| 13 | `deliver` 不读旁边的 `verify.json` | 报告写「nothing was graded」，而等级就在同一个目录里 |
+
+全部已修，每条都有测试钉住。
+
+---
+
+## 三、**没做到的 / 不确定的**（按风险排序）
+
+1. **Donau 提交从未真执行过。** 桌面没有队列。命令按老仓验证过的形状拼好、逐 flag 断言过，
+   但第一次真提交是明早。→ `docs/FIRST_RUN.md` 第 4 步有手动替代路径和四条会咬人的 ALPS flag。
+2. **自激振荡台上，峰型低 ESR 的轨卡在牛顿迭代上限**（ESR 阻尼的那条七步收敛）。
+   同一个角，驱动式 HB 收敛、`emit.lint` 报 PASS。这是老仓记录的
+   「单独跑收敛、耦合起来不收敛」特征在桌面尺度的复现。**要在真 oschb 里才能定性。**
+   没有凭猜测去动发射器。
+3. **偏置 PSRR 还剩 9.49 dB。** 实测曲线在 100 kHz 附近还有一个零极点对，
+   `gdd/(1+s/wp) + jωC` 跟不上。要做到轨那种零点几 dB，得把轨 PSRR 的有理式机制搬到偏置上 ——
+   **更大的改动，没有在凌晨做。** 如果真件的偏置 PSRR 是关键量，这是第一件该做的事。
+4. **HB 体检门的标定。** 全关基线是纯线性模型，任何被激活的非线性项都过不了 10×。
+   要把它当成「这一项能不能默认开」的判据，得拿**真消费者的 HB** 当基线，不能拿线性的。
+5. **`flicker_noise()` 默认值没换。** 实测它准 50 倍、少 22 个节点，但 `.noise` 是线性解，
+   没验的是它在**真耦合振荡器的 pnoise/hbnoise** 里的行为。已实现成 `flicker_mode="native"`，等证据。
+6. **SKILL 生成脚本一次都没执行过**（桌面没有 Virtuoso）。判据是 `pmukit check`，不是脚本。
+7. **web 页面从未在真浏览器里打开过**（代理开不了窗口）。用 API + `node --check` + 无头 DOM 验的。
+8. **盒子的 tcsh / 文件系统 / Firefox** 都没碰过。
+
+---
+
+## 四、明早首跑清单
+
+**逐条打勾的版本在 `docs/FIRST_RUN.md`**（七步，每步写明做什么、期望看到什么、不对时怎么办）。
+纲要：
+
+0. 装：**离线包已经打好在 `C:\code\pmukit_package`**（54 MB，含 glibc-2.17 轮子）。
+   盒子能 `git pull` 但多半够不到 PyPI，所以**先走离线这条**。
+   装完**第一件事**：`pmukit site --engine donau_alps --queue short --cpus 8 --account <账号>`
+   —— 默认值是**桌面的**默认值。
+1. 按约定搭真 PMU 的台子（`docs/TESTBENCH.md`，一页），标称角导出一份网表。
+2. `pmukit check <netlist> --pmu-inst <名字>` —— **开项目之前**就知道台子对不对。
+3. `pmukit new` + `pmukit plan` —— 看 run 数和成本；嫌贵就 `--off <组>`，它会列出**关掉的后果**。
+4. `pmukit plan --submit && pmukit run --engine donau_alps` —— **`donau_alps` 的第一次真跑**。
+5. `pmukit status` —— 失败的复制失败包回桌面。
+6. `pmukit fit && pmukit verify && pmukit deliver && pmukit report`。
+7. `.scs` 放进 corner 设置，跑一次真 HB。
+
+---
+
+## 五、最先看什么
+
+1. **本节上面的第三部分「没做到的」** —— 那是唯一会让你白花时间的东西。
+2. `docs/FIRST_RUN.md` —— 逐条打勾。
+3. `docs/DECISIONS.md` —— 今晚替你做的 **96 个决定**，一行一条：决定、为什么、**可不可逆**。
+   不同意哪条，改它的成本就写在那一行最后一列。
+4. 下面的逐里程碑明细（本文件其余部分）—— 每个验收数字的出处。
+
+---
+---
+
+# 逐里程碑明细
 
 ## M0 — 包骨架 + 提交闸
 
