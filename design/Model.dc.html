@@ -81,9 +81,19 @@ table.t{width:100%;border-collapse:collapse;font-size:12.5px}
 .legend{display:flex;gap:14px;font-size:12px;color:#5d5a53;align-items:center}
 .sw{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
 input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
+.app{position:relative}
+.ctx-veil{position:absolute;inset:0;z-index:40}
+.ctx{position:absolute;z-index:41;min-width:220px;background:#ffffff;border:1px solid #cfccc4;border-radius:4px;box-shadow:0 6px 20px rgba(28,27,24,.14);padding:4px;font-size:12.5px}
+.ctx .ttl{padding:5px 10px 6px;color:#8a867d;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;border-bottom:1px solid #ebe8e1;margin-bottom:3px;white-space:nowrap}
+.ctx .it{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:6px 10px;border-radius:3px;cursor:pointer;white-space:nowrap}
+.ctx .it:hover{background:#e8f1f7;color:#1f6f9f}
+.ctx .it.dis{color:#bdb9b0;cursor:default}.ctx .it.dis:hover{background:transparent;color:#bdb9b0}
+.ctx .it .k{color:#8a867d;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11px}
+.ctx .sep{height:1px;background:#ebe8e1;margin:3px 6px}
+.rc{cursor:context-menu}
 </style>
 </helmet>
-<div class="app">
+<div class="app" onContextMenu="{{ noNativeMenu }}">
 <div class="nav"><span class="brand">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step done"><span class="n">1</span><span>New</span></div><div class="step done"><span class="n">2</span><span>Plan</span></div><div class="step done"><span class="n">3</span><span>Run</span></div><div class="step cur"><span class="n">4</span><span>Model</span></div><div class="step"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span></div></div>
 
 <div class="main">
@@ -107,7 +117,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
           <sc-for list="{{ heads }}" as="h" hint-placeholder-count="9"><div class="cell c-head">{{ h }}</div></sc-for>
           <sc-for list="{{ rows }}" as="r" hint-placeholder-count="4">
             <div class="cell c-head" style="justify-content:flex-start;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;color:#1c1b18">{{ r.name }}</div>
-            <sc-for list="{{ r.cells }}" as="c" hint-placeholder-count="9"><div class="cell {{ c.cls }}" onClick="{{ c.pick }}">{{ c.label }}</div></sc-for>
+            <sc-for list="{{ r.cells }}" as="c" hint-placeholder-count="9"><div class="cell rc {{ c.cls }}" onClick="{{ c.pick }}" onContextMenu="{{ c.menu }}">{{ c.label }}</div></sc-for>
           </sc-for>
         </div>
         <div class="legend" style="margin-top:12px"><span><span class="badge b-ok">OK</span> all blocks within tolerance</span><span><span class="badge b-warn">MARG</span> one block near its limit</span><span><span class="badge b-bad">FAIL</span> block outside tolerance</span><span><span class="badge b-mute">N/R</span> data not run</span></div>
@@ -120,11 +130,11 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
       <div class="pb" style="display:flex;flex-direction:column;gap:12px">
         <table class="t">
           <thead><tr><th>Block</th><th>Metric</th><th class="num" style="text-align:right">Model vs GT</th><th class="num" style="text-align:right">Limit</th><th>Grade</th></tr></thead>
-          <tbody><sc-for list="{{ blocks }}" as="b" hint-placeholder-count="5"><tr class="click {{ b.cls }}" onClick="{{ b.pick }}"><td class="mono">{{ b.name }}</td><td class="hint">{{ b.metric }}</td><td class="num">{{ b.val }}</td><td class="num" style="color:#8a867d">{{ b.lim }}</td><td><span class="badge {{ b.gcls }}">{{ b.grade }}</span></td></tr></sc-for></tbody>
+          <tbody><sc-for list="{{ blocks }}" as="b" hint-placeholder-count="5"><tr class="click rc {{ b.cls }}" onClick="{{ b.pick }}" onContextMenu="{{ b.menu }}"><td class="mono">{{ b.name }}</td><td class="hint">{{ b.metric }}</td><td class="num">{{ b.val }}</td><td class="num" style="color:#8a867d">{{ b.lim }}</td><td><span class="badge {{ b.gcls }}">{{ b.grade }}</span></td></tr></sc-for></tbody>
         </table>
         <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600">{{ chartTitle }}</span><div style="display:flex;gap:6px"><span class="chip {{ viewChartCls }}" onClick="{{ showChart }}">Chart</span><span class="chip {{ viewTableCls }}" onClick="{{ showTable }}">Table</span></div></div>
         <sc-if value="{{ isChart }}" hint-placeholder-val="{{ true }}">
-          <div style="position:relative">
+          <div style="position:relative" class="rc" onContextMenu="{{ chartMenu }}">
             <svg width="520" height="250" viewBox="0 0 520 250" style="display:block;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:10.5px" onMouseMove="{{ hover }}" onMouseLeave="{{ unhover }}">
               <sc-for list="{{ gridV }}" as="g" hint-placeholder-count="9"><line x1="{{ g.x }}" x2="{{ g.x }}" y1="14" y2="216" stroke="#ebe8e1"></line><text x="{{ g.x }}" y="232" text-anchor="middle" fill="#8a867d">{{ g.t }}</text></sc-for>
               <sc-for list="{{ gridH }}" as="g" hint-placeholder-count="4"><line x1="48" x2="512" y1="{{ g.y }}" y2="{{ g.y }}" stroke="#ebe8e1"></line><text x="42" y="{{ g.ty }}" text-anchor="end" fill="#8a867d">{{ g.t }}</text></sc-for>
@@ -153,9 +163,39 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
 </div>
 <div class="foot"><span class="hint">Fit from dataset <span class="mono">a91f…c3</span> · 280 of 282 runs consumed (2 failed, marked not run) · 10 reused from the ledger</span><div style="display:flex;gap:8px"><button class="btn"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5.5" y="5.5" width="8" height="8" rx="1"></rect><path d="M10.5 5.5v-3h-8v8h3"></path></svg> Copy for desk</button><button class="btn">Open report.md</button><button class="btn pri">Deliver <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"></path></svg></button></div></div>
 
+<sc-if value="{{ menu.on }}" hint-placeholder-val="{{ false }}">
+  <div class="ctx-veil" onClick="{{ menu.close }}" onContextMenu="{{ menu.close }}"></div>
+  <div class="ctx" style="left:{{ menu.x }}px;top:{{ menu.y }}px">
+    <div class="ttl">{{ menu.title }}</div>
+    <sc-for list="{{ menu.items }}" as="m" hint-placeholder-count="5">
+      <sc-if value="{{ m.sep }}" hint-placeholder-val="{{ false }}"><div class="sep"></div></sc-if>
+      <sc-if value="{{ m.item }}" hint-placeholder-val="{{ true }}"><div class="it {{ m.cls }}" onClick="{{ m.run }}"><span>{{ m.label }}</span><span class="k">{{ m.key }}</span></div></sc-if>
+    </sc-for>
+  </div>
+</sc-if>
 </div>
 </x-dc>
 <script data-dc-script data-props='{}'>
+
+// Right-click menus: every interactive object has one. Buttons carry the common verbs; the menu carries all of them.
+class CtxLogic extends DCLogic {
+  openMenu(e, title, items){
+    if (e && e.preventDefault) { e.preventDefault(); e.stopPropagation(); }
+    const app = e.currentTarget.closest('.app'); const r = app.getBoundingClientRect();
+    const x = Math.min(e.clientX - r.left, r.width - 250), y = Math.min(e.clientY - r.top, r.height - 40 - items.length * 30);
+    this.setState({ _menu: { title, items, x: Math.max(0, x), y: Math.max(0, y) } });
+  }
+  closeMenu(e){ if (e && e.preventDefault) e.preventDefault(); this.setState({ _menu: null }); }
+  menuVals(){
+    const m = this.state._menu;
+    return { noNativeMenu: (e) => { if (e && e.preventDefault) e.preventDefault(); },
+      menu: m ? { on: true, title: m.title, x: m.x.toFixed(0), y: m.y.toFixed(0), close: (e) => this.closeMenu(e),
+        items: m.items.map(it => it === '-' ? { sep: true, item: false } : { sep: false, item: true, label: it.label, key: it.key || '', cls: it.disabled ? 'dis' : '',
+          run: (e) => { if (e && e.stopPropagation) e.stopPropagation(); if (it.disabled) return; this.setState({ _menu: null }); if (it.action) it.action(); } }) }
+      : { on: false, items: [] } };
+  }
+}
+
 
 const CORNERS = ['tt','ss','ff'], TEMPS = ['−40','25','125'];
 const PORTS = ['VDD0P8_A','VDD0P8_B','IB_PTAT','IB_CONST'];
@@ -189,13 +229,16 @@ function scaleY(lo, hi){ return z => Y1 - (Y1-Y0) * (Math.log10(Math.max(z, lo))
 const FS = []; for (let i = 0; i <= 180; i++) FS.push(Math.pow(10, 1 + i/20));
 const pathOf = (fn, yOf) => FS.map((f,i) => (i?'L':'M') + xOf(f).toFixed(1) + ' ' + yOf(fn(f)).toFixed(1)).join(' ');
 const fmtF = f => f >= 1e9 ? (f/1e9).toFixed(f>=1e10?0:1)+' GHz' : f >= 1e6 ? (f/1e6).toFixed(0)+' MHz' : f >= 1e3 ? (f/1e3).toFixed(0)+' kHz' : f.toFixed(0)+' Hz';
-class Component extends DCLogic {
+class Component extends CtxLogic {
   constructor(p){ super(p); this.state = { port:'VDD0P8_B', corner:'ss', temp:'25', view:'chart', hov:null }; }
   renderVals(){
     const s = this.state;
     const heads = []; CORNERS.forEach(c => TEMPS.forEach(t => heads.push(c + ' ' + t)));
     const rows = PORTS.map(p => ({ name:p, cells: CORNERS.flatMap(c => TEMPS.map(t => { const g = GRADE[p+'|'+c+'|'+t] || 'ok'; const sel = s.port===p && s.corner===c && s.temp===t;
-      return { cls: CLS[g] + (sel ? ' sel' : ''), label: LBL[g], pick: () => this.setState({port:p, corner:c, temp:t, hov:null}) }; })) }));
+      return { cls: CLS[g] + (sel ? ' sel' : ''), label: LBL[g], pick: () => this.setState({port:p, corner:c, temp:t, hov:null}),
+        menu: (e) => this.openMenu(e, p + ' · ' + c + ' / ' + t + ' °C', [
+          { label: 'Show curves', action: () => this.setState({port:p, corner:c, temp:t, hov:null}) }, { label: 'Compare with tt / 25 °C' }, { label: 'Open the runs behind this cell' }, '-',
+          { label: 'Copy digest for this cell' }, { label: 'Re-fit this cell only' }, { label: g === 'nr' ? 'Retry the missing run' : 'Accept as-is (override, noted in report)', disabled: g === 'ok' } ]) }; })) }));
     const rail = s.port.startsWith('VDD');
     const kGT = rail ? { f0: 1.78e6, q: 2.6, a: 1, lf: 1 } : { w: 1, p: 1 };
     const marg = (GRADE[s.port+'|'+s.corner+'|'+s.temp] || 'ok') === 'warn';
@@ -206,12 +249,14 @@ class Component extends DCLogic {
     const fmtV = v => rail ? v.toFixed(v < 10 ? 2 : 1) : v.toExponential(2);
     const g = GRADE[s.port+'|'+s.corner+'|'+s.temp] || 'ok';
     const chartBlock = rail ? 'zout' : 'noise';
-    const blocks = blocksFor(s.port, g).map(b => ({ ...b, gcls: BADGE[b.grade], grade: LBL[b.grade], cls: b.name === chartBlock ? 'sel' : '', pick: () => {} }));
+    const blocks = blocksFor(s.port, g).map(b => ({ ...b, gcls: BADGE[b.grade], grade: LBL[b.grade], cls: b.name === chartBlock ? 'sel' : '', pick: () => {},
+      menu: (e) => this.openMenu(e, 'block ' + b.name, [ { label: 'Show chart' }, { label: 'Show fit parameters' }, { label: 'Copy numbers' }, '-', { label: 'Which runs fed this block' }, { label: 'Re-fit this block' } ]) }));
     const hov = s.hov ? { on:true, x: s.hov.x.toFixed(1), yg: yOf(gtFn(s.hov.f)).toFixed(1), ym: yOf(mFn(s.hov.f)).toFixed(1), tx: Math.min(s.hov.x + 12, 330).toFixed(0), text: fmtF(s.hov.f) + '  GT ' + fmtV(gtFn(s.hov.f)) + '  model ' + fmtV(mFn(s.hov.f)) + ' ' + unit } : { on:false };
     const gridV = [1e1,1e2,1e3,1e4,1e5,1e6,1e7,1e8,1e9,1e10].map(f => ({ x: xOf(f).toFixed(1), t: f>=1e9 ? (f/1e9)+'G' : f>=1e6 ? (f/1e6)+'M' : f>=1e3 ? (f/1e3)+'k' : f }));
     const gridH = (rail ? [0.1,1,10,100,1e3,1e4] : [1e-26,1e-24,1e-22,1e-20]).map(z => ({ y: yOf(z).toFixed(1), ty: (yOf(z)+3.5).toFixed(1), t: rail ? (z >= 1e3 ? (z/1e3)+'k' : String(z)) : '1e' + Math.round(Math.log10(z)) }));
     const tableRows = [1e2,1e4,1e5,1e6,1.78e6,1e7,1e8,1e9,1e10].map(f => { const gv = gtFn(f), mv = mFn(f); return { f: fmtF(f), g: fmtV(gv), m: fmtV(mv), d: ((rail ? 20 : 10)*Math.log10(mv/gv)).toFixed(2) }; });
-    return { heads, rows, blocks, selPort: s.port, selCell: s.corner + ' / ' + s.temp + ' °C / VSET 3', selGrade: LBL[g], selCls: BADGE[g],
+    return { ...this.menuVals(), chartMenu: (e) => this.openMenu(e, 'chart', [ { label: 'Copy data as CSV' }, { label: 'Export PNG' }, { label: s.view === 'chart' ? 'Show as table' : 'Show as chart', action: () => this.setState({view: s.view === 'chart' ? 'table' : 'chart'}) }, '-', { label: 'Overlay tt / 25 °C' }, { label: 'Show phase' } ]),
+      heads, rows, blocks, selPort: s.port, selCell: s.corner + ' / ' + s.temp + ' °C / VSET 3', selGrade: LBL[g], selCls: BADGE[g],
       chartTitle: rail ? '|Zout| · load ' + (s.port === 'VDD0P8_A' ? '500 µA' : '2 mA') : 'current noise PSD · ' + s.port, chartNote: rail ? '|Zout| in Ω vs frequency · log–log · hover for values' : 'A²/Hz vs frequency · log–log · hover for values', unit,
       isChart: s.view === 'chart', isTable: s.view === 'table', viewChartCls: s.view === 'chart' ? 'on' : '', viewTableCls: s.view === 'table' ? 'on' : '',
       showChart: () => this.setState({view:'chart'}), showTable: () => this.setState({view:'table'}),

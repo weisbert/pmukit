@@ -81,9 +81,19 @@ table.t{width:100%;border-collapse:collapse;font-size:12.5px}
 .legend{display:flex;gap:14px;font-size:12px;color:#5d5a53;align-items:center}
 .sw{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
 input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
+.app{position:relative}
+.ctx-veil{position:absolute;inset:0;z-index:40}
+.ctx{position:absolute;z-index:41;min-width:220px;background:#ffffff;border:1px solid #cfccc4;border-radius:4px;box-shadow:0 6px 20px rgba(28,27,24,.14);padding:4px;font-size:12.5px}
+.ctx .ttl{padding:5px 10px 6px;color:#8a867d;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;border-bottom:1px solid #ebe8e1;margin-bottom:3px;white-space:nowrap}
+.ctx .it{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:6px 10px;border-radius:3px;cursor:pointer;white-space:nowrap}
+.ctx .it:hover{background:#e8f1f7;color:#1f6f9f}
+.ctx .it.dis{color:#bdb9b0;cursor:default}.ctx .it.dis:hover{background:transparent;color:#bdb9b0}
+.ctx .it .k{color:#8a867d;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11px}
+.ctx .sep{height:1px;background:#ebe8e1;margin:3px 6px}
+.rc{cursor:context-menu}
 </style>
 </helmet>
-<div class="app">
+<div class="app" onContextMenu="{{ noNativeMenu }}">
 <div class="nav"><span class="brand">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step done"><span class="n">1</span><span>New</span></div><div class="step done"><span class="n">2</span><span>Plan</span></div><div class="step done"><span class="n">3</span><span>Run</span></div><div class="step done"><span class="n">4</span><span>Model</span></div><div class="step cur"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span></div></div>
 
 <div class="main">
@@ -93,7 +103,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
       <div class="pb" style="padding:0">
         <table class="t">
           <thead><tr><th></th><th>File</th><th>What</th><th class="num" style="text-align:right">Size</th><th>sha</th></tr></thead>
-          <tbody><sc-for list="{{ files }}" as="f" hint-placeholder-count="7"><tr class="click {{ f.cls }}" onClick="{{ f.pick }}"><td style="color:#8a867d;width:20px"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M4 1.5h5.5L13 5v9.5H4z"></path><path d="M9.5 1.5V5H13"></path></svg></td><td class="mono">{{ f.name }}</td><td><div>{{ f.kind }}</div><div class="hint">{{ f.desc }}</div></td><td class="num">{{ f.size }}</td><td class="id" style="color:#8a867d">{{ f.sha }}</td></tr></sc-for></tbody>
+          <tbody><sc-for list="{{ files }}" as="f" hint-placeholder-count="7"><tr class="click rc {{ f.cls }}" onClick="{{ f.pick }}" onContextMenu="{{ f.menu }}"><td style="color:#8a867d;width:20px"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M4 1.5h5.5L13 5v9.5H4z"></path><path d="M9.5 1.5V5H13"></path></svg></td><td class="mono">{{ f.name }}</td><td><div>{{ f.kind }}</div><div class="hint">{{ f.desc }}</div></td><td class="num">{{ f.size }}</td><td class="id" style="color:#8a867d">{{ f.sha }}</td></tr></sc-for></tbody>
         </table>
       </div>
     </div>
@@ -122,9 +132,39 @@ PMU_TOP (AVDD1P0 VDD0P8_A VDD0P8_B IB_PTAT IB_CONST EN TESTMODE VSS_A VSS_B AGND
 </div>
 <div class="foot"><span class="hint">Nothing in this folder enters git. report.md carries numbers only.</span><div style="display:flex;gap:8px"><button class="btn">Copy folder path</button><button class="btn pri">Export report PDF</button></div></div>
 
+<sc-if value="{{ menu.on }}" hint-placeholder-val="{{ false }}">
+  <div class="ctx-veil" onClick="{{ menu.close }}" onContextMenu="{{ menu.close }}"></div>
+  <div class="ctx" style="left:{{ menu.x }}px;top:{{ menu.y }}px">
+    <div class="ttl">{{ menu.title }}</div>
+    <sc-for list="{{ menu.items }}" as="m" hint-placeholder-count="5">
+      <sc-if value="{{ m.sep }}" hint-placeholder-val="{{ false }}"><div class="sep"></div></sc-if>
+      <sc-if value="{{ m.item }}" hint-placeholder-val="{{ true }}"><div class="it {{ m.cls }}" onClick="{{ m.run }}"><span>{{ m.label }}</span><span class="k">{{ m.key }}</span></div></sc-if>
+    </sc-for>
+  </div>
+</sc-if>
 </div>
 </x-dc>
 <script data-dc-script data-props='{}'>
+
+// Right-click menus: every interactive object has one. Buttons carry the common verbs; the menu carries all of them.
+class CtxLogic extends DCLogic {
+  openMenu(e, title, items){
+    if (e && e.preventDefault) { e.preventDefault(); e.stopPropagation(); }
+    const app = e.currentTarget.closest('.app'); const r = app.getBoundingClientRect();
+    const x = Math.min(e.clientX - r.left, r.width - 250), y = Math.min(e.clientY - r.top, r.height - 40 - items.length * 30);
+    this.setState({ _menu: { title, items, x: Math.max(0, x), y: Math.max(0, y) } });
+  }
+  closeMenu(e){ if (e && e.preventDefault) e.preventDefault(); this.setState({ _menu: null }); }
+  menuVals(){
+    const m = this.state._menu;
+    return { noNativeMenu: (e) => { if (e && e.preventDefault) e.preventDefault(); },
+      menu: m ? { on: true, title: m.title, x: m.x.toFixed(0), y: m.y.toFixed(0), close: (e) => this.closeMenu(e),
+        items: m.items.map(it => it === '-' ? { sep: true, item: false } : { sep: false, item: true, label: it.label, key: it.key || '', cls: it.disabled ? 'dis' : '',
+          run: (e) => { if (e && e.stopPropagation) e.stopPropagation(); if (it.disabled) return; this.setState({ _menu: null }); if (it.action) it.action(); } }) }
+      : { on: false, items: [] } };
+  }
+}
+
 const FILES = [{"name": "PMU_demo_pmu.scs", "kind": "Spectre library", "size": "1.2 KB", "sha": "4e0a…91", "desc": "library with sections tt / ss / ff, each including its .va"}, {"name": "PMU_demo_pmu_tt.va", "kind": "Verilog-A", "size": "38 KB", "sha": "c17b…2d", "desc": "tt corner · temperature continuous · vset, load-EN switches as instance params"}, {"name": "PMU_demo_pmu_ss.va", "kind": "Verilog-A", "size": "38 KB", "sha": "9f42…7a", "desc": "ss corner"}, {"name": "PMU_demo_pmu_ff.va", "kind": "Verilog-A", "size": "38 KB", "sha": "1b8d…e5", "desc": "ff corner"}, {"name": "envelope.json", "kind": "validity", "size": "0.9 KB", "sha": "77c0…03", "desc": "load / temp / freq / corner / VSET ranges · which large-signal terms are on"}, {"name": "report.md", "kind": "report", "size": "14 KB", "sha": "a3e6…b8", "desc": "trust summary · per-cell grades · HB health check · not-run list"}, {"name": "provenance.json", "kind": "provenance", "size": "0.6 KB", "sha": "e90d…4f", "desc": "config sha · dataset sha · pmukit version · TB state at characterization"}];
 const BODIES = {
   'PMU_demo_pmu.scs': `// pmukit 0.1.0 · demo_pmu · 2026-09-15T14:02 · config 5d8c…a1 · dataset a91f…c3
@@ -181,14 +221,15 @@ HB health: first-step residual 7.7e-3, all large-signal terms individually check
   "created": "2026-09-15T14:02:11"
 }`,
 };
-class Component extends DCLogic {
+class Component extends CtxLogic {
   constructor(p){ super(p); this.state = { sel: 'PMU_demo_pmu.scs', copied: false }; }
   renderVals(){
     const s = this.state;
-    const files = FILES.map(f => ({ ...f, cls: f.name === s.sel ? 'sel' : '', pick: () => this.setState({sel: f.name}) }));
+    const files = FILES.map(f => ({ ...f, cls: f.name === s.sel ? 'sel' : '', pick: () => this.setState({sel: f.name}),
+      menu: (e) => this.openMenu(e, f.name, [ { label: 'Preview', action: () => this.setState({sel: f.name}) }, { label: 'Copy path' }, { label: 'Copy include line', disabled: !f.name.endsWith('.scs') }, '-', { label: 'Diff vs previous deliverable' }, { label: 'Show provenance' } ]) }));
     const f = FILES.find(x => x.name === s.sel);
     const body = BODIES[f.name] || BODIES['PMU_demo_pmu_tt.va'].replace(/corner tt/, 'corner ' + f.name.slice(-5, -3)).replace('HB check 7.7e-3', f.name.includes('_ss') ? 'HB check 9.1e-3' : 'HB check 6.4e-3');
-    return { files, sel: { ...f, body }, copyLabel: s.copied ? 'Copied' : 'Copy',
+    return { ...this.menuVals(), files, sel: { ...f, body }, copyLabel: s.copied ? 'Copied' : 'Copy',
       copy: () => { this.setState({copied:true}); setTimeout(() => this.setState({copied:false}), 1500); } };
   }
 }

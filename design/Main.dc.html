@@ -81,9 +81,19 @@ table.t{width:100%;border-collapse:collapse;font-size:12.5px}
 .legend{display:flex;gap:14px;font-size:12px;color:#5d5a53;align-items:center}
 .sw{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
 input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
+.app{position:relative}
+.ctx-veil{position:absolute;inset:0;z-index:40}
+.ctx{position:absolute;z-index:41;min-width:220px;background:#ffffff;border:1px solid #cfccc4;border-radius:4px;box-shadow:0 6px 20px rgba(28,27,24,.14);padding:4px;font-size:12.5px}
+.ctx .ttl{padding:5px 10px 6px;color:#8a867d;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;border-bottom:1px solid #ebe8e1;margin-bottom:3px;white-space:nowrap}
+.ctx .it{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:6px 10px;border-radius:3px;cursor:pointer;white-space:nowrap}
+.ctx .it:hover{background:#e8f1f7;color:#1f6f9f}
+.ctx .it.dis{color:#bdb9b0;cursor:default}.ctx .it.dis:hover{background:transparent;color:#bdb9b0}
+.ctx .it .k{color:#8a867d;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11px}
+.ctx .sep{height:1px;background:#ebe8e1;margin:3px 6px}
+.rc{cursor:context-menu}
 </style>
 </helmet>
-<div class="app">
+<div class="app" onContextMenu="{{ noNativeMenu }}">
 <div class="nav"><span class="brand">pmukit</span><span class="proj">demo_pmu · PMU_DEMO</span><div class="steps"><div class="step cur"><span class="n">1</span><span>New</span></div><div class="step"><span class="n">2</span><span>Plan</span></div><div class="step"><span class="n">3</span><span>Run</span></div><div class="step"><span class="n">4</span><span>Model</span></div><div class="step"><span class="n">5</span><span>Deliver</span></div></div><div class="navr"><span>PMUKIT_DATA ~/pmukit_data</span><span>v0.1 · engine alps</span></div></div>
 
 <div class="main">
@@ -111,7 +121,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
             <thead><tr><th>Pin</th><th>Net</th><th>Role</th><th>From source</th><th>DC</th><th>Status</th></tr></thead>
             <tbody>
               <sc-for list="{{ pins }}" as="p" hint-placeholder-count="6">
-                <tr><td class="mono">{{ p.pin }}</td><td class="mono" style="color:#5d5a53">{{ p.net }}</td><td><span class="badge {{ p.roleCls }}">{{ p.role }}</span></td><td class="mono">{{ p.src }}</td><td class="num" style="text-align:left">{{ p.dc }}</td><td><span class="badge {{ p.stCls }}">{{ p.st }}</span></td></tr>
+                <tr class="rc" onContextMenu="{{ p.menu }}"><td class="mono">{{ p.pin }}</td><td class="mono" style="color:#5d5a53">{{ p.net }}</td><td><span class="badge {{ p.roleCls }}">{{ p.role }}</span></td><td class="mono">{{ p.src }}</td><td class="num" style="text-align:left">{{ p.dc }}</td><td><span class="badge {{ p.stCls }}">{{ p.st }}</span></td></tr>
               </sc-for>
             </tbody>
           </table>
@@ -126,11 +136,11 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
       <div class="pb" style="display:flex;flex-direction:column;gap:18px">
         <div class="field"><span class="lbl">1 · Corners and temperatures you simulate at</span>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="hint" style="width:70px">corners</span>
-            <sc-for list="{{ corners }}" as="c" hint-placeholder-count="3"><span class="chip {{ c.cls }}" onClick="{{ c.toggle }}">{{ c.name }}</span></sc-for>
+            <sc-for list="{{ corners }}" as="c" hint-placeholder-count="3"><span class="chip rc {{ c.cls }}" onClick="{{ c.toggle }}" onContextMenu="{{ c.menu }}">{{ c.name }}</span></sc-for>
             <input class="inp mono" style="width:150px;height:24px" placeholder="MOSff_RCss">
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="hint" style="width:70px">temp °C</span>
-            <sc-for list="{{ temps }}" as="c" hint-placeholder-count="3"><span class="chip {{ c.cls }}" onClick="{{ c.toggle }}">{{ c.name }}</span></sc-for>
+            <sc-for list="{{ temps }}" as="c" hint-placeholder-count="3"><span class="chip rc {{ c.cls }}" onClick="{{ c.toggle }}" onContextMenu="{{ c.menu }}">{{ c.name }}</span></sc-for>
             <input class="inp mono" style="width:70px;height:24px" placeholder="85">
           </div>
           <div style="display:flex;gap:6px;align-items:center"><span class="hint" style="width:70px">VSET codes</span><input class="inp mono" style="width:90px;height:24px" value="3"><span class="hint">from <span class="mono">parameters VSET=3</span></span></div>
@@ -140,7 +150,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
             <thead><tr><th>Rail</th><th>On</th><th>Off</th><th>Switches on/off</th><th></th></tr></thead>
             <tbody>
               <sc-for list="{{ rails }}" as="r" hint-placeholder-count="2">
-                <tr><td class="mono">{{ r.name }}</td><td><input class="inp mono" style="width:90px;height:26px" value="{{ r.on }}"></td><td><input class="inp mono" style="width:90px;height:26px" value="{{ r.off }}"></td><td><input type="checkbox" checked="{{ r.sw }}" onChange="{{ r.toggle }}"> <span class="hint">{{ r.swText }}</span></td><td><button class="btn sm" onClick="{{ r.measure }}">Measure from netlist</button></td></tr>
+                <tr class="rc" onContextMenu="{{ r.menu }}"><td class="mono">{{ r.name }}</td><td><input class="inp mono" style="width:90px;height:26px" value="{{ r.on }}"></td><td><input class="inp mono" style="width:90px;height:26px" value="{{ r.off }}"></td><td><input type="checkbox" checked="{{ r.sw }}" onChange="{{ r.toggle }}"> <span class="hint">{{ r.swText }}</span></td><td><button class="btn sm" onClick="{{ r.measure }}">Measure from netlist</button></td></tr>
               </sc-for>
             </tbody>
           </table>
@@ -170,11 +180,41 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
 </div>
 <div class="foot"><span class="hint">{{ footText }}</span><button class="btn pri" disabled="{{ notLoaded }}">Build plan <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"></path></svg></button></div>
 
+<sc-if value="{{ menu.on }}" hint-placeholder-val="{{ false }}">
+  <div class="ctx-veil" onClick="{{ menu.close }}" onContextMenu="{{ menu.close }}"></div>
+  <div class="ctx" style="left:{{ menu.x }}px;top:{{ menu.y }}px">
+    <div class="ttl">{{ menu.title }}</div>
+    <sc-for list="{{ menu.items }}" as="m" hint-placeholder-count="5">
+      <sc-if value="{{ m.sep }}" hint-placeholder-val="{{ false }}"><div class="sep"></div></sc-if>
+      <sc-if value="{{ m.item }}" hint-placeholder-val="{{ true }}"><div class="it {{ m.cls }}" onClick="{{ m.run }}"><span>{{ m.label }}</span><span class="k">{{ m.key }}</span></div></sc-if>
+    </sc-for>
+  </div>
+</sc-if>
 </div>
 </x-dc>
 <script data-dc-script data-props='{}'>
 
-class Component extends DCLogic {
+// Right-click menus: every interactive object has one. Buttons carry the common verbs; the menu carries all of them.
+class CtxLogic extends DCLogic {
+  openMenu(e, title, items){
+    if (e && e.preventDefault) { e.preventDefault(); e.stopPropagation(); }
+    const app = e.currentTarget.closest('.app'); const r = app.getBoundingClientRect();
+    const x = Math.min(e.clientX - r.left, r.width - 250), y = Math.min(e.clientY - r.top, r.height - 40 - items.length * 30);
+    this.setState({ _menu: { title, items, x: Math.max(0, x), y: Math.max(0, y) } });
+  }
+  closeMenu(e){ if (e && e.preventDefault) e.preventDefault(); this.setState({ _menu: null }); }
+  menuVals(){
+    const m = this.state._menu;
+    return { noNativeMenu: (e) => { if (e && e.preventDefault) e.preventDefault(); },
+      menu: m ? { on: true, title: m.title, x: m.x.toFixed(0), y: m.y.toFixed(0), close: (e) => this.closeMenu(e),
+        items: m.items.map(it => it === '-' ? { sep: true, item: false } : { sep: false, item: true, label: it.label, key: it.key || '', cls: it.disabled ? 'dis' : '',
+          run: (e) => { if (e && e.stopPropagation) e.stopPropagation(); if (it.disabled) return; this.setState({ _menu: null }); if (it.action) it.action(); } }) }
+      : { on: false, items: [] } };
+  }
+}
+
+
+class Component extends CtxLogic {
   constructor(p){ super(p); this.state = { loaded: false, adv: false,
     corners: ['tt','ss','ff'], cornersOn: {tt:true, ss:true, ff:true},
     temps: ['-40','25','125'], tempsOn: {'-40':true,'25':true,'125':true},
@@ -190,16 +230,25 @@ class Component extends DCLogic {
       {pin:'EN', net:'en', role:'enable', roleCls:'b-ink', src:'VEN_EN', dc:'0 → 1 V', st:'ok', stCls:'b-ok'},
       {pin:'VSS_A · VSS_B · AGND', net:'(3 grounds)', role:'ground', roleCls:'b-mute', src:'from wiring', dc:'—', st:'ok', stCls:'b-ok'},
       {pin:'TESTMODE', net:'testmode', role:'none', roleCls:'b-warn', src:'—', dc:'—', st:'unclassified', stCls:'b-warn'},
-    ];
+    ].map(p => ({ ...p, menu: (e) => this.openMenu(e, 'pin ' + p.pin, [
+      { label: 'Set role: rail', action: () => {} }, { label: 'Set role: bias' }, { label: 'Set role: supply' }, { label: 'Set role: enable' }, { label: 'Ignore this pin' }, '-',
+      { label: 'Show in netlist', key: 'line ' + (40 + p.pin.length) }, { label: 'Copy pin name' }, { label: 'Copy net name' } ]) }));
     const chips = (names, on, key) => names.map(n => ({ name:n, cls: on[n] ? 'on' : '',
-      toggle: () => { const o = Object.assign({}, on); o[n] = !o[n]; this.setState({[key]: o}); } }));
+      toggle: () => { const o = Object.assign({}, on); o[n] = !o[n]; this.setState({[key]: o}); },
+      menu: (e) => this.openMenu(e, (key === 'cornersOn' ? 'corner ' : 'temp ') + n, [
+        { label: 'Only this', action: () => { const o = {}; names.forEach(x => o[x] = x === n); this.setState({[key]: o}); } },
+        { label: 'All', action: () => { const o = {}; names.forEach(x => o[x] = true); this.setState({[key]: o}); } }, '-',
+        { label: key === 'cornersOn' ? 'Set as nominal corner' : 'Set as nominal temperature' }, { label: 'Remove from list' } ]) }));
     const rails = [
       {name:'VDD0P8_A', on:'500 µA', off:'2 µA'}, {name:'VDD0P8_B', on:'2.0 mA', off:'20 µA'},
     ].map(r => ({ ...r, sw: !!s.sw[r.name], swText: s.sw[r.name] ? 'load-EN on/off characterized' : 'static load only',
       toggle: () => { const o = Object.assign({}, s.sw); o[r.name] = !o[r.name]; this.setState({sw:o}); },
-      measure: () => {} }));
+      measure: () => {},
+      menu: (e) => this.openMenu(e, 'rail ' + r.name, [ { label: 'Measure on/off/edge from netlist' }, { label: 'Copy values from the other rail' }, '-',
+        { label: s.sw[r.name] ? 'Static load only (no load-EN)' : 'Characterize load-EN on/off', action: () => { const o = Object.assign({}, s.sw); o[r.name] = !o[r.name]; this.setState({sw:o}); } },
+        { label: 'Show the IL_ source line' } ]) }));
     const nc = s.corners.filter(c => s.cornersOn[c]).length, nt = s.temps.filter(t => s.tempsOn[t]).length;
-    return {
+    return { ...this.menuVals(),
       loaded: s.loaded, notLoaded: !s.loaded, adv: s.adv,
       advLabel: s.adv ? 'Hide derived settings' : 'Show derived settings (pmukit decided these)',
       load: () => this.setState({loaded:true}), toggleAdv: (e) => { if (e && e.preventDefault) e.preventDefault(); this.setState({adv: !s.adv}); },
