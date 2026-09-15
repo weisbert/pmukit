@@ -121,7 +121,8 @@ input[type=checkbox]{width:15px;height:15px;accent-color:#1f6f9f;margin:0}
       <div class="ph"><span>Run <span class="id">{{ sel.id }}</span></span><span class="badge {{ sel.bcls }}">{{ sel.status }}</span></div>
       <div class="pb" style="display:flex;flex-direction:column;gap:12px">
         <div class="kv"><span class="k">Cell</span><span class="mono">{{ sel.cell }}</span><span class="k">Analysis</span><span>{{ sel.an }}</span><span class="k">Feeds</span><span class="mono">{{ sel.feeds }}</span><span class="k">Job</span><span class="mono">donau {{ sel.job }} · rf_short · 8 cpu</span><span class="k">Netlist</span><span class="mono">…/{{ sel.cellDir }}/{{ sel.id }}/input.scs</span><span class="k">PSF</span><span class="mono">{{ sel.psf }}</span></div>
-        <div><div class="lbl" style="margin-bottom:6px">Log tail</div><div class="code" style="height:300px">{{ sel.log }}</div></div>
+        <div><div class="lbl" style="margin-bottom:6px">How it ran <span class="hint" style="text-transform:none;letter-spacing:0">(netlist edits · analysis · submit)</span></div><div class="code" style="height:150px;font-size:11px">{{ sel.recipe }}</div></div>
+        <div><div class="lbl" style="margin-bottom:6px">Log tail</div><div class="code" style="height:170px">{{ sel.log }}</div></div>
         <sc-if value="{{ sel.isFailed }}" hint-placeholder-val="{{ false }}"><div class="callout bad">Failed twice with the same message. If it fails again pmukit stops retrying and the fit proceeds with <b>tran_load_off.B @ ss/125 °C = NOT RUN</b>, flagged in the report.</div></sc-if>
       </div>
     </div>
@@ -154,6 +155,20 @@ job DONE  rc=0  ${r.el}  peak mem 1.4 GB`,
   cached: (r) => `identical run_id already in ledger (2026-09-14 18:02) -> reused`,
 };
 const BCLS = { done:'b-ok', running:'b-acc', failed:'b-bad', queued:'b-mute', cached:'b-mute' };
+function recipeRow(r){
+  const [corner, tc, vset] = r.cell.split(' / '); const t = tc.replace(' °C','').replace('−','-');
+  const L = ['# ' + r.an + '   cell ' + r.cell, '~ include "$PDK/toplevel.scs" section=' + corner + '   // was tt', '~ include "$PDK/rc.scs" section=' + corner, '~ parameters VSET=' + vset, '+ tcov options temp=' + t, '- (your analyses stripped)'];
+  if (r.an.startsWith('noise VDD')) { const rail = r.an.includes('_A') ? 'A' : 'B'; const ld = r.an.split('·').pop().trim(); L.push('~ IL_VDD0P8_' + rail + ' dc=' + ld, '+ nz1 noise start=10 stop=100M dec=20 oprobe=VDD0P8_' + rail); }
+  else if (r.an.startsWith('noise IB')) L.push('+ nz1 noise start=10 stop=100M dec=20 iprobe=VB_' + r.an.split(' ')[1]);
+  else if (r.an.startsWith('ac')) { const ld = r.an.split('·').pop().trim(); L.push('~ ' + (r.an.includes('AVDD') ? 'VS_AVDD1P0 mag=1' : 'IL_' + r.an.split('inject ')[1].split(' ')[0] + ' dc=' + ld + ' mag=1'), '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p', '+ ac1 ac start=10 stop=20G dec=20'); }
+  else if (r.an.startsWith('tran · load-EN')) { const rail = r.an.includes('EN A') ? 'A' : 'B'; const off = r.an.endsWith('off'); const hi = rail === 'A' ? '500u' : '2m', lo = rail === 'A' ? '2u' : '20u'; const [a,b] = off ? [hi,lo] : [lo,hi]; L.push('~ IL_VDD0P8_' + rail + ' type=pwl wave=[0 ' + a + ' 2u ' + a + ' 2.002u ' + b + ' 10u ' + b + ']', '+ tr1 tran stop=10u step=2n', '+ save VDD0P8_' + rail); }
+  else if (r.an.startsWith('tran · EN')) L.push('~ VEN_EN type=pwl wave=[0 0 1u 0 1.01u 1.0 20u 1.0]', '+ tr1 tran stop=20u');
+  else if (r.an === 'dc_temp') L.push('+ dcT dc param=temp start=-40 stop=125 step=5', '+ save VDD0P8_A VDD0P8_B VB_IB_PTAT:p VB_IB_CONST:p');
+  else if (r.an.startsWith('dc_iv')) L.push('+ dcV dc dev=VB_' + r.an.split(' ')[1] + ' param=dc start=0 stop=1.0 lin=21');
+  else L.push('+ dcL dc dev=IL_' + r.an.split(' ')[1] + ' param=dc start=0 stop=2*on lin=41');
+  L.push('# dsub -A rf_short -R "cpu=8;mem=8000" -x all -EP <dir> -J alps input.scs -format ps -o ../psf/' + r.id + ' -I $PDK/alps -mt 8 -ade');
+  return L.join('\n');
+}
 class Component extends DCLogic {
   constructor(p){ super(p); this.state = { rows: ROWS.map(r => ({...r})), sel: 'e4d27a5c1f90', filter: 'All', counts: {done:191, running:8, queued:71, failed:2, cached:10} }; }
   componentDidMount(){ this.timer = setInterval(() => { const c = Object.assign({}, this.state.counts); if (c.running > 0) { c.running -= 1; c.done += 1; } if (c.queued > 0) { c.queued -= 1; c.running += 1; } if (c.running !== this.state.counts.running || c.queued !== this.state.counts.queued) this.setState({counts:c}); }, 1800); }
@@ -166,7 +181,7 @@ class Component extends DCLogic {
       select: () => this.setState({sel: r.id}),
       retry: (e) => { if (e && e.stopPropagation) e.stopPropagation(); const rows = s.rows.map(x => x.id === r.id ? {...x, status:'queued', el:'—', cpu:'—'} : x); const cc = Object.assign({}, c); cc.failed = Math.max(0, cc.failed - 1); cc.queued += 1; this.setState({rows, counts: cc}); } }));
     const selRow = s.rows.find(r => r.id === s.sel) || s.rows[0];
-    const sel = { ...selRow, bcls: BCLS[selRow.status], isFailed: selRow.status === 'failed', log: LOGS[selRow.status](selRow, c), cellDir: selRow.cell.replace(/ \/ /g, '_').replace(' °C', 'c').replace('−', 'm'), job: '4881' + parseInt(selRow.id.slice(0,4), 16).toString().slice(0,4),
+    const sel = { ...selRow, bcls: BCLS[selRow.status], isFailed: selRow.status === 'failed', log: LOGS[selRow.status](selRow, c), recipe: recipeRow(selRow), cellDir: selRow.cell.replace(/ \/ /g, '_').replace(' °C', 'c').replace('−', 'm'), job: '4881' + parseInt(selRow.id.slice(0,4), 16).toString().slice(0,4),
       feeds: selRow.an.startsWith('noise') ? 'noise block' : selRow.an.startsWith('ac') ? 'zout / psrr blocks' : selRow.an.startsWith('tran') ? 'load_en (large-signal)' : 'dc tables',
       psf: selRow.status === 'done' || selRow.status === 'cached' ? '…/psf/' + selRow.id + '/' : '—' };
     const filters = ['All','Running','Failed','Queued'].map(n => ({ name:n, cls: s.filter === n ? 'on' : '', pick: () => this.setState({filter:n}) }));

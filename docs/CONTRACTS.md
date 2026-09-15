@@ -146,6 +146,7 @@ CREATE TABLE runs (
   reads TEXT,                     -- JSON 数组：这次读了哪些 观测量.端口
   netlist_sha TEXT, netlist_path TEXT, psf_path TEXT,
   engine TEXT, job_id TEXT,
+  recipe TEXT,                    -- 人可读的配方：网表改动 + 分析 + 提交命令（Plan/Run 屏展开显示）
   status TEXT,                    -- planned | submitted | running | done | failed | skipped_cached
   submitted_at TEXT, finished_at TEXT, cpu_seconds REAL, peak_mem_mb REAL,
   error TEXT
@@ -158,6 +159,7 @@ CREATE TABLE consumes (           -- 哪个参数吃了哪次 run
 规则：
 - `run_id` 由内容哈希决定 → 同样的网表和角再提交一次直接 `skipped_cached`，这就是 resume。
 - 界面的 Run 屏和 Plan 屏都只读这张表；Plan 屏的"为什么跑"来自 `consumes` 反查。
+- **每条 run 存一份"配方"文本**（`recipe` 列）：网表里改了哪几行（`~` 原地改、`+` 新增、`-` 剥掉，原值写在注释里）、分析语句、save、提交命令。Plan 屏的 Runs 页签和 Run 屏的详情都显示它；默认折叠，调试时展开。
 - 成本账 = `sum(cpu_seconds)` 按分析类型分组。
 
 ## 4. 交付物（用户拿走的东西）
