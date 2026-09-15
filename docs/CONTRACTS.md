@@ -150,7 +150,8 @@ CREATE TABLE runs (
   netlist_sha TEXT, netlist_path TEXT, psf_path TEXT,
   engine TEXT, job_id TEXT,
   recipe TEXT,                    -- 人可读的配方：网表改动 + 分析 + 提交命令（Plan/Run 屏展开显示）
-  status TEXT,                    -- planned | submitted | running | done | failed | skipped_cached
+  status TEXT,                    -- planned | submitted | running | done | failed | skipped_cached | imported
+  source_path TEXT,               -- imported 时：外部结果目录（ADE psf 目录或 CSV），其余为空
   submitted_at TEXT, finished_at TEXT, cpu_seconds REAL, peak_mem_mb REAL,
   error TEXT
 );
@@ -161,6 +162,7 @@ CREATE TABLE consumes (           -- 哪个参数吃了哪次 run
 
 规则：
 - `run_id` 由内容哈希决定 → 同样的网表和角再提交一次直接 `skipped_cached`，这就是 resume。
+- **已有仿真结果可以直接用，不重跑。** 两条路：(a) pmukit 自己跑过的走哈希缓存；(b) 用户在 ADE 里跑过的结果目录（含当时的 `input.scs` + psf）由导入器读取：从网表认出角、温度、VSET、哪个源被激励，对上计划的格子就填进数据集，台账记 `imported` + `source_path`；对不上的逐条列出，缺的格子照常跑。CSV 也可以，但要用户指明每个文件是哪个观测量和格子。老仓 `import_cadence.py` 搬来接新契约。
 - 界面的 Run 屏和 Plan 屏都只读这张表；Plan 屏的"为什么跑"来自 `consumes` 反查。
 - **每条 run 存一份"配方"文本**（`recipe` 列）：网表里改了哪几行（`~` 原地改、`+` 新增、`-` 剥掉，原值写在注释里）、分析语句、save、提交命令。Plan 屏的 Runs 页签和 Run 屏的详情都显示它；默认折叠，调试时展开。
 - 成本账 = `sum(cpu_seconds)` 按分析类型分组。
