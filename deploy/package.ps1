@@ -4,10 +4,12 @@
   for the box (RHEL8 / tcsh / no network).
 
 .DESCRIPTION
-  1. Picks a Python 3.11 (repo .venv first, then 'py -3.11', then 'python').
-  2. Verifies it really is 3.11 with a QUOTE-FREE probe. Windows PowerShell 5.1 strips embedded
+  1. Picks a Python (repo .venv first, then 'python', then 'py -3').
+  2. Verifies it is 3.10+ with a QUOTE-FREE probe. Windows PowerShell 5.1 strips embedded
      double quotes when passing arguments to a native executable, so the probe prints an integer
-     version code (311) instead of a quoted string.
+     version code (310) instead of a quoted string. The DESK interpreter does not have to be 3.11:
+     `pip download --python-version 311 --platform ...` fetches the box's wheels from any Python.
+     Only the BOX needs 3.11 (apply checks that there).
   3. Calls package.py, which cross-downloads the cp311 / x86_64 / manylinux2014 wheels, audits
      them against glibc 2.17, writes MANIFEST.json + SHA256SUMS (LF), and stages app/.
   4. Lists what to carry to the box.
@@ -51,31 +53,31 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-# --- pick an interpreter (the wheels are cp311, so the version must be exact) ---
+# --- pick an interpreter (any 3.10+: the cp311 wheels are cross-downloaded, not host-matched) ---
 $exe = $null
 $pre = @()
 $venv = Join-Path $Root '.venv\Scripts\python.exe'
 if (Test-Path $venv) {
     $exe = $venv
 }
-elseif (Get-Command py -ErrorAction SilentlyContinue) {
-    $exe = 'py'; $pre = @('-3.11')
-}
 elseif (Get-Command python -ErrorAction SilentlyContinue) {
     $exe = 'python'
 }
+elseif (Get-Command py -ErrorAction SilentlyContinue) {
+    $exe = 'py'; $pre = @('-3')
+}
 else {
-    throw 'No Python found. Install Python 3.11 (with pip) and retry.'
+    throw 'No Python found. Install Python 3.10+ (with pip) and retry.'
 }
 
-# Quote-free version probe: 3.11 -> 311. PS 5.1 would eat embedded double quotes here.
+# Quote-free version probe: 3.10 -> 310. PS 5.1 would eat embedded double quotes here.
 $ver = (& $exe @pre -c 'import sys;print(sys.version_info[0]*100+sys.version_info[1])')
 $ver = "$ver".Trim()
-if ($ver -ne '311') {
-    throw "Need Python 3.11 (the wheels are cp311); probed version code = $ver (311 = 3.11). Try 'py -3.11'."
+if ([int]$ver -lt 310) {
+    throw "Need Python 3.10+ to run the packager; probed version code = $ver (310 = 3.10)."
 }
 
-Write-Host "[pkg] python : $exe $($pre -join ' ')  (3.11)"
+Write-Host "[pkg] python : $exe $($pre -join ' ')  (version code $ver)"
 Write-Host "[pkg] mode   : $Mode"
 Write-Host "[pkg] out    : $Out"
 

@@ -44,7 +44,9 @@ python deploy/package.py --out dist/pkg_i --incremental dist/pkg
 python deploy/package.py --out dist/pkg --tar
 ```
 
-Windows convenience wrapper (same thing, picks a 3.11 interpreter for you):
+Windows convenience wrapper (same thing, picks an interpreter for you). The desk needs any
+Python **3.10+**, not 3.11: the box's cp311 wheels are cross-downloaded with
+`--python-version 311 --platform manylinux2014_x86_64`, whatever runs pip. Only the box needs 3.11.
 
 ```powershell
 .\deploy\package.ps1                      # full
