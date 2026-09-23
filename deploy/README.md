@@ -92,7 +92,16 @@ It checks python3.11 and the tarball's sha256, unpacks into `tmp/`, runs `apply`
 cache, writes `env.csh` / `env.sh` (once; later runs keep your edits), and reports whether anything
 landed outside the folder. numpy/scipy live in `<folder>/install/.venv`; the only outside
 dependency is the system `python3.11` the venv is built from. Output goes to `install.log`.
-Re-run with a newer tarball to update (full or incremental).
+Re-run with a newer tarball to update.
+
+**Routine updates ship no dependencies.** On the desk, `.\deploy\package.ps1 -Mode code -Tar`
+(or `python deploy/package.py --code --tar`) builds `dist/pkg_code.tar.gz`: the whole source,
+no wheels, ~0.5 MB. Upload it with its `.sha256` into the same folder and run
+`bash pmukit_install.sh` again (it takes the newest tarball). The venv and `data/` are kept, and
+`app/` is replaced whole, so files deleted on the desk disappear on the box too. Every code
+package is complete on its own: skipping one, or installing an older one, leaves no hole.
+It is refused when there is no install yet, and when `requirements.txt` moved since the full
+install -- then ship a full package (`-Tar` without `-Mode`).
 
 ### By hand
 

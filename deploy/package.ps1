@@ -17,11 +17,13 @@
   All text artifacts are written LF by package.py. Do not re-save them with a Windows editor.
 
 .PARAMETER Mode
-  full (default) = source + wheels. incremental = only changed files + a delete list; needs
-  -Previous pointing at the package you last shipped.
+  full (default) = source + wheels (~54 MB): the first install, or when requirements.txt moved.
+  code = the whole source, no wheels (~0.5 MB): the routine update of an existing install.
+  incremental = only changed files + a delete list; needs -Previous pointing at the package you
+  last shipped (prefer code: it needs no previous package and cannot skip a file).
 
 .PARAMETER Out
-  Package directory to build. Default dist\pkg.
+  Package directory to build. Default dist\pkg (full) or dist\pkg_code (code).
 
 .PARAMETER Previous
   Incremental only: the previous package directory (or its MANIFEST.json) to diff against.
@@ -35,15 +37,17 @@
 .EXAMPLE
   .\deploy\package.ps1
 .EXAMPLE
+  .\deploy\package.ps1 -Mode code -Tar
+.EXAMPLE
   .\deploy\package.ps1 -Mode incremental -Previous dist\pkg -Out dist\pkg_i
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File deploy\package.ps1 -DryRun
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('full', 'incremental')]
+    [ValidateSet('full', 'code', 'incremental')]
     [string]$Mode = 'full',
-    [string]$Out = 'dist\pkg',
+    [string]$Out = '',
     [string]$Previous = '',
     [switch]$DryRun,
     [switch]$Tar
@@ -78,6 +82,7 @@ if ([int]$ver -lt 310) {
 }
 
 Write-Host "[pkg] python : $exe $($pre -join ' ')  (version code $ver)"
+if (-not $Out) { $Out = if ($Mode -eq 'code') { 'dist\pkg_code' } else { 'dist\pkg' } }
 Write-Host "[pkg] mode   : $Mode"
 Write-Host "[pkg] out    : $Out"
 
@@ -86,7 +91,9 @@ if ($Mode -eq 'incremental' -and -not $Previous) {
 }
 
 $argv = @((Join-Path $Root 'deploy\package.py'), '--out', $Out)
-if ($Mode -eq 'incremental') { $argv += @('--incremental', $Previous) } else { $argv += '--full' }
+if ($Mode -eq 'incremental') { $argv += @('--incremental', $Previous) }
+elseif ($Mode -eq 'code') { $argv += '--code' }
+else { $argv += '--full' }
 if ($DryRun) { $argv += '--dry-run' }
 if ($Tar) { $argv += '--tar' }
 

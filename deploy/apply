@@ -97,6 +97,26 @@ if [ "$MODE" = "incremental" ]; then
     exit 0
 fi
 
+# ------------------------------------------------- 2b. code-only? it needs the venv to exist --
+jfield() {  # $1 = key, $2 = json file -- first "key": "value" match, empty if absent
+    sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$2" 2>/dev/null | head -1 || true
+}
+if [ "$MODE" = "code" ]; then
+    [ -x "$PREFIX/.venv/bin/python" ] || die \
+        "This is a code-only package, and there is no pmukit install at $PREFIX yet." \
+        "A code-only package carries no numpy/scipy wheels; it can only refresh an existing install." \
+        "Install the FULL package first (pkg.tar.gz from: package.ps1 -Tar), then this one." "" "$PREFIX"
+    NEW_RIH="$(jfield requirements_input_hash "$SRC/MANIFEST.json")"
+    OLD_RIH="$(jfield requirements_input_hash "$PREFIX/MANIFEST.deployed.json")"
+    if [ -n "$NEW_RIH" ] && [ -n "$OLD_RIH" ] && [ "$NEW_RIH" != "$OLD_RIH" ]; then
+        die "requirements.txt changed since this box's full install." \
+            "A code-only package ships no wheels, so the venv here would keep the old numpy/scipy." \
+            "Build and install a FULL package:  .\\deploy\\package.ps1 -Tar   (on the desk)" \
+            "" "$PREFIX/MANIFEST.deployed.json"
+    fi
+    [ -n "$OLD_RIH" ] || echo "   (no dependency record at $PREFIX -- cannot confirm requirements.txt is unchanged)"
+fi
+
 # ---------------------------------------------------------------------------- 3. the box python --
 command -v "$PYBIN" >/dev/null 2>&1 || PYBIN="python3"
 command -v "$PYBIN" >/dev/null 2>&1 || die "No Python 3.11 on PATH." \
@@ -180,7 +200,9 @@ for s in "$PREFIX"/app/deploy/*.sh "$PREFIX/app/deploy/apply"; do
 done
 
 # ------------------------------------------------------------------------------ 6. venv + deps --
-if [ -n "${PMUKIT_REBUILD_VENV:-}" ] || [ ! -x "$PREFIX/.venv/bin/python" ]; then
+if [ "$MODE" = "code" ]; then
+    echo "[3/6] code-only package: keeping venv $PREFIX/.venv"
+elif [ -n "${PMUKIT_REBUILD_VENV:-}" ] || [ ! -x "$PREFIX/.venv/bin/python" ]; then
     echo "[3/6] creating venv $PREFIX/.venv ..."
     rm -rf "$PREFIX/.venv"
     "$PYBIN" -m venv "$PREFIX/.venv"
@@ -192,7 +214,9 @@ VPY="$PREFIX/.venv/bin/python"
 WHEELS=""
 [ -d "$SRC/wheels" ] && [ -n "$(ls -A "$SRC/wheels" 2>/dev/null)" ] && WHEELS="$SRC/wheels"
 REQ="$SRC/requirements.lock"; [ -f "$REQ" ] || REQ="$APP/requirements.txt"
-if [ -n "$WHEELS" ]; then
+if [ "$MODE" = "code" ]; then
+    echo "[4/6] code-only package: dependencies unchanged, pip skipped"
+elif [ -n "$WHEELS" ]; then
     echo "[4/6] OFFLINE pip install (--no-index --find-links wheels) ..."
     rm -rf "$PREFIX/wheels"; cp -r "$WHEELS" "$PREFIX/wheels"
     "$VPY" -m pip install --no-index --find-links "$PREFIX/wheels" -r "$REQ" \
@@ -238,7 +262,11 @@ EOF
 cat > "$PREFIX/INSTALL.json" <<EOF
 {"installed_utc":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","prefix":"$PREFIX","kind":"$KIND","version":"$VER"}
 EOF
-if [ -f "$SRC/MANIFEST.json" ]; then cp "$SRC/MANIFEST.json" "$PREFIX/MANIFEST.deployed.json"; fi
+# MANIFEST.deployed.json records what the VENV was built from, so only a full package writes it;
+# a code-only package keeps it, and the next code-only package is checked against the same deps.
+if [ -f "$SRC/MANIFEST.json" ] && [ "$MODE" != "code" ]; then
+    cp "$SRC/MANIFEST.json" "$PREFIX/MANIFEST.deployed.json"
+fi
 
 # ---------------------------------------------------------------------- 8. post-install check --
 echo "[6/6] post-install check (tools/webprobe.py, headless) ..."

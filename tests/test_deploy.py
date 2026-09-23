@@ -145,6 +145,29 @@ def test_tar_ships_the_one_step_installer_next_to_it(mini_repo, tmp_path):
     assert inst.read_text(encoding="utf-8") == (DEPLOY / "pmukit_install.sh").read_text(encoding="utf-8")
 
 
+def test_code_package_is_the_whole_source_without_wheels(mini_repo, tmp_path):
+    """The routine update: every source file (self-contained, no base to diff against) and no
+    wheels, plus the requirements hash the box checks against its full install."""
+    full = _build(mini_repo, tmp_path / "pkg")
+    code = _build(mini_repo, tmp_path / "pkg_code", mode="code")
+    assert code["mode"] == "code"
+    assert code["wheels"] == [] and not (tmp_path / "pkg_code" / "wheels").exists()
+    app = lambda m: {k for k in m["files"] if k.startswith("app/")}
+    assert app(code) == app(full)
+    assert code["requirements_input_hash"] == full["requirements_input_hash"] != ""
+    assert (tmp_path / "pkg_code" / "apply").is_file()
+
+
+def test_apply_guards_a_code_package():
+    """No install yet -> refuse; requirements moved -> refuse; never pip, never rewrite the
+    venv's dependency record."""
+    text = (DEPLOY / "apply").read_text(encoding="utf-8")
+    assert 'if [ "$MODE" = "code" ]; then' in text
+    assert "code-only package, and there is no pmukit install" in text
+    assert "requirements.txt changed since this box's full install" in text
+    assert '[ "$MODE" != "code" ]' in text          # MANIFEST.deployed.json left alone
+
+
 def test_one_step_installer_pins_everything_inside_its_folder():
     """Nothing in $HOME or /tmp: prefix, data, temp and pip cache all point under the folder."""
     text = (DEPLOY / "pmukit_install.sh").read_text(encoding="utf-8")

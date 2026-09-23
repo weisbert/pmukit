@@ -23,7 +23,9 @@ source env.csh
 
 全部装在这个文件夹里：`install/`（程序 + `.venv`，numpy/scipy 在这里）、`data/`、`tmp/`、
 `env.csh`、`install.log`。不写 `$HOME`、不写 `/tmp`，结尾会自己检查并报告。
-以后更新：传新的 tar + sha256 进来，再跑一次 `bash pmukit_install.sh`。
+以后更新（只改了程序）：黄区 `.\deploy\package.ps1 -Mode code -Tar` → `pkg_code.tar.gz`（约 0.5 MB，
+不带依赖），连同 `.sha256` 传进同一个文件夹，再跑一次 `bash pmukit_install.sh`。
+`requirements.txt` 变了的话它会拒绝，这时传完整包（`-Tar` 不带 `-Mode`）。
 
 ### (b) git clone（只在盒子能联网装 pip 时可行）
 

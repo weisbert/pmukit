@@ -17,12 +17,16 @@ The package is a plain directory tree -- no installer magic, nothing to unpack b
 
 Modes
     --full                          source + wheels (first install, or when deps moved)
+    --code                          the whole source, NO wheels (~0.5 MB): the routine update
+                                    for an existing install; refused on the box if
+                                    requirements.txt moved since its full install
     --incremental <prev-package>    only the files whose sha256 changed, plus a delete list
     --dry-run                       do EVERYTHING except the network download (wheels come
                                     from the local cache) -- so the acceptance runs offline
 
     python deploy/package.py --out dist/pkg
     python deploy/package.py --out dist/pkg --dry-run
+    python deploy/package.py --code --tar                  # -> dist/pkg_code.tar.gz
     python deploy/package.py --out dist/pkg_i --incremental dist/pkg
     python deploy/package.py --out dist/pkg --tar          # also emit <out>.tar.gz + .sha256
 
@@ -389,6 +393,14 @@ def build(out: pathlib.Path, mode="full", prev=None, dry_run=False, cache=None,
               f" {len(deleted)} deleted) ...")
         stage_app(out, root, only=changed)
         wheels_named = []
+    elif mode == "code":
+        # The WHOLE source, no wheels: ~0.5 MB instead of ~54 MB.  Self-contained (no base package
+        # to diff against, so a skipped update cannot leave a hole); the box keeps its venv and
+        # refuses the package if requirements.txt moved since the full install.
+        print("[1/5] staging source (code-only: the box keeps its numpy/scipy venv) ...")
+        stage_app(out, root)
+        print("[2/5] no wheels in a code-only package; [3/5] audit skipped")
+        wheels_named = []
     else:
         print("[1/5] staging source ...")
         stage_app(out, root)
@@ -453,9 +465,12 @@ def build(out: pathlib.Path, mode="full", prev=None, dry_run=False, cache=None,
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--out", default=str(ROOT / "dist" / "pkg"), help="package directory to build")
+    ap.add_argument("--out", default=None,
+                    help="package directory to build (default dist/pkg, or dist/pkg_code with --code)")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--full", action="store_true", help="source + wheels (default)")
+    g.add_argument("--code", action="store_true",
+                   help="whole source, no wheels: routine update of an existing install")
     g.add_argument("--incremental", metavar="PREV_PACKAGE",
                    help="ship only files whose sha256 changed vs PREV_PACKAGE, plus a delete list")
     ap.add_argument("--dry-run", action="store_true",
@@ -465,8 +480,9 @@ def main(argv=None) -> int:
     ap.add_argument("--explain", action="store_true", help="verbose wheel audit table")
     ap.add_argument("--tar", action="store_true", help="also emit <out>.tar.gz + .sha256 sidecar")
     a = ap.parse_args(argv)
-    build(pathlib.Path(a.out).resolve(),
-          mode="incremental" if a.incremental else "full", prev=a.incremental,
+    mode = "incremental" if a.incremental else "code" if a.code else "full"
+    out = a.out or str(ROOT / "dist" / ("pkg_code" if mode == "code" else "pkg"))
+    build(pathlib.Path(out).resolve(), mode=mode, prev=a.incremental,
           dry_run=a.dry_run, cache=a.wheel_cache, explain=a.explain, make_tar=a.tar)
     return 0
 
