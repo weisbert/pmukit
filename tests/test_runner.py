@@ -247,6 +247,33 @@ def test_failure_lands_in_the_ledger_with_the_reason(tmp_path, parts):
     assert run.cpu_seconds == pytest.approx(1.0)
 
 
+def test_a_hollow_done_is_recorded_failed_not_done(tmp_path, parts):
+    """The scheduler says done, fetch() finds no output and marks the job failed.  The runner
+    used to record `done` anyway -- and resume then skipped the run forever."""
+    cfg, plan, site = parts
+    ledger = Ledger(tmp_path / "runs.sqlite")
+    ds = importer.open_or_create(tmp_path / "dataset", plan, project=cfg.project)
+
+    class Hollow(FakeBackend):
+        name = "fake"
+
+        def submit(self, job):
+            job.state = "running"
+            return "job-1"
+
+        def poll(self, job):
+            return "done"
+
+        def fetch(self, job):
+            job.state = "failed"
+            job.detail = "job 1 reported done but raw is empty"
+            return pathlib.Path(job.workdir) / "raw"
+
+    r = Runner(cfg, plan, ledger, site, dataset=ds, root=tmp_path / "runs", backend=Hollow(site))
+    run = r.run_one(plan.runs()[0])
+    assert run.status == "failed" and "is empty" in run.error
+
+
 def test_skip_keeps_a_run_in_the_not_run_report(workshop):
     r, _cfg, plan, ledger, _ds = workshop
     victim = plan.runs()[0]
@@ -536,3 +563,20 @@ def test_backend_states_are_the_only_legal_answers(tmp_path, parts):
     with pytest.raises(PmuError) as exc:
         r.run_one(plan.runs()[0])
     assert "probably fine" in exc.value.what
+
+
+def test_ac_runs_drive_exactly_one_source():
+    """An ADE testbench can leave mag=1 on a supply.  Every AC run must zero every other role
+    source that carries mag=, or two sources are hot at once (LDO_modeling zeroed them)."""
+    import re as _re
+    nl = Netlist(DEMO.replace("VS_VDDA_1V0 (VDDA_1V0 0) vsource dc=1.0",
+                              "VS_VDDA_1V0 (VDDA_1V0 0) vsource dc=1.0 mag=1"), "tb/input.scs")
+    cfg = ProjectConfig.from_dict(CFG)
+    pins = nl.scan("PMU_TOP", ports=cfg.ports)
+    site = SiteConfig(engine="fake")
+    plan = compile_plan(cfg, derive(cfg, pins, site), nl, pins, site=site)
+    ac = [p for p in plan.runs() if p.run.analysis == "ac"]
+    assert ac
+    for p in ac:
+        hot = _re.findall(r"^\s*(\w+)\s*\(.*\bmag=1\b", p.netlist_text, _re.MULTILINE)
+        assert hot == [p.run.stimulus], (p.run.stimulus, hot)

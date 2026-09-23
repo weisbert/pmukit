@@ -106,7 +106,11 @@ def check_imports():
     """0. the venv actually has the runtime stack (this is what the wheels were for)."""
     import numpy
     import scipy
-    return True, f"numpy {numpy.__version__}, scipy {scipy.__version__}"
+    # The run ledger is SQLite; a site Python built without _sqlite3 would install fine and
+    # then fail at the first `pmukit plan --submit`.
+    import sqlite3
+    return True, (f"numpy {numpy.__version__}, scipy {scipy.__version__}, "
+                  f"sqlite {sqlite3.sqlite_version}")
 
 
 def check_entry_point():
@@ -140,7 +144,7 @@ def main(argv=None) -> int:
         ok, note = check_imports()
     except Exception as e:                                   # noqa: BLE001 - report, never crash
         ok, note = False, f"{type(e).__name__}: {e}"
-    results.append(("0. runtime stack (numpy + scipy import)", ok, note))
+    results.append(("0. runtime stack (numpy + scipy + sqlite3)", ok, note))
 
     try:
         ok, note = check_entry_point()

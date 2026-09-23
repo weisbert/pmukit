@@ -153,7 +153,7 @@ pmukit --help
    checks headlessly and prints them:
 
    ```
-   PASS  0. runtime stack (numpy + scipy import)
+   PASS  0. runtime stack (numpy + scipy + sqlite3)
    PASS  1. server alive (ping)
    PASS  2. run a command, read its output
    PASS  3. streaming (lines arrive as they happen)

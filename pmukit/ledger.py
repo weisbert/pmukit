@@ -13,7 +13,9 @@ table (OVERNIGHT_BRIEF route table), so every question those routes ask is answe
     Cost account (contract 3 rule)           -> `cost_by_analysis()`, `total_cpu_hours()`
 
 Two tables only, with exactly the columns of CONTRACTS.md section 3, in the contract's order.
-`PRAGMA journal_mode=WAL` lets the web shell read the ledger while a runner thread writes it.
+The journal is SQLite's default rollback journal, NOT WAL: on the box the ledger sits on an NFS
+workarea, and WAL's shared-memory index does not work on a network filesystem.  The web shell
+reading while a runner thread writes is covered by `busy_timeout`.
 """
 from __future__ import annotations
 
@@ -297,7 +299,8 @@ class Ledger:
         # hands the same Ledger to them; callers serialize their own writes.
         self._db = sqlite3.connect(str(self.path), timeout=30.0, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
-        self._db.execute("PRAGMA journal_mode=WAL")
+        # DELETE, not WAL -- see the module docstring (NFS).  Also converts an old WAL ledger.
+        self._db.execute("PRAGMA journal_mode=DELETE")
         self._db.execute("PRAGMA foreign_keys=ON")
         self._db.execute("PRAGMA busy_timeout=30000")
         self._db.executescript(_SCHEMA)

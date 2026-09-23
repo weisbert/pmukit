@@ -679,10 +679,32 @@ class Netlist:
 
         ok = self._rewrite_statement(match, lambda lg: pat.sub(f"{name}={value}", lg, count=1))
         if not ok:                           # not declared yet -- declare it rather than fail
-            line = f"parameters {name}={value}"
-            self.text = line + "\n" + self.text
-            self.edits.append(f"+ {line}")
+            self._insert_near_top(f"parameters {name}={value}")
         return self
+
+    def _insert_near_top(self, line: str) -> None:
+        """Declare a statement near the top, but BELOW the header -- never as line 1.
+
+        ADE netlists open with `// Generated for: ...` comments and `simulator lang=spectre`.
+        A statement pushed above that is read as a SPICE title line (or in SPICE mode) by some
+        engines; LDO_modeling only ever added lines behind a `simulator lang=spectre`, which is
+        what ran on ALPS.  So: after the first top-level `simulator lang=spectre`; failing that,
+        after the leading comment block; failing that, at the top.
+        """
+        lines = self.text.split("\n")
+        at = None
+        for i, raw in enumerate(lines):
+            if re.match(r"\s*simulator\s+lang\s*=\s*spectre\b", raw):
+                at = i + 1
+                break
+        if at is None:
+            at = 0
+            while at < len(lines) and (lines[at].lstrip().startswith(("//", "*"))
+                                       or not lines[at].strip()):
+                at += 1
+        lines.insert(at, line)
+        self.text = "\n".join(lines)
+        self.edits.append(f"+ {line}")
 
     def set_section(self, file_pattern: str, section: str) -> "Netlist":
         """Rewrite `include "<file>" section=<x>` -- this is how process corners are produced.
@@ -824,9 +846,7 @@ class Netlist:
 
         ok = self._rewrite_statement(match, lambda lg: pat.sub(rf"\g<1>{temp_c:g}", lg, count=1))
         if not ok:
-            line = f"pmukit_opts options temp={temp_c:g}"
-            self.text = line + "\n" + self.text
-            self.edits.append(f"+ {line}")
+            self._insert_near_top(f"pmukit_opts options temp={temp_c:g}")
         return self
 
     def strip_analyses(self) -> "Netlist":
@@ -846,7 +866,14 @@ class Netlist:
         return self
 
     def append(self, line: str) -> "Netlist":
-        """Add one statement (an analysis, a save, an inserted source) and record it."""
+        """Add one statement (an analysis, a save, an inserted source) and record it.
+
+        If the netlist ends in another language (a `simulator lang=spice` section), switch back
+        first -- the same guard LDO_modeling's appended block carried on the box."""
+        langs = re.findall(r"^\s*simulator\s+lang\s*=\s*(\w+)", self.text, re.MULTILINE)
+        if langs and langs[-1].lower() != "spectre":
+            self.text = self.text.rstrip("\n") + "\nsimulator lang=spectre"
+            self.edits.append("+ simulator lang=spectre")
         self.text = self.text.rstrip("\n") + "\n" + line + "\n"
         self.edits.append(f"+ {line}")
         return self

@@ -564,14 +564,21 @@ def _get(parsed: dict, name: str, where: str) -> np.ndarray:
     return np.asarray(arr)
 
 
-def _noise_total(parsed: dict, where: str) -> np.ndarray:
+def _noise_total(parsed: dict, where: str, probe: str = "") -> np.ndarray:
     """The noise total as a POWER density, squaring it when the file says V/sqrt(Hz).
 
     Spectre can write either; the TRACE type name says which, so this is detected and not
     assumed.  An unrecognised unit is a hard error rather than a silent factor of 10^12.
+
+    The total is read from `out`; for an `oprobe=` current-noise run LDO_modeling's importer --
+    the one that produced current noise from ALPS on the box -- also accepted `<probe>:p` and
+    `<probe>`, so those are tried next, in that order.
     """
-    out = _get(parsed, "out", where)
-    unit = str((parsed.get("_types") or {}).get("out", "")) or \
+    src = probe[:-2] if probe.endswith(":p") else probe     # probe_of() hands over `<src>:p`
+    key = next((k for k in ("out", f"{src}:p" if src else "", src)
+                if k and k in parsed), "out")
+    out = _get(parsed, key, where)
+    unit = str((parsed.get("_types") or {}).get(key, "")) or \
         str((parsed.get("_header") or {}).get("noise unit", ""))
     low = unit.lower().replace(" ", "")
     if "sqrt" in low or "rthz" in low:
@@ -640,7 +647,8 @@ def _derive(var: str, parsed: dict, deck: Deck, run: Run, where: str
         return axis, -(orient * _get(parsed, probe, where)) / vpin, notes
 
     if observable in ("noise_v", "noise_i"):
-        return axis, _noise_total(parsed, where), notes
+        return axis, _noise_total(parsed, where,
+                                  probe=(probe or "") if observable == "noise_i" else ""), notes
 
     if observable == "dc_load":
         return axis, np.asarray(_get(parsed, net, where), dtype=float), notes

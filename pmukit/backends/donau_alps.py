@@ -226,11 +226,21 @@ class DonauAlpsBackend:
     """
 
     name = "donau_alps"
+    #: LDO_modeling's validated sweep polled djob every 5 s; every djob is a scheduler request.
+    poll_interval_s = 5.0
+    #: The `short` queue's wallclock is 3 h, so a job still unfinished after that is not going to
+    #: finish; LDO marked it failed at the same limit.  Without a deadline one job stuck PENDING
+    #: blocked the whole run.
+    default_job_timeout_s = 3 * 3600.0
+    #: LDO's GUI ran 4 Donau jobs at a time.
+    default_jobs = 4
+    #: Each dsub/djob/dkill/dpeek call is bounded; a hung CLI call must not hang the runner.
+    cmd_timeout_s = 120.0
 
     def __init__(self, site, *, runner=None, dry_run: bool = False,
                  timeout_s: float | None = None, env=None):
         self.site = site
-        self.timeout_s = timeout_s
+        self.timeout_s = timeout_s if timeout_s is not None else self.cmd_timeout_s
         self.dry_run = bool(dry_run)
         self._run = runner or _Subprocess()
         env = os.environ if env is None else env
@@ -306,6 +316,11 @@ class DonauAlpsBackend:
             job.state = "skipped"
             job.job_id = ""
             return ""
+        # A retry reuses the run directory (it is named by content hash): clear the old output
+        # first, or last attempt's files would pass fetch()'s "PSF dir is not empty" gate.
+        stale = pathlib.Path(job.workdir) / PSF_DIRNAME
+        if stale.is_dir():
+            shutil.rmtree(stale, ignore_errors=True)
         res = self._run(cmd, timeout=self.timeout_s)
         if getattr(res, "returncode", 1) != 0:
             raise PmuError(
@@ -333,7 +348,10 @@ class DonauAlpsBackend:
     def poll(self, job) -> str:
         if self.dry_run:
             return "skipped"
-        res = self._run(["djob", str(job.job_id)], timeout=self.timeout_s)
+        try:
+            res = self._run(["djob", str(job.job_id)], timeout=self.timeout_s)
+        except subprocess.TimeoutExpired:
+            return "running"         # a slow scheduler answer is not news about the job
         raw = (getattr(res, "stdout", "") or "") + "\n" + (getattr(res, "stderr", "") or "")
         state = map_state(raw) or self._state.get(job.job_id) or "pending"
         self._state[job.job_id] = state
@@ -342,6 +360,7 @@ class DonauAlpsBackend:
             return "done"
         if state == "failed":
             job.detail = self._peek(job) or job.detail
+            job.state = "failed"
             return "failed"
         return "running"                   # pending and running are both "not finished yet"
 
@@ -360,10 +379,14 @@ class DonauAlpsBackend:
         if self.dry_run:
             return psf
         if not psf.is_dir() or not any(psf.iterdir()):
+            if job.state != "failed":
+                # Donau said done; the output says otherwise.  (A job Donau itself reported
+                # FAILED already carries the dpeek tail -- do not overwrite it with this.)
+                peek = self._peek(job)
+                job.detail = (f"job {job.job_id} reported done but {psf} is empty -- the "
+                              "simulation wrote no output; read the ALPS log in the run "
+                              "directory." + ("\n" + peek if peek else ""))
             job.state = "failed"
-            job.detail = (f"job {job.job_id} reported done but {psf} is empty -- the simulation "
-                          "wrote no output; read the ALPS log in the run directory."
-                          + ("\n" + self._peek(job) if self._peek(job) else ""))
             return psf
         if self.engine == "alps" and not (psf / SIMDONE).exists():
             job.detail = (f"note: no {SIMDONE} sentinel in {psf}, but output was written -- "

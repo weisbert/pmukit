@@ -211,8 +211,35 @@ def test_set_param_rewrites_vset_in_place():
 def test_set_param_declares_a_missing_variable():
     n = Netlist("simulator lang=spectre\nR1 (a 0) resistor r=1\n")
     n.set_param("VSET", 2)
-    assert n.render().startswith("parameters VSET=2\n")
+    # below `simulator lang=spectre`, never above it (ALPS / SPICE would read line 1 as a title)
+    assert n.render().startswith("simulator lang=spectre\nparameters VSET=2\n")
     assert n.recipe_edits() == ["+ parameters VSET=2"]
+
+
+def test_inserted_lines_stay_below_an_ade_header():
+    ade = ("// Generated for: spectre\n// Design cell name: TB\n"
+           "simulator lang=spectre\nglobal 0\nR1 (a 0) resistor r=1\n")
+    n = Netlist(ade)
+    n.set_param("VSET", 2)
+    n.set_temperature(85)
+    lines = n.render().splitlines()
+    assert lines[:3] == ["// Generated for: spectre", "// Design cell name: TB",
+                         "simulator lang=spectre"]
+    assert {"parameters VSET=2", "pmukit_opts options temp=85"} <= set(lines[3:5])
+    headerless = Netlist("// just a comment\nR1 (a 0) resistor r=1\n")
+    headerless.set_param("VSET", 1)
+    assert headerless.render().splitlines()[:2] == ["// just a comment", "parameters VSET=1"]
+
+
+def test_appended_block_switches_back_to_spectre():
+    n = Netlist("simulator lang=spectre\nR1 (a 0) resistor r=1\n"
+                "simulator lang=spice\n.param x=1\n")
+    n.append("acz ac start=1 stop=1G dec=10")
+    tail = n.render().rstrip().splitlines()[-2:]
+    assert tail == ["simulator lang=spectre", "acz ac start=1 stop=1G dec=10"]
+    plain = Netlist("simulator lang=spectre\nR1 (a 0) resistor r=1\n")
+    plain.append("acz ac start=1 stop=1G dec=10")
+    assert plain.render().count("simulator lang=spectre") == 1
 
 
 def test_set_temperature_replaces_and_adds():
@@ -221,7 +248,7 @@ def test_set_temperature_replaces_and_adds():
     assert "options temp=125 gmin=1e-13" in n.render()
     n2 = nl()
     n2.set_temperature(-40)
-    assert n2.render().startswith("pmukit_opts options temp=-40\n")
+    assert n2.render().startswith("simulator lang=spectre\npmukit_opts options temp=-40\n")
 
 
 def test_set_mag_and_dc_preserve_comments_and_indent():

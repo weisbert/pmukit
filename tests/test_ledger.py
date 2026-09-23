@@ -58,7 +58,8 @@ def test_consumes_schema_matches_contract(led):
 
 
 def test_pragmas(led):
-    assert led.connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    # rollback journal, not WAL: on the box the ledger lives on NFS, where WAL does not work
+    assert led.connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "delete"
     assert led.connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 

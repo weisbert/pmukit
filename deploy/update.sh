@@ -18,7 +18,9 @@ set -euo pipefail
 SRC="${1:-$(cd "$(dirname "$0")" && pwd)}"
 SRC="$(cd "$SRC" && pwd)"
 PREFIX="${PMUKIT_PREFIX:-$HOME/pmukit}"
-DATA="${PMUKIT_DATA:-$HOME/pmukit_data}"
+# the data dir the install was made with, as its launcher records it (else the old default)
+_BAKED="$(sed -n 's/^PMUKIT_DATA="\${PMUKIT_DATA:-\(.*\)}"$/\1/p' "$PREFIX/bin/pmukit" 2>/dev/null | head -1 || true)"
+DATA="${PMUKIT_DATA:-${_BAKED:-$HOME/pmukit_data}}"
 
 die() {
     echo ""                          >&2
@@ -143,8 +145,11 @@ install_launcher() {
 install_launcher pmukit <<EOF
 #!/bin/sh
 PREFIX="\${PMUKIT_PREFIX:-$PREFIX}"
+# The data dir chosen at install time: a shell that never sourced env.csh must not quietly fall
+# back to ~/pmukit_data (another site.json, no account, runs landing in \$HOME).
+PMUKIT_DATA="\${PMUKIT_DATA:-$DATA}"
 PYTHONPATH="\$PREFIX/app\${PYTHONPATH:+:\$PYTHONPATH}"
-export PYTHONPATH
+export PMUKIT_DATA PYTHONPATH
 exec "\$PREFIX/.venv/bin/python" -m pmukit "\$@"
 EOF
 install_launcher pmukit-ui <<EOF

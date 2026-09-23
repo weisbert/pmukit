@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import shlex
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Sequence
@@ -436,10 +437,20 @@ def _noise_clause(derived: DerivedConfig) -> str:
             f"dec={int((derived.freq or {}).get('points_per_decade', 20))}")
 
 
-def _ground_of(derived: DerivedConfig, port: str) -> str:
-    """The ground net a port returns to, or the global 0 when the netlist had only one."""
+def _ground_of(derived: DerivedConfig, port: str, pins: PinTable | None = None) -> str:
+    """The TESTBENCH net a port's ground returns to -- the node a top-level analysis can name.
+
+    derived.grounds maps each port to its ground PIN (a subcircuit port such as VSS_A).  That
+    name is not a net at the top level: the testbench wires the pin to `0` / `gnd!`, so a noise
+    statement naming the pin probes a node that does not exist there (Spectre shrugged; ALPS
+    need not).  Resolve the pin to its net through the pin table; fall back to the global 0.
+    """
     gnd = ((derived.grounds or {}).get("by_pin") or {}).get(port)
-    return gnd or "0"
+    if not gnd:
+        return "0"
+    pin = (getattr(pins, "pins", None) or {}).get(gnd)
+    net = getattr(pin, "net", "") if pin is not None else ""
+    return net or "0"
 
 
 def _submit_line(site, corner: str, run_id: str) -> str:
@@ -566,7 +577,7 @@ def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
                                                        states, nominal):
             b = dict(f, corner=corner, temp=temp, code=code, state=state,
                      load_axis=("load_a" in f["axes"]))
-            pr = _build_run(cfg, derived, netlist, b, site=site)
+            pr = _build_run(cfg, derived, netlist, b, site=site, pins=pins)
             pr.cost_s = cost(pr.run, derived)
             object.__setattr__(pr, "feeds", feeds)
             gid = _group_id(b)
@@ -624,7 +635,7 @@ def _stimulus_for(obs: str, port: str, derived: DerivedConfig, supplies: list[st
 
 
 def _build_run(cfg: ProjectConfig, derived: DerivedConfig, base: Netlist, b: dict, *,
-               site=None) -> PlannedRun:
+               site=None, pins: PinTable | None = None) -> PlannedRun:
     """Write the netlist variant for one bucket and wrap it in a ledger Run."""
     analysis, stim, state = b["analysis"], b["stimulus"], b["state"]
     nl = _base_variant(base, cfg, derived, b["corner"], b["temp"], b["code"], state)
@@ -632,6 +643,16 @@ def _build_run(cfg: ProjectConfig, derived: DerivedConfig, base: Netlist, b: dic
     analyses: list[str] = []
 
     if analysis == "ac":
+        # Superposition: exactly ONE source is hot.  An ADE testbench may already carry `mag=` on
+        # another convention source (a supply left at mag=1); LDO_modeling zeroed every role
+        # source but the driven one, so every other one that says mag= is set to 0 here.
+        for group in (derived.rails, derived.biases, derived.en,
+                      (derived.supply or {}).get("pins", {})):
+            for e in (group or {}).values():
+                other = (e or {}).get("src")
+                if other and other != stim and re.search(
+                        rf"^\s*{re.escape(other)}\s*\(.*\bmag\s*=", nl.text, re.MULTILINE):
+                    nl.set_mag(other, 0)
         nl.set_mag(stim, 1)
         analyses.append(f"{AC_NAME} ac {_ac_clause(derived)}")
         for var in b["reads"]:
@@ -652,7 +673,7 @@ def _build_run(cfg: ProjectConfig, derived: DerivedConfig, base: Netlist, b: dic
         obs, port = var.split(".", 1)
         if obs == "noise_v":
             net = (derived.rails.get(port) or {}).get("net") or port
-            analyses.append(f"{NOISE_NAME} ({net} {_ground_of(derived, port)}) noise "
+            analyses.append(f"{NOISE_NAME} ({net} {_ground_of(derived, port, pins)}) noise "
                             f"{_noise_clause(derived)}")
             saves.append(net)
         else:

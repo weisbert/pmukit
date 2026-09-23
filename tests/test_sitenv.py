@@ -216,3 +216,60 @@ def test_queue_probe_falls_back_to_dversion(tmp_path, monkeypatch):
     srv, calls = _fake_tools(monkeypatch, {"dsub", "dversion"}, out="Donau 1.2.3\n")
     r = srv.probe_queue()
     assert r["ok"] and r["how"] == "dversion" and calls == [["/opt/batch/cli/bin/dversion"]]
+
+
+# ------------------------------------------------------------ what LDO_modeling ran on the box
+def test_noise_total_falls_back_to_the_probe_keys():
+    import numpy as np
+    from pmukit.importer import _noise_total
+    parsed = {"VB_X:p": np.array([2.0, 3.0]), "_types": {"VB_X:p": "A/sqrt(Hz)"}}
+    assert list(_noise_total(parsed, "t", probe="VB_X:p")) == [4.0, 9.0]
+    parsed = {"out": np.array([1.0]), "VB_X:p": np.array([5.0]),
+              "_types": {"out": "V^2/Hz", "VB_X:p": "A/sqrt(Hz)"}}
+    assert list(_noise_total(parsed, "t", probe="VB_X:p")) == [1.0]      # `out` still wins
+
+
+def test_noise_reference_is_the_testbench_net_not_the_pmu_port():
+    from types import SimpleNamespace as NS
+    from pmukit.plan import _ground_of
+    derived = NS(grounds={"by_pin": {"VDD_A": "VSS_A"}})
+    pins = NS(pins={"VSS_A": NS(net="0")})
+    assert _ground_of(derived, "VDD_A", pins) == "0"
+    assert _ground_of(derived, "VDD_A", NS(pins={"VSS_A": NS(net="gnd!")})) == "gnd!"
+    assert _ground_of(derived, "VDD_A") == "0"          # no pin table: the global ground
+    assert _ground_of(derived, "OTHER", pins) == "0"
+
+
+def test_donau_defaults_follow_ldo_modeling():
+    from pmukit.backends.donau_alps import DonauAlpsBackend
+    assert DonauAlpsBackend.poll_interval_s == 5.0
+    assert DonauAlpsBackend.default_job_timeout_s == 3 * 3600
+    assert DonauAlpsBackend.default_jobs == 4
+    be = DonauAlpsBackend(SiteConfig(project_account="a"), dry_run=True, env=ALPS_ENV)
+    assert be.timeout_s == DonauAlpsBackend.cmd_timeout_s   # every CLI call is bounded
+
+
+def test_a_hollow_done_is_recorded_failed(tmp_path):
+    """Donau says done, the PSF dir is empty: fetch() marks the job failed, and the runner must
+    record THAT -- not `done`, which resume would then skip forever."""
+    from types import SimpleNamespace as NS
+    from pmukit.backends.donau_alps import DonauAlpsBackend
+
+    class R:
+        def __call__(self, argv, timeout=None):
+            if argv[0] == "dsub":
+                return NS(returncode=0, stdout='{"data":{"jobId":"123"}}', stderr="")
+            if argv[0] == "djob":
+                return NS(returncode=0, stdout="State: DONE Exit: 0", stderr="")
+            return NS(returncode=0, stdout="", stderr="")
+
+    be = DonauAlpsBackend(SiteConfig(project_account="a"), runner=R(), env=ALPS_ENV)
+    job = NS(workdir=tmp_path, run=NS(run_id="r1"), detail="", state="", job_id="",
+             log_path=None, console="")
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "raw" / "stale.ac").write_text("old")          # a previous attempt's output
+    be.submit(job)
+    assert not (tmp_path / "raw").exists()                     # cleared before resubmitting
+    assert be.poll(job) == "done"
+    be.fetch(job)
+    assert job.state == "failed" and "is empty" in job.detail

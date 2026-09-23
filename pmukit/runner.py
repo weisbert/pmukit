@@ -195,6 +195,7 @@ class Runner:
         self.ledger = ledger
         self.site = site
         self.jobs = max(1, int(jobs or 1))
+        self._jobs_given = jobs is not None
         self.aux = [pathlib.Path(a) for a in (aux or ())]
         self.root = (pathlib.Path(root) if root is not None
                      else paths.ensure_project(self.project) / "runs")
@@ -302,10 +303,13 @@ class Runner:
         the ledger status `imported`, which belongs to external results only.)
         """
         emit = on_event or (lambda kind, run_id, detail: None)
-        self.timeout_s = timeout_s
-        if hasattr(self.backend, "timeout_s"):
-            self.backend.timeout_s = timeout_s
-        width = max(1, int(jobs or self.jobs))
+        # A backend may carry its own defaults: Donau jobs get the short queue's wallclock as a
+        # deadline (a job stuck PENDING must not block the queue forever) and run several at once.
+        self.timeout_s = timeout_s or getattr(self.backend, "default_job_timeout_s", None)
+        if timeout_s is not None and hasattr(self.backend, "timeout_s"):
+            self.backend.timeout_s = timeout_s        # an explicit deadline also bounds each call
+        width = max(1, int(jobs or (self.jobs if self._jobs_given else 0)
+                           or getattr(self.backend, "default_jobs", 0) or 1))
 
         ok, why = self.backend.available()
         if not ok:
@@ -393,6 +397,10 @@ class Runner:
             if state != "skipped":
                 return self._fail(job, str(exc.what), detail=str(exc), emit=emit)
             psf_dir = job.psf_dir
+        if state == "done" and getattr(job, "state", "") == "failed":
+            # fetch() found the scheduler's "done" hollow (e.g. an empty PSF dir). Recording it
+            # as done would make resume skip it forever and leave its cells silently missing.
+            state = "failed"
 
         log = job.log_path or (job.workdir / LOG_NAME)
         cpu, mem = parse_spectre_log(
@@ -463,7 +471,7 @@ class Runner:
                 job.detail = (f"timed out after {self.timeout_s:.0f} s "
                               f"(the job was killed on {self.backend.name})")
                 return "failed"
-            time.sleep(0.5)
+            time.sleep(float(getattr(self.backend, "poll_interval_s", 0.5)))
 
     def _fail(self, job: Job, what: str, *, detail: str, emit: EventFn,
               cpu: float = 0.0, mem: float = 0.0) -> Run:
