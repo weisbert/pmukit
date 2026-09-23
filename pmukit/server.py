@@ -360,29 +360,56 @@ def _probe_local_simulator(site) -> dict:
 
 
 def probe_queue() -> dict:
+    """Is the Donau scheduler answering, and does it know the site's queue?
+
+    `dqueue` (queue list, ~ LSF bqueues) is the probe: it has to reach the scheduler to print
+    anything, and its listing says whether `site.queue` exists.  NOT `dsub --version` -- Donau's
+    parser has no such flag ("invalid option or param. Unexpected argument \"version\""), which
+    made a healthy box report the queue as down.  `dversion` is the fallback when `dqueue` is
+    not on PATH.  Neither submits anything.
+    """
+    from .site import SiteConfig
     t0 = time.time()
-    dsub = shutil.which("dsub")
-    if dsub:
-        rc, out, errtext = _run_cmd([dsub, "--version"], LOCAL_PROBE_TIMEOUT)
+    if not shutil.which("dsub"):
         ms = int((time.time() - t0) * 1000)
-        if rc == 0:
-            return {"name": "queue", "ok": True, "detail": (out or "dsub").splitlines()[0],
-                    "ms": ms, "how": "dsub --version", "reason": None}
-        return {"name": "queue", "ok": False, "detail": "", "ms": ms, "how": "dsub --version",
-                "reason": _err("the Donau queue did not answer.",
-                               f"`dsub --version` exited {rc}: {errtext or out or 'no output'}.",
+        return {"name": "queue", "ok": False, "detail": "", "ms": ms, "how": "which dsub",
+                "reason": _err("there is no batch queue on this machine.",
+                               "`dsub` is not on PATH; this is a desk, not a submit host.",
+                               ["Runs go straight to the engine instead of a queue -- that is "
+                                "normal on the desk",
+                                "On the box, log in to a submit host"],
+                               "PATH").to_dict()["error"]}
+    try:
+        want = SiteConfig.load().queue.strip()
+    except PmuError:
+        want = ""
+    tool = shutil.which("dqueue") or shutil.which("dversion")
+    how = pathlib.Path(tool).name if tool else "dqueue"
+    if not tool:
+        ms = int((time.time() - t0) * 1000)
+        return {"name": "queue", "ok": True, "ms": ms, "how": "which dsub", "reason": None,
+                "detail": "dsub is on PATH (no dqueue/dversion to ask the scheduler)"}
+    rc, out, errtext = _run_cmd([tool], LOCAL_PROBE_TIMEOUT)
+    ms = int((time.time() - t0) * 1000)
+    if rc != 0:
+        return {"name": "queue", "ok": False, "detail": "", "ms": ms, "how": how,
+                "reason": _err("the Donau scheduler did not answer.",
+                               f"`{how}` exited {rc}: {errtext or out or 'no output'}.",
                                ["Retry when the scheduler is back -- the ledger resumes exactly "
                                 "where it stopped",
                                 "Or copy the netlists and submit them by hand"],
-                               "dsub").to_dict()["error"]}
-    ms = int((time.time() - t0) * 1000)
-    return {"name": "queue", "ok": False, "detail": "", "ms": ms, "how": "which dsub",
-            "reason": _err("there is no batch queue on this machine.",
-                           "`dsub` is not on PATH; this is a desk, not a submit host.",
-                           ["Runs go straight to the engine instead of a queue -- that is normal "
-                            "on the desk",
-                            "On the box, log in to a submit host"],
-                           "PATH").to_dict()["error"]}
+                               how).to_dict()["error"]}
+    first = next((ln.strip() for ln in (out or "").splitlines() if ln.strip()), how)
+    if how == "dqueue" and want:
+        listed = re.search(rf"(^|\s){re.escape(want)}(\s|$)", out or "", re.MULTILINE)
+        # dqueue's layout has not been seen on the box yet, so a miss is a NOTE, not a failure:
+        # a false "queue down" is exactly the alarm this probe just stopped raising.
+        detail = (f"Donau answers; queue '{want}' listed" if listed else
+                  f"Donau answers; '{want}' not found in the dqueue listing -- check `dqueue`")
+        return {"name": "queue", "ok": True, "detail": detail, "ms": ms, "how": how,
+                "reason": None}
+    return {"name": "queue", "ok": True, "detail": first[:120], "ms": ms, "how": how,
+            "reason": None}
 
 
 def probe_pdk() -> dict:
@@ -1124,7 +1151,7 @@ def _demo_machine() -> dict:
                 {"name": "engine", "ok": True, "detail": "spectre 18.1.0.077 (demo)", "ms": 340,
                  "how": "ssh ewave-vm tcsh -c 'source ~/.cshrc; which spectre'", "reason": None},
                 {"name": "queue", "ok": True, "detail": "rf_short, 12 slots free (demo)",
-                 "ms": 90, "how": "dsub --version", "reason": None},
+                 "ms": 90, "how": "dqueue", "reason": None},
                 {"name": "pdk", "ok": True, "detail": "$PDK -> .../models (demo)", "ms": 2,
                  "how": "$PDK", "reason": None},
                 {"name": "license", "ok": False, "detail": "", "ms": 1,

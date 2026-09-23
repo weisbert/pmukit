@@ -169,3 +169,50 @@ def test_ade_repeats_one_model_file_per_model_library_row():
                      'include "toplevel.scs" section=Noise_Worst']
     assert not any("set on 3 includes" in n for n in notes)
     assert sum("left as is" in n for n in notes) == 2
+
+
+# ------------------------------------------------------------ the queue probe
+def _fake_tools(monkeypatch, present, rc=0, out="", err=""):
+    import pmukit.server as srv
+    monkeypatch.setattr(srv.shutil, "which",
+                        lambda n: f"/opt/batch/cli/bin/{n}" if n in present else None)
+    calls = []
+
+    def run(cmd, timeout):
+        calls.append(cmd)
+        return rc, out, err
+    monkeypatch.setattr(srv, "_run_cmd", run)
+    return srv, calls
+
+
+def test_queue_probe_never_asks_dsub_for_a_version(tmp_path, monkeypatch):
+    """Donau's dsub has no --version ("Unexpected argument \\"version\\""): a healthy box read
+    as a dead queue. The probe asks dqueue, which must reach the scheduler to answer."""
+    monkeypatch.setenv("PMUKIT_DATA", str(tmp_path))
+    srv, calls = _fake_tools(monkeypatch, {"dsub", "dqueue"},
+                             out="QUEUE_NAME  STATUS\nshort       Open:Active\nlong  Open\n")
+    r = srv.probe_queue()
+    assert r["ok"] and "queue 'short' listed" in r["detail"]
+    assert calls == [["/opt/batch/cli/bin/dqueue"]]
+    assert not any("--version" in c for cmd in calls for c in cmd)
+
+
+def test_queue_probe_notes_but_does_not_fail_an_unlisted_queue(tmp_path, monkeypatch):
+    monkeypatch.setenv("PMUKIT_DATA", str(tmp_path))
+    srv, _ = _fake_tools(monkeypatch, {"dsub", "dqueue"}, out="QUEUE_NAME\nlong\n")
+    r = srv.probe_queue()
+    assert r["ok"] and "not found" in r["detail"]
+
+
+def test_queue_probe_reports_a_scheduler_that_does_not_answer(tmp_path, monkeypatch):
+    monkeypatch.setenv("PMUKIT_DATA", str(tmp_path))
+    srv, _ = _fake_tools(monkeypatch, {"dsub", "dqueue"}, rc=1, err="connect timeout")
+    r = srv.probe_queue()
+    assert not r["ok"] and "connect timeout" in r["reason"]["why"]
+
+
+def test_queue_probe_falls_back_to_dversion(tmp_path, monkeypatch):
+    monkeypatch.setenv("PMUKIT_DATA", str(tmp_path))
+    srv, calls = _fake_tools(monkeypatch, {"dsub", "dversion"}, out="Donau 1.2.3\n")
+    r = srv.probe_queue()
+    assert r["ok"] and r["how"] == "dversion" and calls == [["/opt/batch/cli/bin/dversion"]]
