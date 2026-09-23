@@ -261,12 +261,21 @@ def cmd_site(a) -> int:
     smod = _need("site", "site")
     site = smod.SiteConfig.load()
     changed = []
-    for name in ("engine", "simulator", "queue", "ssh_host", "remote_workdir", "spectre_cmd",
-                 "project_account"):
+    for name in ("engine", "simulator", "queue", "ssh_host", "remote_workdir", "spectre_cmd"):
         val = getattr(a, name, None)
         if val is not None:
             setattr(site, name, val)
             changed.append(f"{name}={val}")
+    for spec_ in getattr(a, "add_account", None) or []:
+        name, _, note = str(spec_).partition("=")
+        site.add_account(name, note)
+        changed.append(f"+account {name.strip()}")
+    for name in getattr(a, "remove_account", None) or []:
+        if site.remove_account(name):
+            changed.append(f"-account {name.strip()}")
+    if a.project_account is not None:
+        site.select_account(a.project_account)
+        changed.append(f"account={a.project_account}")
     if a.cpus is not None:
         site.cpus = int(a.cpus)
         changed.append(f"cpus={a.cpus}")
@@ -280,8 +289,16 @@ def cmd_site(a) -> int:
         _out({**site.to_dict(),
               "environment": {f.name: {"value": f.value, "source": f.source} for f in facts}}, True)
         return 0
-    rows = [[k, v] for k, v in sorted(site.to_dict().items()) if k != "provenance"]
+    rows = [[k, v] for k, v in sorted(site.to_dict().items()) if k not in ("provenance", "accounts")]
     print(_table(rows, ["setting", "value"]))
+    print()
+    if site.accounts:
+        print("  Donau accounts (* = runs are charged to this one; the Plan screen's dropdown):")
+        for acc in site.accounts:
+            mark = "*" if acc["name"] == site.project_account else " "
+            print(f"    {mark} {acc['name']:<28} {acc.get('note', '')}")
+    else:
+        print(f"  Donau accounts: none yet -- {PROG} site --add-account <name>=<note>  (repeatable)")
     print()
     print("  read from this machine:")
     print(_table([[f.name, f.value or "(not found)", f.source or "-"] for f in facts],
@@ -764,7 +781,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ssh-host", dest="ssh_host")
     p.add_argument("--remote-workdir", dest="remote_workdir")
     p.add_argument("--spectre-cmd", dest="spectre_cmd")
-    p.add_argument("--account", dest="project_account", help="Donau -A account")
+    p.add_argument("--account", dest="project_account",
+                   help="the Donau -A account runs are charged to (joins the list if new)")
+    p.add_argument("--add-account", dest="add_account", action="append", metavar="NAME[=NOTE]",
+                   help="add a Donau account to the dropdown list, e.g. "
+                        "'<account>=sims up to 1TB' (repeatable)")
+    p.add_argument("--remove-account", dest="remove_account", action="append", metavar="NAME",
+                   help="drop an account from the list (repeatable)")
     p.set_defaults(fn=cmd_site)
 
     p = sub.add_parser("check", help="does this netlist satisfy the convention? (creates nothing)")

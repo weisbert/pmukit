@@ -402,12 +402,17 @@ def probe_pdk() -> dict:
 
 
 def probe_license() -> dict:
+    from . import sitenv
+    from .site import SiteConfig
     t0 = time.time()
-    for var in ("CDS_LIC_FILE", "LM_LICENSE_FILE", "EMPYREAN_LICENSE_FILE"):
-        val = os.environ.get(var)
-        if val:
-            return {"name": "license", "ok": True, "detail": f"{var}={val}",
-                    "ms": int((time.time() - t0) * 1000), "how": f"${var}", "reason": None}
+    try:
+        site = SiteConfig.load()
+    except PmuError:
+        site = SiteConfig()
+    lic = sitenv.license_(sim=sitenv.simulator(site).value)     # Empyrean for ALPS, CDS for Spectre
+    if lic.ok:
+        return {"name": "license", "ok": True, "detail": f"{lic.source[1:]}={lic.value}",
+                "ms": int((time.time() - t0) * 1000), "how": lic.source, "reason": None}
     return {"name": "license", "ok": False, "detail": "",
             "ms": int((time.time() - t0) * 1000), "how": "$CDS_LIC_FILE / $LM_LICENSE_FILE",
             "reason": _err("no license server is configured in this environment.",
@@ -661,17 +666,19 @@ class Project:
         return nl.scan(inst, ports=ports or None)
 
     # ---- derived + plan
-    def site(self, engine: str = ""):
-        """The install's site config, with an optional per-submit engine override.
+    def site(self, engine: str = "", account: str = ""):
+        """The install's site config, with optional per-submit engine / account overrides.
 
         The engine is an install property, not a project one -- but the Plan screen has to be
         able to say "this once, with the fake backend" without editing site.json under the user.
         """
         from .site import ENGINES, SiteConfig
         try:
-            cfg = SiteConfig.load()
+            cfg = SiteConfig.load(site_path(self._root))
         except PmuError:
             cfg = SiteConfig()
+        if account:
+            cfg.project_account = str(account).strip()
         if engine:
             if engine not in ENGINES:
                 raise _err(f"{engine!r} is not a backend this build knows.",
@@ -1183,6 +1190,11 @@ def _safe_name(value: str, pattern: re.Pattern, kind: str, where: str) -> str:
     return value
 
 
+def site_path(root=None):
+    """site.json under the server's data root when one was given, else $PMUKIT_DATA's."""
+    return (pathlib.Path(root) / "site.json") if root is not None else None
+
+
 # ============================================================================== the handler
 class Api:
     """Route implementations. Kept out of the HTTP class so they are easy to call from tests."""
@@ -1190,6 +1202,39 @@ class Api:
     def __init__(self, *, demo: bool = False, root=None) -> None:
         self.demo = bool(demo)
         self.root = root
+
+    # ---------------------------------------------------------------- site (install-wide)
+    def site_get(self) -> dict:
+        """What the Plan screen's account dropdown needs: the list, the pick, the engine."""
+        from . import sitenv
+        from .site import SiteConfig
+        if self.demo:
+            return {"engine": "donau_alps", "simulator": "alps", "queue": "short",
+                    "accounts": [{"name": "ug_demo.smallClass", "note": "sims up to 512GB"},
+                                 {"name": "ug_demo.bigClass", "note": "sims up to 2TB"}],
+                    "account": "ug_demo.smallClass", "account_source": "site config",
+                    "demo": True}
+        cfg = SiteConfig.load(site_path(self.root))
+        acc = sitenv.account(cfg)
+        return {"engine": cfg.engine, "simulator": sitenv.simulator(cfg).value,
+                "queue": cfg.queue, "accounts": list(cfg.accounts), "account": acc.value,
+                "account_source": acc.source}
+
+    def site_put(self, body: dict) -> dict:
+        """Pick the Donau account (remembered in site.json, so the dropdown opens on it)."""
+        from .site import SiteConfig
+        if self.demo:
+            return self.site_get()
+        acc = str((body or {}).get("account") or "").strip()
+        if not acc:
+            raise _err("no account was given.",
+                       "PUT /api/site selects the Donau account runs are charged to.",
+                       ['Send {"account": "<one of the listed accounts>"}'], "PUT /api/site")
+        path = site_path(self.root)
+        cfg = SiteConfig.load(path)
+        cfg.select_account(acc)
+        cfg.save(path)
+        return self.site_get()
 
     # ---------------------------------------------------------------- Home
     def projects(self) -> dict:
@@ -1654,6 +1699,7 @@ class Api:
         pr = Project(project, self.root)
         commit_only = bool(body.get("commit_only"))
         engine = str(body.get("engine") or "")
+        account = str(body.get("account") or "")
 
         def work(job):
             job.say("writing the enabled runs into the ledger", 0.05)
@@ -1687,8 +1733,9 @@ class Api:
                 text = " ".join(str(x) for x in (kind, str(run_id)[:12], detail) if str(x))
                 job.say(text[:300], min(0.98, 0.1 + 0.88 * seen["n"] / total))
 
-            site = pr.site(engine)
-            job.say(f"backend {site.engine}", 0.12)
+            site = pr.site(engine, account)
+            job.say(f"backend {site.engine}"
+                    + (f", account {site.project_account}" if site.engine == "donau_alps" else ""), 0.12)
             with pr.ledger() as led:
                 runner = Runner(pr.name, plan, led, site,
                                 root=(pathlib.Path(self.root) if self.root is not None else None))
@@ -2937,6 +2984,16 @@ def _r_projects(api, h, a, q, b):
 @route("POST", r"/api/projects")
 def _r_new_project(api, h, a, q, b):
     return api.new_project(b)
+
+
+@route("GET", r"/api/site")
+def _r_site(api, h, a, q, b):
+    return api.site_get()
+
+
+@route("PUT", r"/api/site")
+def _r_site_put(api, h, a, q, b):
+    return api.site_put(b)
 
 
 @route("GET", r"/api/machine")

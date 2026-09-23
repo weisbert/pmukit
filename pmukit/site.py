@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import pathlib
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 
 from . import jsonio
 from .errors import PmuError
@@ -53,6 +53,9 @@ class SiteConfig:
     remote_workdir: str = "~/pmukit_work"
     spectre_cmd: str = "spectre"
     project_account: str = ""
+    #: The Donau accounts this user may charge, as [{"name": ..., "note": ...}] -- the UI's
+    #: dropdown.  Site facts, so they live in site.json on the box and never in this repo.
+    accounts: list = field(default_factory=list)
 
     # ---------------------------------------------------------------- serialization
     def to_dict(self) -> dict:
@@ -92,6 +95,13 @@ class SiteConfig:
                        "It picks the solver a Donau job runs; ALPS is the default because "
                        "Spectre licenses are scarce.",
                        [f"Set simulator to one of {list(SIMULATORS)}"], where)
+        if not isinstance(self.accounts, list) or not all(
+                isinstance(a, Mapping) and isinstance(a.get("name"), str) and a["name"].strip()
+                and isinstance(a.get("note", ""), str) for a in self.accounts):
+            raise _err("site accounts is not a list of {name, note} objects.",
+                       "It is the list the Plan screen offers as Donau accounts.",
+                       ['Write it as [{"name": "<account>", "note": "sims up to 1TB"}, ...]',
+                        "Or manage it with: pmukit site --add-account <name>=<note>"], where)
         for name in ("queue", "ssh_host", "remote_workdir", "spectre_cmd", "project_account"):
             val = getattr(self, name)
             if not isinstance(val, str):
@@ -108,6 +118,29 @@ class SiteConfig:
                        "Donau needs a queue name to submit into; there is no default queue.",
                        ["Set queue to the queue name your site uses",
                         "Or set engine to dry_run to plan without submitting"], where)
+
+    # ---------------------------------------------------------------- accounts
+    def add_account(self, name: str, note: str = "") -> None:
+        """Add (or re-note) a Donau account in the dropdown list, keeping the list's order."""
+        name, note = name.strip(), note.strip()
+        for a in self.accounts:
+            if a["name"] == name:
+                if note:
+                    a["note"] = note
+                return
+        self.accounts.append({"name": name, "note": note})
+
+    def remove_account(self, name: str) -> bool:
+        before = len(self.accounts)
+        self.accounts = [a for a in self.accounts if a["name"] != name.strip()]
+        if self.project_account == name.strip():
+            self.project_account = ""
+        return len(self.accounts) != before
+
+    def select_account(self, name: str) -> None:
+        """Make `name` the account runs are charged to; an unknown one joins the list."""
+        self.add_account(name)
+        self.project_account = name.strip()
 
     # ---------------------------------------------------------------- storage
     @staticmethod

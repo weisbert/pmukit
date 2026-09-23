@@ -728,6 +728,13 @@ class Netlist:
         if self.path:
             bases.append(pathlib.Path(self.path).resolve().parent)
         bases.append(pathlib.Path.cwd())
+        # ADE writes `include "toplevel.scs"` bare; the simulator finds it through `-I
+        # <model root>/<simulator>`, so look there too (read-only: it only verifies sections).
+        from . import sitenv
+        pdk = sitenv.pdk_root().value
+        if pdk:
+            bases.append(pathlib.Path(pdk) / sitenv.simulator().value)
+            bases.append(pathlib.Path(pdk))
         for base in ([p] if p.is_absolute() else [b / p for b in bases]):
             if base.is_file():
                 return base
@@ -765,13 +772,27 @@ class Netlist:
         file can be read, rewrite it only if it really declares that section; when it cannot be
         read, rewrite it (the contract's behaviour) and say the choice was unverified.
 
+        One file, several include lines: ADE writes one `include "toplevel.scs" section=<x>` per
+        row of the Model Library table (the corner, then e.g. `pre_Sim`, `Noise_Worst`). Only
+        one of those is the process corner, and `set_section` rewrites the FIRST line naming the
+        file -- so only the first occurrence is ever touched, and the notes say which lines were
+        left alone (they used to claim every occurrence had been rewritten).  Keep the corner row
+        first in the Model Library, or use the composite corner form.
+
         Returns the notes worth showing the user.
         """
         notes: list[str] = []
         applied: list[str] = []
+        seen: dict[str, str] = {}
         for file_path, current in self.includes():
             if current is None:
                 continue
+            if file_path in seen:
+                notes.append(f"{file_path} section={current}: left as is -- {file_path} is "
+                             f"included more than once and only its FIRST include "
+                             f"(section={seen[file_path]}) is treated as the process corner")
+                continue
+            seen[file_path] = current
             names = self.section_names(file_path)
             if names is None:
                 self.set_section(file_path, section)

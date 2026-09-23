@@ -79,3 +79,93 @@ def test_recipe_submit_line_is_the_real_composer(monkeypatch):
     assert "-mt 16" in line and "-ade" in line
     no_acct = _submit_line(SiteConfig(), "tt", "abc123")
     assert "-A '<account>'" in no_acct
+
+
+# ------------------------------------------------------------ Donau accounts (the dropdown)
+def test_account_list_add_select_remove(tmp_path, monkeypatch):
+    for v in ("PMUKIT_ENGINE", "PMUKIT_SSH_HOST", "PMUKIT_CPUS", "PMUKIT_DONAU_ACCOUNT"):
+        monkeypatch.delenv(v, raising=False)
+    s = SiteConfig()
+    s.add_account("ug_demo.smallClass", "sims up to 512GB")
+    s.add_account("ug_demo.bigClass", "sims up to 2TB")
+    s.add_account("ug_demo.smallClass")                       # no duplicate, note kept
+    assert [a["name"] for a in s.accounts] == ["ug_demo.smallClass", "ug_demo.bigClass"]
+    assert s.accounts[0]["note"] == "sims up to 512GB"
+    s.select_account("ug_demo.bigClass")
+    assert s.project_account == "ug_demo.bigClass"
+    p = s.save(tmp_path / "site.json")
+    back = SiteConfig.load(p)
+    assert back.accounts == s.accounts and back.project_account == "ug_demo.bigClass"
+    back.remove_account("ug_demo.bigClass")
+    assert back.project_account == "" and len(back.accounts) == 1
+
+
+def test_accounts_must_be_name_note_objects():
+    import pytest
+    from pmukit.errors import PmuError
+    with pytest.raises(PmuError):
+        SiteConfig(accounts=["ug_demo.smallClass"]).validate()
+
+
+def test_site_api_lists_and_selects(tmp_path, monkeypatch):
+    from pmukit.server import Api
+    for v in ("PMUKIT_ENGINE", "PMUKIT_DONAU_ACCOUNT"):
+        monkeypatch.delenv(v, raising=False)
+    s = SiteConfig()
+    s.add_account("ug_demo.smallClass", "sims up to 512GB")
+    s.add_account("ug_demo.bigClass", "sims up to 2TB")
+    s.save(tmp_path / "site.json")
+    api = Api(root=tmp_path)
+    got = api.site_get()
+    assert got["engine"] == "donau_alps" and got["account"] == ""
+    assert [a["name"] for a in got["accounts"]] == ["ug_demo.smallClass", "ug_demo.bigClass"]
+    got = api.site_put({"account": "ug_demo.bigClass"})
+    assert got["account"] == "ug_demo.bigClass"
+    assert SiteConfig.load(tmp_path / "site.json").project_account == "ug_demo.bigClass"
+
+
+def test_cli_add_account_and_select(tmp_path, monkeypatch, capsys):
+    from pmukit.cli import main
+    monkeypatch.setenv("PMUKIT_DATA", str(tmp_path))
+    for v in ("PMUKIT_ENGINE", "PMUKIT_DONAU_ACCOUNT"):
+        monkeypatch.delenv(v, raising=False)
+    main(["site", "--add-account", "ug_demo.smallClass=sims up to 512GB",
+          "--add-account", "ug_demo.bigClass=sims up to 2TB", "--account", "ug_demo.smallClass"])
+    out = capsys.readouterr().out
+    assert "* ug_demo.smallClass" in out and "sims up to 2TB" in out
+    s = SiteConfig.load(tmp_path / "site.json")
+    assert s.project_account == "ug_demo.smallClass" and len(s.accounts) == 2
+
+
+# ------------------------------------------------------------ what the real box exports
+def test_model_root_is_the_pdk_root_and_alps_gets_its_subtree():
+    from pmukit.backends.donau_alps import engine_model_tree
+    f = sitenv.pdk_root({"MODEL_ROOT": "/pdk/models/demo"})
+    assert f.value == "/pdk/models/demo" and f.source == "$MODEL_ROOT"
+    assert engine_model_tree(f.value, "alps") == "/pdk/models/demo/alps"
+
+
+def test_license_follows_the_simulator():
+    env = {"LM_LICENSE_FILE": "8224@arm", "CDS_LIC_FILE": "5280@cds",
+           "EMPYREAN_LICENSE_FILE": "4416@emp"}
+    assert sitenv.license_(env, "alps").source == "$EMPYREAN_LICENSE_FILE"
+    assert sitenv.license_(env, "spectre").source == "$CDS_LIC_FILE"
+    assert sitenv.license_({"LM_LICENSE_FILE": "1@x"}, "alps").source == "$LM_LICENSE_FILE"
+
+
+def test_ade_repeats_one_model_file_per_model_library_row():
+    """The box's netlists carry the corner row AND e.g. pre_Sim / Noise_Worst from the same
+    toplevel.scs. Only the first is the process corner; the notes must say the rest were kept."""
+    from pmukit.netlist import Netlist
+    nl = Netlist('simulator lang=spectre\n'
+                 'include "toplevel.scs" section=TOP_TT_X\n'
+                 'include "toplevel.scs" section=pre_Sim\n'
+                 'include "toplevel.scs" section=Noise_Worst\n'
+                 'R0 (a 0) resistor r=1\n')
+    notes = nl.set_section_all("TOP_SS_X")
+    lines = [ln for ln in nl.text.splitlines() if ln.startswith("include")]
+    assert lines == ['include "toplevel.scs" section=TOP_SS_X',
+                     'include "toplevel.scs" section=pre_Sim',
+                     'include "toplevel.scs" section=Noise_Worst']
+    assert not any("set on 3 includes" in n for n in notes)
+    assert sum("left as is" in n for n in notes) == 2

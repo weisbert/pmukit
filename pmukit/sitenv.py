@@ -11,9 +11,9 @@ then `site.json`, then a default.  Each fact reports the variable it was actuall
     user        $USER, $USERNAME, $LOGNAME          (on the box $USER is the employee id)
     alps_root   $PMUKIT_ALPS_ROOT, $ALPS_ROOT, $ALPS_HOME minus /tools/alps, `which alps`
     simulator   $PMUKIT_SIMULATOR (alias $PMUKIT_CLUSTER_ENGINE), site.json simulator, 'alps'
-    pdk_root    $PMUKIT_PDK_ROOT, $PDK, $PDK_HOME
+    pdk_root    $PMUKIT_PDK_ROOT, $MODEL_ROOT, $PDK, $PDK_HOME   (the dir holding alps/ spectre/)
     account     $PMUKIT_DONAU_ACCOUNT, site.json project_account
-    license     $LM_LICENSE_FILE, $CDS_LIC_FILE, $EMPYREAN_LICENSE_FILE
+    license     ALPS: $EMPYREAN_LICENSE_FILE; Spectre: $CDS_LIC_FILE; else $LM_LICENSE_FILE
 """
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ def simulator(site=None, env=None) -> Fact:
 
 
 def pdk_root(env=None) -> Fact:
-    return _first(_env(env), "pdk_root", "PMUKIT_PDK_ROOT", "PDK", "PDK_HOME")
+    return _first(_env(env), "pdk_root", "PMUKIT_PDK_ROOT", "MODEL_ROOT", "PDK", "PDK_HOME")
 
 
 def account(site=None, env=None) -> Fact:
@@ -112,11 +112,16 @@ def account(site=None, env=None) -> Fact:
     return Fact("account", val, "site config" if val else "")
 
 
-def license_(env=None) -> Fact:
-    return _first(_env(env), "license", "LM_LICENSE_FILE", "CDS_LIC_FILE", "EMPYREAN_LICENSE_FILE")
+def license_(env=None, sim: str = "alps") -> Fact:
+    """The license the SITE SIMULATOR checks out: Empyrean for ALPS, Cadence for Spectre.
+    (The box exports a dozen *_LICENSE_FILE vars; LM_LICENSE_FILE there is not ALPS's.)"""
+    first = (("EMPYREAN_LICENSE_FILE", "CDS_LIC_FILE") if sim == "alps"
+             else ("CDS_LIC_FILE", "EMPYREAN_LICENSE_FILE"))
+    return _first(_env(env), "license", *first, "LM_LICENSE_FILE")
 
 
 def facts(site=None, env=None) -> list[Fact]:
     """Everything `pmukit site` shows under 'read from this machine'."""
-    return [user(env), host(), simulator(site, env), alps_root(env), pdk_root(env),
-            account(site, env), license_(env)]
+    sim = simulator(site, env)
+    return [user(env), host(), sim, alps_root(env), pdk_root(env),
+            account(site, env), license_(env, sim.value)]

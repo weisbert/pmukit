@@ -677,6 +677,9 @@ function wire(){
   document.querySelectorAll("[data-act]").forEach(function(n){
     n.onclick = function(e){ e.stopPropagation(); var f = ACTS[n.getAttribute("data-act")]; if (f) f(); };
   });
+  document.querySelectorAll("[data-change]").forEach(function(n){
+    n.onchange = function(){ var f = ACTS[n.getAttribute("data-change")]; if (f) f(n.value); };
+  });
   document.querySelectorAll("[data-go]").forEach(function(n){
     n.onclick = function(){ go(n.getAttribute("data-go")); };
   });
@@ -1271,7 +1274,7 @@ SCREENS.plan = {
     var sid = regAction(function(){ doSubmit(); });
     return '<span class="hint">Resume: runs already in the ledger are skipped. Nothing is '
          + "submitted until you press this.</span>"
-         + '<div class="rowflex"><button class="btn" data-act="' + regAction(function(){
+         + '<div class="rowflex">' + accountPicker() + '<button class="btn" data-act="' + regAction(function(){
              copy(((S.data["plan"] || {}).groups || []).map(function(g){
                return [g.id, g.analysis, g.runs, g.cpu_hours].join(","); }).join("\n"));
            }) + '">Export plan (CSV)</button>'
@@ -1384,8 +1387,45 @@ function setTicksAll(fn){
       render(); refreshCli();
     }, showErr);
 }
+/* The Donau account runs are charged to. The list lives in the box's site.json (never in the
+   repo): `pmukit site --add-account <name>=<note>`. The pick is remembered there too. */
+function accountPicker(){
+  var s = need("site", "/api/site", "plan");
+  if (!s || s.engine !== "donau_alps") return "";
+  var accs = s.accounts || [];
+  if (!accs.length){
+    return '<span class="hint" title="Add them once in a terminal: pmukit site --add-account '
+         + '&lt;name&gt;=&lt;note&gt;">No Donau account set &middot; <span class="mono">pmukit site '
+         + "--add-account</span></span>";
+  }
+  var cur = s.account || "";
+  var opts = (cur && !accs.some(function(a){ return a.name === cur; }))
+    ? '<option value="' + esc(cur) + '" selected>' + esc(cur) + "</option>" : "";
+  opts += (cur ? "" : '<option value="" selected disabled>choose a Donau account</option>');
+  opts += accs.map(function(a){
+    return '<option value="' + esc(a.name) + '"' + (a.name === cur ? " selected" : "") + ">"
+         + esc(a.name) + (a.note ? " — " + esc(a.note) : "") + "</option>";
+  }).join("");
+  var id = regAction(function(v){
+    api("/api/site", { method:"PUT", body:{ account: v } }).then(function(d){
+      S.data["site"] = d; render();
+    }, showErr);
+  });
+  return '<span class="hint">Account</span><select class="inp mono" data-change="' + id
+       + '" title="dsub -A: the Donau account these runs are charged to">' + opts + "</select>";
+}
 function doSubmit(commitOnly){
-  startJob(api("/api/p/" + P() + "/submit", { method:"POST", body:{ commit_only: !!commitOnly } }),
+  var s = S.data["site"] || {};
+  if (!commitOnly && s.engine === "donau_alps" && !s.account){
+    showErr({ error: { what: "no Donau account is selected.",
+      why: "dsub -A names the account a job is charged to; Donau rejects a submit without one.",
+      do: ["Pick one in the Account list next to Submit",
+           "Or add them in a terminal: pmukit site --add-account <name>=<note>"],
+      where: "Plan > Account" } });
+    return;
+  }
+  startJob(api("/api/p/" + P() + "/submit", { method:"POST",
+      body:{ commit_only: !!commitOnly, account: s.account || "" } }),
     commitOnly ? "writing the ledger (nothing submitted)" : "submitting the plan",
     function(){ forget("ledger"); go("run"); });
 }
