@@ -74,7 +74,7 @@ def mini_repo(tmp_path):
     (root / "pyproject.toml").write_text('[project]\nname = "pmukit"\nversion = "9.9.9"\n',
                                          encoding="utf-8", newline="\n")
     # the real installers, so the staged package is the real shape
-    for name in ("apply", "update.sh", "postinstall_check.py"):
+    for name in ("apply", "update.sh", "postinstall_check.py", "pmukit_install.sh"):
         shutil.copy2(DEPLOY / name, root / "deploy" / name)
     return root
 
@@ -131,6 +131,26 @@ def test_shipped_package_is_lf_only(mini_repo, tmp_path):
     out = tmp_path / "pkg"
     _build(mini_repo, out)
     assert _cr_offenders(out) == []
+
+
+def test_tar_ships_the_one_step_installer_next_to_it(mini_repo, tmp_path):
+    """The box gets three files: <pkg>.tar.gz, its .sha256, and pmukit_install.sh -- the
+    installer has to sit OUTSIDE the tarball, because it is what unpacks it."""
+    out = tmp_path / "pkg"
+    _build(mini_repo, out, make_tar=True)
+    inst = tmp_path / "pmukit_install.sh"
+    assert (tmp_path / "pkg.tar.gz").is_file() and (tmp_path / "pkg.tar.gz.sha256").is_file()
+    assert inst.is_file()
+    assert b"\r" not in inst.read_bytes()
+    assert inst.read_text(encoding="utf-8") == (DEPLOY / "pmukit_install.sh").read_text(encoding="utf-8")
+
+
+def test_one_step_installer_pins_everything_inside_its_folder():
+    """Nothing in $HOME or /tmp: prefix, data, temp and pip cache all point under the folder."""
+    text = (DEPLOY / "pmukit_install.sh").read_text(encoding="utf-8")
+    for line in ('export PMUKIT_PREFIX="$ROOT/install"', 'export PMUKIT_DATA="$ROOT/data"',
+                 'export TMPDIR="$ROOT/tmp"', "export PIP_NO_CACHE_DIR=1"):
+        assert line in text, line
 
 
 def test_repo_deploy_sources_are_lf_only():
@@ -277,7 +297,8 @@ BASH = _find_bash()
 
 
 @pytest.mark.skipif(BASH is None, reason="no bash on this machine")
-@pytest.mark.parametrize("script", ["apply", "update.sh", "dryrun_manylinux2014.sh"])
+@pytest.mark.parametrize("script", ["apply", "update.sh", "dryrun_manylinux2014.sh",
+                                    "pmukit_install.sh"])
 def test_shell_scripts_parse(script):
     r = subprocess.run([BASH, "-n", str(DEPLOY / script)], capture_output=True, text=True)
     assert r.returncode == 0, f"{script}:\n{r.stderr}"

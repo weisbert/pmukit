@@ -100,6 +100,16 @@ Write-Host "== built: $Out =="
 Get-ChildItem -Path $Out -ErrorAction SilentlyContinue |
     Select-Object Name, @{N = 'MB'; E = { [math]::Round($_.Length / 1MB, 2) } }, LastWriteTime |
     Format-Table -AutoSize
-Write-Host 'Carry the whole directory (or the .tar.gz from -Tar) to the box, then:'
-Write-Host '    cd <package>'
-Write-Host '    bash apply'
+if ($Tar) {
+    $name = Split-Path -Leaf $Out
+    $dir = Split-Path -Parent (Resolve-Path $Out)
+    Write-Host "Upload these 3 files from $dir into one folder on the box (e.g. <workarea>/pmukit):"
+    Write-Host "    $name.tar.gz   $name.tar.gz.sha256   pmukit_install.sh"
+    Write-Host 'then, in that folder:'
+    Write-Host '    bash pmukit_install.sh'
+}
+else {
+    Write-Host 'Carry the whole directory to the box, then:'
+    Write-Host '    cd <package>'
+    Write-Host '    bash apply'
+}

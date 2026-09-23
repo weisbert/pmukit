@@ -250,6 +250,8 @@ echo "[6/6] post-install check (tools/webprobe.py, headless) ..."
 }
 
 # ------------------------------------------------------------------------------- 9. tcsh lines --
+# pmukit_install.sh writes env.csh inside its folder instead; ~/.cshrc advice would contradict it.
+[ -n "${PMUKIT_INSTALLER:-}" ] && exit 0
 cat <<EOF
 
 == installed: $PREFIX ==

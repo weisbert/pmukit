@@ -10,17 +10,20 @@
 
 **盒子能 `git pull` 公开仓，但多半够不到 PyPI** —— 所以有两条路，**先试离线那条**。
 
-### (a) 离线包（推荐，已经打好了）
+### (a) 离线包 + 一键安装（推荐）
 
-桌面上 **`C:\code\pmukit_package`**（54 MB，含 manylinux2014 的 numpy/scipy 轮子）已经打好，
-按你平时过气隙的办法拷到盒子上，然后：
+黄区：`git pull` 后 `.\deploy\package.ps1 -Tar`（Python 3.10+ 即可），`dist\` 里出三个文件：
+`pkg.tar.gz`、`pkg.tar.gz.sha256`、`pmukit_install.sh`。三个一起传到红区你建的文件夹里：
 
 ```tcsh
-cd <包所在目录>
-bash apply                     # 注意是 bash，不是 ./apply —— 盒子的 shell 是 tcsh
+cd <workarea>/pmukit
+bash pmukit_install.sh         # 注意是 bash，不是 ./ —— 盒子的 shell 是 tcsh
+source env.csh
 ```
 
-包过期了就在桌面重新打一个：`python deploy/package.py --out C:\code\pmukit_package`
+全部装在这个文件夹里：`install/`（程序 + `.venv`，numpy/scipy 在这里）、`data/`、`tmp/`、
+`env.csh`、`install.log`。不写 `$HOME`、不写 `/tmp`，结尾会自己检查并报告。
+以后更新：传新的 tar + sha256 进来，再跑一次 `bash pmukit_install.sh`。
 
 ### (b) git clone（只在盒子能联网装 pip 时可行）
 
@@ -31,8 +34,8 @@ clone 出来**没有** `wheels/`，`apply` 会认出这是 git-clone 模式并�
 
 ---
 
-**期望**（两条路一样）：结尾打印装后自检（**6 项**）和两行要你贴进 `~/.cshrc` 的 `setenv`。
-照贴，然后 `source ~/.cshrc`。
+**期望**：结尾打印装后自检（**6 项**）。(a) 接着给出 `source env.csh`；(b) 给出两行要你贴进
+`~/.cshrc` 的 `setenv`，照贴，然后 `source ~/.cshrc`。
 
 - `bash apply` 做完整性校验（`MANIFEST.json` + `SHA256SUMS`）。**改过一个字节就会拒绝并点名文件。**
 - 离线装是 `pip install --no-index --find-links wheels`，全程不联网。

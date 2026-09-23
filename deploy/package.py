@@ -432,6 +432,9 @@ def build(out: pathlib.Path, mode="full", prev=None, dry_run=False, cache=None,
                 if p.is_file():
                     t.add(p, arcname=p.relative_to(out).as_posix())
         _write_text(tar.parent / (tar.name + ".sha256"), f"{_sha256(tar)}  {tar.name}\n")
+        # the one-step installer travels NEXT TO the tarball (it has to exist before the unpack)
+        installer = tar.parent / "pmukit_install.sh"
+        _write_text(installer, (root / "deploy" / "pmukit_install.sh").read_text(encoding="utf-8"))
 
     print(f"\nDONE -> {out}   mode={mode}  version={ver}+g{sha}")
     print(f"       {len(manifest['files'])} files in MANIFEST, {n} lines in SHA256SUMS,"
@@ -440,6 +443,10 @@ def build(out: pathlib.Path, mode="full", prev=None, dry_run=False, cache=None,
         print(f"       delete list: {len(deleted)} path(s) the box will remove")
     if tar:
         print(f"       tarball     : {tar}  ({tar.stat().st_size / 1e6:.1f} MB) + .sha256")
+        print(f"\nUpload these 3 files into one folder on the box (e.g. <workarea>/pmukit):")
+        print(f"    {tar.name}   {tar.name}.sha256   pmukit_install.sh")
+        print("then, in that folder:   bash pmukit_install.sh")
+        return manifest
     print("\nOn the box:   cd <package>  &&  bash apply")
     return manifest
 

@@ -76,6 +76,26 @@ a wheel whose *filename* claims 2.17 while its binary needs 2.28 is caught on th
 
 ## On the box (install)
 
+### One step, everything inside one folder (recommended)
+
+`package.py --tar` / `package.ps1 -Tar` leave three files in `dist/`. Upload them into a folder
+you made (e.g. `<workarea>/pmukit`) and run the installer from there:
+
+```tcsh
+cd <workarea>/pmukit            # holds pkg.tar.gz  pkg.tar.gz.sha256  pmukit_install.sh
+bash pmukit_install.sh
+source env.csh                  # every new shell; add your own setenv lines at its end
+```
+
+It checks python3.11 and the tarball's sha256, unpacks into `tmp/`, runs `apply` with
+`PMUKIT_PREFIX=<folder>/install`, `PMUKIT_DATA=<folder>/data`, `TMPDIR=<folder>/tmp` and no pip
+cache, writes `env.csh` / `env.sh` (once; later runs keep your edits), and reports whether anything
+landed outside the folder. numpy/scipy live in `<folder>/install/.venv`; the only outside
+dependency is the system `python3.11` the venv is built from. Output goes to `install.log`.
+Re-run with a newer tarball to update (full or incremental).
+
+### By hand
+
 Either copy the package over, or `git clone` the public repo — `apply` handles both and says
 which one it detected.
 
