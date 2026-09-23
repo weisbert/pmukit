@@ -57,6 +57,10 @@ pmukit site --simulator spectre               # 只在要用 Spectre 时（licen
 `user` 来自 `$USER`（工号，会写进每个 .va 的溯源头），`license` 来自 `$LM_LICENSE_FILE` / `$CDS_LIC_FILE`。
 显示 `(not found)` 的就是还缺的。
 
+**仿真目录和程序/数据目录是分开的**，跟 LDO_modeling 一样：每条 run 的网表、日志、PSF 在
+`$WORK_ROOT/pmukit/<项目>/runs/<run_id>/`（`sim_root` 那一行）；程序在 `<workarea>/pmukit/install`，
+账本、数据集、交付物在 `<workarea>/pmukit/data`。要换地方：`setenv PMUKIT_SIM_ROOT <目录>`。
+
 ☐ `pmukit site`：engine `donau_alps`、simulator `alps`、alps_root 有值、account 有值
 ☐ `pmukit ui` 起来，打印 URL，盒子的 Firefox 能打开
 

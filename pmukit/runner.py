@@ -197,8 +197,10 @@ class Runner:
         self.jobs = max(1, int(jobs or 1))
         self._jobs_given = jobs is not None
         self.aux = [pathlib.Path(a) for a in (aux or ())]
-        self.root = (pathlib.Path(root) if root is not None
-                     else paths.ensure_project(self.project) / "runs")
+        if root is None:
+            paths.ensure_project(self.project)            # the ledger/dataset side
+            root = paths.runs_dir(self.project)          # the simulation side ($WORK_ROOT on the box)
+        self.root = pathlib.Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.backend = backend if backend is not None else self._make_backend()
         self.timeout_s: float | None = None

@@ -495,8 +495,8 @@ def cmd_run(a) -> int:
     ds = (dsmod.Dataset.open(dpath) if (dpath / "index.json").exists()
           else dsmod.Dataset.create(dpath, project=cfg.project, config_sha=cfg.sha(),
                                     dims=_dims_for(der, plan)))
-    runner = rmod.Runner(cfg.project, plan, led, site, dataset=ds, root=d,
-                         jobs=a.jobs, aux=_aux_for(cfg, d))
+    runner = rmod.Runner(cfg.project, plan, led, site, dataset=ds,
+                         jobs=a.jobs, aux=_aux_for(cfg, d))       # run dirs: paths.runs_dir
     result = runner.run_all(resume=not a.no_resume,
                             on_event=None if a.json else _progress)
     ds.close()

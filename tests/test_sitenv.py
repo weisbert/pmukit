@@ -273,3 +273,38 @@ def test_a_hollow_done_is_recorded_failed(tmp_path):
     assert be.poll(job) == "done"
     be.fetch(job)
     assert job.state == "failed" and "is empty" in job.detail
+
+
+# ------------------------------------------------------------ simulations run apart from the tool
+def test_sim_root_is_work_root_like_ldo_modeling():
+    f = sitenv.sim_root({"WORK_ROOT": "/tmpdata/share/w00000001"})
+    assert f.value == "/tmpdata/share/w00000001/pmukit" and f.source == "$WORK_ROOT/pmukit"
+    f = sitenv.sim_root({"WORK_ROOT": "/x", "PMUKIT_SIM_ROOT": "/fast/sims"})
+    assert f.value == "/fast/sims" and f.source == "$PMUKIT_SIM_ROOT"
+    assert not sitenv.sim_root({}).ok                    # the desk: no simulation area
+
+
+def test_runs_live_under_work_root_and_data_stays_put(tmp_path, monkeypatch):
+    import pathlib
+    from pmukit import paths
+    monkeypatch.setenv("PMUKIT_DATA", str(tmp_path / "data"))
+    monkeypatch.delenv("PMUKIT_SIM_ROOT", raising=False)
+    monkeypatch.setenv("WORK_ROOT", str(tmp_path / "work"))
+    assert paths.runs_dir("demo") == pathlib.Path(tmp_path / "work" / "pmukit" / "demo" / "runs")
+    assert paths.project_dir("demo") == tmp_path / "data" / "demo"     # ledger, dataset, deliver
+    monkeypatch.delenv("WORK_ROOT")
+    assert paths.runs_dir("demo") == tmp_path / "data" / "demo" / "runs"
+
+
+def test_runner_puts_its_run_dirs_in_the_simulation_area(tmp_path, monkeypatch):
+    from pmukit.ledger import Ledger
+    from pmukit.runner import Runner
+    from types import SimpleNamespace as NS
+    monkeypatch.setenv("PMUKIT_DATA", str(tmp_path / "data"))
+    monkeypatch.setenv("WORK_ROOT", str(tmp_path / "work"))
+    monkeypatch.delenv("PMUKIT_SIM_ROOT", raising=False)
+    led = Ledger(tmp_path / "runs.sqlite")
+    plan = NS(runs=lambda enabled_only=True: [])
+    r = Runner("demo", plan, led, SiteConfig(engine="fake"), backend=NS(name="fake"))
+    assert r.root == tmp_path / "work" / "pmukit" / "demo" / "runs"
+    led.close()

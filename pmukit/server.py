@@ -626,7 +626,7 @@ class Project:
         return self.dir / "verify.json"
 
     def ensure(self) -> "Project":
-        for sub in ("", "netlists", "runs", "deliver", "digest", "logs", "dataset"):
+        for sub in ("", "netlists", "deliver", "digest", "logs", "dataset"):   # runs: runs_dir()
             (self.dir / sub if sub else self.dir).mkdir(parents=True, exist_ok=True)
         return self
 
@@ -1765,7 +1765,8 @@ class Api:
                     + (f", account {site.project_account}" if site.engine == "donau_alps" else ""), 0.12)
             with pr.ledger() as led:
                 runner = Runner(pr.name, plan, led, site,
-                                root=(pathlib.Path(self.root) if self.root is not None else None))
+                                root=(pathlib.Path(self.root) / pr.name / "runs"
+                                      if self.root is not None else None))
                 result = runner.run_all(on_event=on_event)
             out["runner"] = _clean(result)
             out["engine"] = site.engine
@@ -2520,8 +2521,10 @@ def _demo_log(row: dict) -> str:
 
 
 def _log_candidates(pr: Project, run) -> list[pathlib.Path]:
-    # runner.py lays out $PMUKIT_DATA/<project>/runs/<run_id>/{input.scs,spectre.log,raw/}
-    out = [pr.dir / "runs" / run.run_id / "spectre.log",
+    # runner.py lays out <paths.runs_dir>/<run_id>/{input.scs,spectre.log | raw.log,raw/}; on the
+    # box runs_dir is under $WORK_ROOT, apart from the project's data
+    wd = paths.runs_dir(pr.name) / run.run_id
+    out = [wd / "spectre.log", wd / "raw.log", pr.dir / "runs" / run.run_id / "spectre.log",
            pr.dir / "logs" / f"{run.run_id}.log"]
     if run.netlist_path:
         p = pathlib.Path(run.netlist_path)

@@ -160,8 +160,9 @@ def verify_project(project, fit=None, dataset=None, derived=None, *, root=None, 
         from . import hb as hbmod
         site = _site(engine)
         try:
+            # the HB decks are simulations too: they run in the site's simulation area
             hb_report = hbmod.hb_check(fit, derived, project=project, site=site,
-                                       root=d, grades=rows)
+                                       root=paths.sim_dir(project, fallback=d), grades=rows)
         except PmuError as exc:
             hb_report = {"status": "not_run", "error": exc.to_dict(),
                          "notes": [f"the HB health check could not run: {exc.what}"]}
@@ -172,7 +173,8 @@ def verify_project(project, fit=None, dataset=None, derived=None, *, root=None, 
         from . import system as sysmod
         try:
             sys_report = sysmod.oscillator_check(fit, derived, project=project,
-                                                 site=_site(engine), root=d)
+                                                 site=_site(engine),
+                                                 root=paths.sim_dir(project, fallback=d))
         except PmuError as exc:
             sys_report = {"status": "not_run", "error": exc.to_dict()}
 

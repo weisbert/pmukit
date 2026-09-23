@@ -44,6 +44,7 @@
 
 - **Validated run (LDO_modeling):** `dsub -A <account> -q short -R "cpu=8;mem=8000" -x all -EP <netdir> -J /software/empyrean/alps/2026.03.hf1/bin/alps input.scs -format ps -o <psf>/<tag> -I <pdk>/alps -ahdllibdir <ahd> -mt 8 -ade`. (Donau account names are site facts: they live in the box's site.json, never here.)
 - **pmukit's line differs in three places, deliberately:** `-o raw` RELATIVE to `-EP` (the run dir) instead of an absolute `<psf>/<tag>` -- the relative `input.scs` already proved `-EP` is the job's cwd, but a relative `-o` has not run on the box yet (ALPS then names its log `raw.log`); `-ahdllibdir` only when `PMUKIT_AHDLLIBDIR` is set (else ALPS compiles the `ahdl_include`s itself); the ALPS root comes from `$ALPS_ROOT` (2026.06.hf1 on the box) instead of a hard-coded 2026.03.hf1.
+- **Simulation dirs live in `$WORK_ROOT/pmukit/<project>/runs/<run_id>`**, apart from the tool and the data, exactly as LDO_modeling ran its validated sweep in `$WORK_ROOT/ldo_modeling/...` (the tree ADE's own Donau jobs write to). `$PMUKIT_SIM_ROOT` overrides; with neither set (the desk) runs stay beside the project data.
 - **Runner cadence, from LDO's box sweep:** `djob` every 5 s, 4 jobs at a time, a job still unfinished after 3 h (the `short` queue's wallclock) is killed and marked failed.
 - **Call the WRAPPER `.../bin/alps`, not the raw binary** (raw fails `libsvadv.so`; the wrapper sets LD_LIBRARY_PATH).
 - **`-format ps` = classic PSF** (hidden flag; ADE's psfxl downgraded to ps for ALPS) → binpsf reads it unchanged. Never `psfxl`.

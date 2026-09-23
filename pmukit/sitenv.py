@@ -14,6 +14,7 @@ then `site.json`, then a default.  Each fact reports the variable it was actuall
     pdk_root    $PMUKIT_PDK_ROOT, $MODEL_ROOT, $PDK, $PDK_HOME   (the dir holding alps/ spectre/)
     account     $PMUKIT_DONAU_ACCOUNT, site.json project_account
     license     ALPS: $EMPYREAN_LICENSE_FILE; Spectre: $CDS_LIC_FILE; else $LM_LICENSE_FILE
+    sim_root    $PMUKIT_SIM_ROOT, else $WORK_ROOT/pmukit    (where simulations run -- see paths)
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ import posixpath
 import shutil
 import socket
 from dataclasses import dataclass
+
 
 @dataclass(frozen=True)
 class Fact:
@@ -120,8 +122,26 @@ def license_(env=None, sim: str = "alps") -> Fact:
     return _first(_env(env), "license", *first, "LM_LICENSE_FILE")
 
 
+def sim_root(env=None) -> Fact:
+    """Where simulations run: the site's simulation area, NOT the tool/data folder.
+
+    On the box that is `$WORK_ROOT` (/tmpdata/...), the same tree LDO_modeling ran its whole
+    validated sweep in (`$WORK_ROOT/ldo_modeling/...`) and ADE's own Donau jobs use -- the
+    compute nodes are known to write there.  pmukit takes `$WORK_ROOT/pmukit`.  Empty = no
+    simulation area on this machine (the desk): runs stay beside the project's data.
+    """
+    e = _env(env)
+    f = _first(e, "sim_root", "PMUKIT_SIM_ROOT")
+    if f.ok:
+        return f
+    wr = str(e.get("WORK_ROOT", "") or "").strip()
+    if wr:
+        return Fact("sim_root", wr.rstrip("/\\") + "/pmukit", "$WORK_ROOT/pmukit")
+    return Fact("sim_root", "", "")
+
+
 def facts(site=None, env=None) -> list[Fact]:
     """Everything `pmukit site` shows under 'read from this machine'."""
     sim = simulator(site, env)
     return [user(env), host(), sim, alps_root(env), pdk_root(env),
-            account(site, env), license_(env, sim.value)]
+            account(site, env), license_(env, sim.value), sim_root(env)]
