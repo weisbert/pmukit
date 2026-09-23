@@ -45,17 +45,19 @@ clone 出来**没有** `wheels/`，`apply` 会认出这是 git-clone 模式并�
 
 ☐ 装好，`pmukit --help` 有输出
 
-**然后告诉它这台机器能用哪个仿真器**（默认值是**桌面的**默认值，在盒子上是错的）：
+**然后看一眼它从这台机器读到了什么**（默认就是盒子的配置：Donau short 队列 + ALPS）：
 
 ```tcsh
-pmukit site                                              # 先看一眼现在是什么
-pmukit site --engine donau_alps --queue short --cpus 8 --account <你的账号>
+pmukit site                                   # 上半：保存的设置；下半：从环境变量读到的 + 来源
+pmukit site --account <你的 Donau 账号>        # 唯一必须手填的一项
+pmukit site --simulator spectre               # 只在要用 Spectre 时（license 紧张，默认 ALPS）
 ```
 
-不设的话默认是 `spectre_ssh` + `ewave-vm` —— 那是桌面往 VM 跑的配置。
-（真在仿真机本机上跑时，`spectre_ssh` 指向自己是错的配置，`/api/machine` 会如实报失败。）
+下半张表每行都写了来源：`alps_root` 来自 `$ALPS_ROOT`（或 `$ALPS_HOME` 去掉 `/tools/alps`），
+`user` 来自 `$USER`（工号，会写进每个 .va 的溯源头），`license` 来自 `$LM_LICENSE_FILE` / `$CDS_LIC_FILE`。
+显示 `(not found)` 的就是还缺的。
 
-☐ `pmukit site` 显示的 engine 是 `donau_alps`
+☐ `pmukit site`：engine `donau_alps`、simulator `alps`、alps_root 有值、account 有值
 ☐ `pmukit ui` 起来，打印 URL，盒子的 Firefox 能打开
 
 > `pmukit ui` 只绑 `127.0.0.1`。要从别的机器看，加 `--host 0.0.0.0`（自己判断网络策略）。

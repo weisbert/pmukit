@@ -34,6 +34,8 @@ screens and the report never show a bare `L3`: the user sees `A=500u B=2m`.
 from __future__ import annotations
 
 import math
+import os
+import shlex
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Sequence
 
@@ -450,9 +452,21 @@ def _submit_line(site, corner: str, run_id: str) -> str:
         return (f"ssh {host} 'tcsh -c \"source ~/.cshrc; cd {wd}/{run_id}; "
                 f"spectre -64 input.scs -format psfascii -raw raw +log spectre.log -E\"'")
     if engine == "donau_alps":
-        return (f"dsub -q short -R \"cpu={cpus};mem=8000\" -x all -EP <netdir> "
-                f"-J <alps>/bin/alps input.scs -format ps -o <psf>/{run_id} "
-                f"-I <pdk>/alps -ahdllibdir <ahd> -mt {cpus} -ade")
+        # The SAME composer the backend submits with, fed the same resolved site facts; only what
+        # is genuinely unknown here (the run directory, a missing account) stays a <placeholder>.
+        from . import sitenv
+        from .backends.donau_alps import build_dsub_cmd, build_sim_cmd
+        sim = sitenv.simulator(site).value
+        root = sitenv.alps_root().value or "<ALPS_ROOT>"
+        pdk = sitenv.pdk_root().value
+        payload = build_sim_cmd(sim, "input.scs", "raw", alps_root=root, model_dir=pdk,
+                                mt=cpus, ade=(sim == "alps"))
+        mem = os.environ.get("PMUKIT_DONAU_MEM", "8000") or "8000"
+        cmd = build_dsub_cmd(payload, f"<runs>/{run_id}",
+                             account=sitenv.account(site).value or "<account>",
+                             queue=getattr(site, "queue", "") or "<queue>",
+                             resource=f"cpu={cpus};mem={mem}")
+        return shlex.join(cmd)
     return f"[{engine}] {run_id}  (no simulator invoked)"
 
 

@@ -28,15 +28,18 @@ Every flag below is a scar (TOOL_FACTS "ALPS / Donau"), and the validated line i
     FILE produces `-I .../toplevel.scs/alps` and every model silently fails to resolve.
 
 Site facts that are NOT in `site.json` come from the environment, because they are properties of
-the box's install tree and must never be committed to this repo:
+the box's install tree and must never be committed to this repo.  `pmukit.sitenv` resolves them,
+reading the box's OWN variables first-class (`pmukit site` shows which one each came from):
 
-    PMUKIT_ALPS_ROOT     the ALPS wrapper install root (required)
-    PMUKIT_PDK_ROOT      the PDK model ROOT directory  (optional; omit if the deck's includes
-                         are self-contained)
-    PMUKIT_AHDLLIBDIR    a pre-compiled AHDL/VA model DB (optional; omitted -> auto-compile)
-    PMUKIT_DONAU_ACCOUNT the `-A` account (else `site.project_account`)
-    PMUKIT_DONAU_MEM     the mem= MB in `-R` (default 8000)
-    PMUKIT_CLUSTER_ENGINE  'alps' (default) or 'spectre'
+    ALPS install root  $PMUKIT_ALPS_ROOT, else $ALPS_ROOT, else $ALPS_HOME minus /tools/alps,
+                       else `which alps`                                            (required)
+    PDK model root     $PMUKIT_PDK_ROOT, else $PDK, else $PDK_HOME
+                       (optional; omit if the deck's includes are self-contained)
+    Donau account      $PMUKIT_DONAU_ACCOUNT, else site.json project_account
+    simulator          $PMUKIT_SIMULATOR / $PMUKIT_CLUSTER_ENGINE, else site.json simulator,
+                       else 'alps'  (Spectre licenses are scarce at the site)
+    PMUKIT_AHDLLIBDIR  a pre-compiled AHDL/VA model DB (optional; omitted -> auto-compile)
+    PMUKIT_DONAU_MEM   the mem= MB in `-R` (default 8000)
 
 **This backend has never been executed.**  There is no Donau on the desk, so it is exercised in
 dry-run only (the composed command is asserted against the shape above).  Its first real run is on
@@ -52,6 +55,7 @@ import shlex
 import shutil
 import subprocess
 
+from .. import sitenv
 from ..errors import PmuError
 
 __all__ = ["DonauAlpsBackend", "build_dsub_cmd", "build_sim_cmd", "map_state", "parse_job_id",
@@ -120,12 +124,13 @@ def build_sim_cmd(engine: str, input_scs: str, out_psf: str, *, alps_root: str =
     if engine == "alps":
         if not alps_root:
             raise PmuError(
-                what="PMUKIT_ALPS_ROOT is not set.",
+                what="No ALPS install root: none of PMUKIT_ALPS_ROOT, ALPS_ROOT, ALPS_HOME is set.",
                 why="ALPS must be launched through its bash WRAPPER (<root>/bin/alps): the raw "
                     "binary cannot find libsvadv.so on a compute node because only the wrapper "
                     "sets LD_LIBRARY_PATH.",
-                do=["Set PMUKIT_ALPS_ROOT to the ALPS install root on this box (the directory "
-                    "that contains bin/alps).",
+                do=["Source the site's ALPS setup (it exports ALPS_ROOT), or set "
+                    "PMUKIT_ALPS_ROOT to the ALPS install root (the directory that contains "
+                    "bin/alps).",
                     "`which alps` on the box prints the wrapper -- its parent's parent is the "
                     "root."],
                 where="environment: PMUKIT_ALPS_ROOT")
@@ -229,12 +234,12 @@ class DonauAlpsBackend:
         self.dry_run = bool(dry_run)
         self._run = runner or _Subprocess()
         env = os.environ if env is None else env
-        self.engine = str(env.get("PMUKIT_CLUSTER_ENGINE", "alps"))
-        self.alps_root = str(env.get("PMUKIT_ALPS_ROOT", ""))
-        self.pdk_root = str(env.get("PMUKIT_PDK_ROOT", ""))
+        self.engine = sitenv.simulator(site, env).value
+        # `which alps` is a fallback for the live box only; an injected env means a test.
+        self.alps_root = sitenv.alps_root(env, which=shutil.which if env is os.environ else None).value
+        self.pdk_root = sitenv.pdk_root(env).value
         self.ahdllibdir = str(env.get("PMUKIT_AHDLLIBDIR", ""))
-        self.account = str(env.get("PMUKIT_DONAU_ACCOUNT", "")
-                           or getattr(site, "project_account", "") or "")
+        self.account = sitenv.account(site, env).value
         self.mem_mb = int(env.get("PMUKIT_DONAU_MEM", "8000") or 8000)
         self.queue = str(getattr(site, "queue", "") or "")
         self.cpus = int(getattr(site, "cpus", 8) or 8)
@@ -284,7 +289,9 @@ class DonauAlpsBackend:
             return False, (f"the Donau client is not on PATH ({', '.join(missing)}) -- this "
                            "engine only exists on the box")
         if not self.alps_root and self.engine == "alps":
-            return False, "PMUKIT_ALPS_ROOT is not set (the ALPS wrapper root)"
+            return False, "no ALPS install root (PMUKIT_ALPS_ROOT / ALPS_ROOT / ALPS_HOME)"
+        if self.engine == "alps" and not os.path.isfile(alps_exe(self.alps_root)):
+            return False, f"the ALPS wrapper {alps_exe(self.alps_root)} does not exist"
         if not self.account.strip():
             return False, "no Donau account (PMUKIT_DONAU_ACCOUNT / site.project_account)"
         if not self.queue.strip():

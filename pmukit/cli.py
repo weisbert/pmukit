@@ -253,14 +253,15 @@ def cmd_site(a) -> int:
     """Show or change the SITE configuration -- engine, queue, CPUs. Set once per install.
 
     This is deliberately not part of a project: which simulator this machine can reach is a
-    property of the machine. The default (`spectre_ssh` to a VM) is a DESK default; on a submit
-    host it should be `donau_alps`, and on the simulator host itself an ssh-to-self is the wrong
-    answer -- which is exactly what `/api/machine` reports when it happens.
+    property of the machine. The default is the BOX's: `donau_alps` into the short queue, running
+    ALPS (Spectre licenses are scarce; `--simulator spectre` switches). The desk sets
+    `--engine spectre_ssh` once. Below the stored settings it prints what was read from this
+    machine's environment -- ALPS root, user id, PDK, license -- and from which variable.
     """
     smod = _need("site", "site")
     site = smod.SiteConfig.load()
     changed = []
-    for name in ("engine", "queue", "ssh_host", "remote_workdir", "spectre_cmd",
+    for name in ("engine", "simulator", "queue", "ssh_host", "remote_workdir", "spectre_cmd",
                  "project_account"):
         val = getattr(a, name, None)
         if val is not None:
@@ -273,20 +274,29 @@ def cmd_site(a) -> int:
         site.validate() if hasattr(site, "validate") else None
         path = site.save()
         print(f"site updated ({', '.join(changed)}) -> {path}")
+    from . import sitenv
+    facts = sitenv.facts(site)
     if a.json:
-        _out(site.to_dict(), True)
+        _out({**site.to_dict(),
+              "environment": {f.name: {"value": f.value, "source": f.source} for f in facts}}, True)
         return 0
     rows = [[k, v] for k, v in sorted(site.to_dict().items()) if k != "provenance"]
     print(_table(rows, ["setting", "value"]))
     print()
+    print("  read from this machine:")
+    print(_table([[f.name, f.value or "(not found)", f.source or "-"] for f in facts],
+                 ["fact", "value", "from"]))
+    print()
     print(f"  engines: {', '.join(smod.ENGINES)}")
-    print("    spectre_ssh  run Spectre over ssh on another machine (the desk default)")
-    print("    donau_alps   submit to the Donau queue with ALPS (the box)")
+    print("    donau_alps   submit to the Donau queue; runs the site simulator (the box, default)")
+    print("    spectre_ssh  run Spectre over ssh on another machine (the desk)")
     print("    fake         analytic stand-in, no simulator -- for smoke tests only")
     print("    dry_run      write the decks and the recipes, run nothing")
-    print(f"\n  Change it:  {PROG} site --engine donau_alps --queue short --cpus 8")
-    print(f"  Or per run: {PROG} run <project> --engine donau_alps")
-    print("  Environment overrides: PMUKIT_ENGINE, PMUKIT_SSH_HOST, PMUKIT_CPUS")
+    print("  simulators: alps (default) | spectre   -- what a Donau job runs")
+    print(f"\n  Change it:  {PROG} site --account <Donau account>   |   {PROG} site --simulator spectre")
+    print(f"  Or per run: {PROG} run <project> --engine dry_run")
+    print("  Environment overrides: PMUKIT_ENGINE, PMUKIT_SIMULATOR, PMUKIT_SSH_HOST, PMUKIT_CPUS,")
+    print("                         PMUKIT_ALPS_ROOT, PMUKIT_PDK_ROOT, PMUKIT_DONAU_ACCOUNT")
     return 0
 
 
@@ -747,7 +757,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_new)
 
     p = sub.add_parser("site", help="show or set this machine's simulator, queue and CPU count")
-    p.add_argument("--engine", help="spectre_ssh | donau_alps | fake | dry_run")
+    p.add_argument("--engine", help="donau_alps (default) | spectre_ssh | fake | dry_run")
+    p.add_argument("--simulator", help="alps (default) | spectre -- what a Donau job runs")
     p.add_argument("--queue")
     p.add_argument("--cpus", type=int)
     p.add_argument("--ssh-host", dest="ssh_host")

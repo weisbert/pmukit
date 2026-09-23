@@ -7,9 +7,14 @@ characterized. Keeping it out of the project config is what lets the same `confi
 
 Lives in `$PMUKIT_DATA/site.json`. Environment overrides, applied by `load()` after the file:
 
-    PMUKIT_ENGINE     engine name   (spectre_ssh | dry_run | fake | donau_alps)
+    PMUKIT_ENGINE     engine name   (donau_alps | spectre_ssh | dry_run | fake)
     PMUKIT_SSH_HOST   ssh host alias for the spectre_ssh engine
     PMUKIT_CPUS       cpus per job  (positive integer)
+
+The defaults are the BOX's: submit to Donau's short queue and run ALPS (the site's Spectre
+licenses are scarce; `simulator` switches a Donau job to Spectre).  The desk, which runs Spectre
+on a VM over ssh, says so once in its own site.json.  Facts the box's environment already knows --
+the ALPS install, the user id, the license -- are read by `pmukit.sitenv`, not stored here.
 """
 from __future__ import annotations
 
@@ -22,9 +27,12 @@ from . import jsonio
 from .errors import PmuError
 from .paths import data_root
 
-ENGINES = ("spectre_ssh", "dry_run", "fake", "donau_alps")
-"""spectre_ssh: run on a Linux host over ssh. dry_run: write the netlists, submit nothing.
-fake: synthesize results for tests. donau_alps: submit to the Donau queue (box only)."""
+ENGINES = ("donau_alps", "spectre_ssh", "dry_run", "fake")
+"""donau_alps: submit to the Donau queue (the box; runs `simulator`, ALPS by default).
+spectre_ssh: run Spectre on a Linux host over ssh (the desk). dry_run: write the netlists, submit
+nothing. fake: synthesize results for tests."""
+
+SIMULATORS = ("alps", "spectre")
 
 SITE_FILE = "site.json"
 
@@ -37,9 +45,10 @@ def _err(what: str, why: str, do, where: str) -> PmuError:
 class SiteConfig:
     """How this machine runs simulations."""
 
-    engine: str = "spectre_ssh"
-    queue: str = ""
+    engine: str = "donau_alps"
+    queue: str = "short"
     cpus: int = 8
+    simulator: str = "alps"
     ssh_host: str = "ewave-vm"
     remote_workdir: str = "~/pmukit_work"
     spectre_cmd: str = "spectre"
@@ -78,6 +87,11 @@ class SiteConfig:
             raise _err(f"site cpus is not a positive integer ({self.cpus!r}).",
                        "cpus becomes the -mt / queue slot count on every submitted job.",
                        ["Set cpus to a positive integer, e.g. 8"], where)
+        if self.simulator not in SIMULATORS:
+            raise _err(f"site simulator {self.simulator!r} is not one of {list(SIMULATORS)}.",
+                       "It picks the solver a Donau job runs; ALPS is the default because "
+                       "Spectre licenses are scarce.",
+                       [f"Set simulator to one of {list(SIMULATORS)}"], where)
         for name in ("queue", "ssh_host", "remote_workdir", "spectre_cmd", "project_account"):
             val = getattr(self, name)
             if not isinstance(val, str):

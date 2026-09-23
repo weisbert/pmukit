@@ -290,8 +290,17 @@ def _run_cmd(argv, timeout: float) -> tuple[int, str, str]:
 
 
 def probe_engine() -> dict:
-    """The simulator. On the desk that is Spectre on the VM; the Cadence environment lives only
-    in `~/.cshrc`, so the remote command must be a tcsh that sources it."""
+    """The simulator the SITE says to use.  On the box (donau_alps) that is the ALPS wrapper the
+    environment points at -- or Spectre, if the site picked it; on the desk (spectre_ssh) it is
+    Spectre on the VM, whose Cadence environment lives only in `~/.cshrc`, so the remote command
+    must be a tcsh that sources it."""
+    from .site import SiteConfig
+    try:
+        site = SiteConfig.load()
+    except PmuError:
+        site = SiteConfig()
+    if site.engine == "donau_alps":
+        return _probe_local_simulator(site)
     cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", SSH_HOST,
            'tcsh -c "source ~/.cshrc; which spectre"']
     t0 = time.time()
@@ -314,6 +323,40 @@ def probe_engine() -> dict:
                             "Or set the site engine to `fake` / `dry_run` to plan without "
                             "simulating"],
                            "pmukit/site.py: engine").to_dict()["error"]}
+
+
+def _probe_local_simulator(site) -> dict:
+    from . import sitenv
+    from .backends.donau_alps import alps_exe
+    t0 = time.time()
+    sim = sitenv.simulator(site)
+    if sim.value == "alps":
+        root = sitenv.alps_root()
+        exe = alps_exe(root.value) if root.ok else ""
+        ok = bool(exe) and pathlib.Path(exe).is_file()
+        ms = int((time.time() - t0) * 1000)
+        if ok:
+            return {"name": "engine", "ok": True, "detail": f"alps {exe}  (from {root.source})",
+                    "ms": ms, "how": root.source, "reason": None}
+        why = (f"{exe} does not exist (root from {root.source})" if exe else
+               "none of PMUKIT_ALPS_ROOT, ALPS_ROOT, ALPS_HOME is set and `alps` is not on PATH")
+        return {"name": "engine", "ok": False, "detail": exe, "ms": ms, "how": "$ALPS_ROOT",
+                "reason": _err("the ALPS wrapper was not found.", why + ".",
+                               ["Source the site's ALPS setup before `pmukit ui` (it exports "
+                                "ALPS_ROOT)",
+                                "Or setenv PMUKIT_ALPS_ROOT <the directory holding bin/alps>"],
+                               "environment: ALPS_ROOT").to_dict()["error"]}
+    exe = shutil.which("spectre") or ""
+    ms = int((time.time() - t0) * 1000)
+    if exe:
+        return {"name": "engine", "ok": True, "detail": f"spectre {exe}", "ms": ms,
+                "how": "which spectre", "reason": None}
+    return {"name": "engine", "ok": False, "detail": "", "ms": ms, "how": "which spectre",
+            "reason": _err("the site simulator is Spectre, but `spectre` is not on PATH.",
+                           "Donau runs the payload with this shell's environment (-x all).",
+                           ["Source the Cadence setup before `pmukit ui`",
+                            "Or switch back to ALPS: pmukit site --simulator alps"],
+                           "site simulator").to_dict()["error"]}
 
 
 def probe_queue() -> dict:
@@ -344,7 +387,8 @@ def probe_queue() -> dict:
 
 def probe_pdk() -> dict:
     t0 = time.time()
-    raw = os.environ.get("PDK") or os.environ.get("PDK_HOME") or ""
+    from . import sitenv
+    raw = sitenv.pdk_root().value
     ms = int((time.time() - t0) * 1000)
     if raw and pathlib.Path(raw).expanduser().is_dir():
         return {"name": "pdk", "ok": True, "detail": raw, "ms": ms, "how": "$PDK", "reason": None}

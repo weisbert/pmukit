@@ -143,11 +143,14 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
                 "or pass corners=[...] to deliver()"],
             where="derived.process.corners")
 
+    from .. import sitenv
+    who = sitenv.user().value           # $USER -- the employee id on the box
     prov = provenance or Provenance.now(
         config_sha=d.config_sha or "",
         dataset_sha=dataset_sha or str(getattr(fit, "dataset_sha", "") or ""),
         spec_sha=str(getattr(fit, "spec_sha", "") or spec.SPEC_SHA),
-        tb_state_note=tb_state_note)
+        tb_state_note=tb_state_note, host=sitenv.host().value,
+        extra={"user": who} if who else {})
 
     writer = DeliverableWriter(project, root=root, stamp=stamp)
     modules, ports_by_corner, checks, notes, skipped = {}, {}, {}, [], {}

@@ -547,9 +547,28 @@ def test_derived_json_is_canonical(tmp_path):
 
 # ================================================================= site config
 def test_site_defaults():
+    """The BOX's defaults: Donau's short queue running ALPS (Spectre licenses are scarce)."""
     s = SiteConfig()
-    assert s.engine == "spectre_ssh" and s.cpus == 8 and s.queue == ""
+    assert s.engine == "donau_alps" and s.simulator == "alps"
+    assert s.cpus == 8 and s.queue == "short"
     assert s.remote_workdir and s.spectre_cmd == "spectre"
+    s.validate()                       # a box with no site.json must load, not error
+
+
+def test_site_rejects_an_unknown_simulator():
+    with pytest.raises(PmuError):
+        SiteConfig(simulator="hspice").validate()
+
+
+def test_an_old_site_json_without_simulator_still_loads(tmp_path, monkeypatch):
+    """The desk's site.json predates `simulator`; it must keep loading, as ALPS."""
+    for v in ("PMUKIT_ENGINE", "PMUKIT_SSH_HOST", "PMUKIT_CPUS"):
+        monkeypatch.delenv(v, raising=False)
+    p = tmp_path / "site.json"
+    p.write_text('{"engine": "spectre_ssh", "queue": "", "cpus": 8, "ssh_host": "ewave-vm"}',
+                 encoding="utf-8")
+    s = SiteConfig.load(p)
+    assert s.engine == "spectre_ssh" and s.simulator == "alps"
 
 
 def test_site_round_trip(tmp_path, monkeypatch):

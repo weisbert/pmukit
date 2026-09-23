@@ -67,9 +67,15 @@ echo "   tarball : $TAR"
 
 # --------------------------------------------------------------- 2. python 3.11, before anything --
 PYBIN="${PMUKIT_PYTHON:-python3.11}"
+if ! command -v "$PYBIN" >/dev/null 2>&1 && [ -z "${PMUKIT_PYTHON:-}" ]; then
+    # the box's bare `python` is 2.7; the site's 3.11 sits outside PATH until `ma python/3.11.x`
+    for cand in /software/public/python/3.11*/bin/python3.11; do
+        [ -x "$cand" ] && PYBIN="$cand"
+    done
+fi
 command -v "$PYBIN" >/dev/null 2>&1 || die "No python3.11 on PATH." \
     "The package's numpy/scipy wheels are cp311; the venv must be built from a 3.11 interpreter." \
-    "setenv PMUKIT_PYTHON /path/to/python3.11   then re-run: bash pmukit_install.sh" "PATH=$PATH"
+    "Load it first (e.g. 'ma python/3.11.4'), or: setenv PMUKIT_PYTHON /path/to/python3.11 -- then re-run: bash pmukit_install.sh" "PATH=$PATH"
 "$PYBIN" -c 'import sys; raise SystemExit(0 if sys.version_info[:2]==(3,11) else 1)' \
     || die "$PYBIN is not Python 3.11 ($("$PYBIN" -V 2>&1))." \
            "The shipped wheels are tagged cp311, so pip refuses them on any other version." \
@@ -160,9 +166,11 @@ else
     echo "   nothing written outside $ROOT"
 fi
 echo ""
+echo " What pmukit read from this machine (pmukit site):"
+"$ROOT/install/bin/pmukit" site 2>&1 | sed -n '/read from this machine/,/^$/p' | sed 's/^/ /' || true
 echo " Next (tcsh):"
 echo "   source $ROOT/env.csh"
 echo "   pmukit --help"
-echo "   pmukit site --engine donau_alps --queue short --cpus 8 --account <your Donau account>"
+echo "   pmukit site --account <your Donau account>   # donau_alps + ALPS are the defaults"
 echo "   pmukit ui                      # paste the printed http://127.0.0.1:... into Firefox"
 echo "================================================================================"
