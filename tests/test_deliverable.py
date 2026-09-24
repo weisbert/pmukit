@@ -249,6 +249,24 @@ def test_rail_table_carries_no_score_numbers_but_grades_json_does(tmp_path):
     assert sidecar["stubs"] == ["VDD0P8_C"]
 
 
+def test_a_default_off_block_does_not_colour_the_rail_row():
+    """The report's rail row follows verify.grades.headline, like the Model screen: a load_en
+    that ships switched off is named under the table but does not turn the row red."""
+    from pmukit.deliverable import render_report
+    grades = [Grade("VDD0P8_B", "tt", "zout", "green", "", 0.4),
+              Grade("VDD0P8_B", "tt", "load_en", "red", "droop 208 %", 208.0)]
+    text = render_report(project="p", stamp="s", envelope=make_envelope(ls_default_on=[]),
+                         grades=grades, hb_check={"status": "pass"}, not_run=[], stubs=[])
+    table = text.split("## Trust per corner and rail", 1)[1].split("\n## ", 1)[0]
+    assert "| VDD0P8_B | tt | green | zout |" in table
+    assert "off by default: load_en FAIL" in table and "load_en_VDD0P8_B=1" in table
+    # switched on by the HB check, it counts again
+    text = render_report(project="p", stamp="s",
+                         envelope=make_envelope(ls_default_on=["VDD0P8_B"]),
+                         grades=grades, hb_check={"status": "pass"}, not_run=[], stubs=[])
+    assert "| VDD0P8_B | tt | red | load_en |" in text
+
+
 def test_report_marks_never_run_and_stubs_red(tmp_path):
     w, _, _ = build(tmp_path)
     text = (w.path / "report.md").read_text(encoding="utf-8")

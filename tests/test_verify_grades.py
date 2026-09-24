@@ -286,12 +286,14 @@ def test_once_the_hb_check_clears_it_the_term_counts():
         assert G.worst(rows, ls_default_on=on) == "red"
 
 
-def test_only_the_ls_tier_is_ever_default_off():
+def test_only_the_ls_tier_and_the_unemitted_en_ramp_are_default_off():
     assert G.default_off("load_en", "VDD0P8_A", "rail")
     assert G.default_off("load_en", "VDD0P8_A")                 # port type looked up
     assert not G.default_off("load_en", "VDD0P8_A", "rail", ["VDD0P8_A"])
-    for block, pt in (("zout", "rail"), ("psrr", "bias"), ("idc", "bias"), ("ramp", "en"),
-                      ("no_sink", "rail")):
+    # EN is a pass-through pin of the delivered model: its ramp is never emitted
+    assert G.default_off("ramp", "EN", "en")
+    assert "not active in the delivered model" in G.off_note("ramp", "EN", "red")
+    for block, pt in (("zout", "rail"), ("psrr", "bias"), ("idc", "bias"), ("no_sink", "rail")):
         assert not G.default_off(block, "X", pt), block
 
 

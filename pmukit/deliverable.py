@@ -553,14 +553,16 @@ def _fixed_paragraph(project: str, envelope: Envelope, not_run: list[str],
     ]
 
 
-def _worst_by_cell(grades: list[Grade]) -> dict[tuple[str, str], Grade]:
-    worst: dict[tuple[str, str], Grade] = {}
+def _worst_by_cell(grades: list[Grade], ls_default_on=()) -> dict[tuple[str, str], dict]:
+    """The headline of each (rail, corner): the SAME rule the Model screen uses
+    (`verify.grades.headline`), so a block that ships switched off never colours the report's
+    rail row while the screen shows it green -- or the other way round."""
+    from .verify.grades import headline      # grades.py imports this module; import late
+    by: dict[tuple[str, str], list[Grade]] = {}
     for g in grades:
-        key = (g.port, g.corner)
-        cur = worst.get(key)
-        if cur is None or g.rank > cur.rank:
-            worst[key] = g
-    return worst
+        by.setdefault((g.port, g.corner), []).append(g)
+    return {key: headline(items, port=key[0], ls_default_on=ls_default_on)
+            for key, items in by.items()}
 
 
 def _md_cell(text: str) -> str:
@@ -638,18 +640,25 @@ def render_report(*, project: str, stamp: str, envelope: Envelope, grades: list[
     out += ["## Trust per corner and rail", ""] + warn + [
             "| rail | corner | grade | worst block | what it means |",
             "|---|---|---|---|---|"]
-    worst = _worst_by_cell(grades)
+    worst = _worst_by_cell(grades, envelope.ls_default_on)
     if not worst:
         out.append("| -- | -- | not_run | -- | no block was graded in this deliverable |")
-    for (port, corner), g in worst.items():
+    off_notes: list[str] = []
+    for (port, corner), h in worst.items():
+        grade = str(h["grade"])
         inside, why = envelope.contains(port=port, corner=corner)
-        meaning = _md_cell(g.detail) if g.detail else _GRADE_MEANING[g.grade]
+        meaning = _md_cell(h.get("detail") or "") or _GRADE_MEANING.get(grade, grade)
         if not inside:
             meaning = f"{meaning} ({'; '.join(why)})"
-        mark = "**RED:** " if g.grade in ("red", "not_run") or not inside else ""
-        out.append(f"| {_md_cell(port)} | {_md_cell(corner)} | {g.grade} | "
-                   f"{_md_cell(g.block)} | {mark}{meaning} |")
+        mark = "**RED:** " if grade in ("red", "not_run") or not inside else ""
+        out.append(f"| {_md_cell(port)} | {_md_cell(corner)} | {grade} | "
+                   f"{_md_cell(str(h.get('block') or '--'))} | {mark}{meaning} |")
+        off_notes += [f"- {_md_cell(port)} / {_md_cell(corner)}: {_oneline(o['note'])}"
+                      for o in h.get("off_by_default") or []]
     out.append("")
+    if off_notes:
+        out += ["Blocks that ship switched off are graded but do not set the rail's grade:", ""]
+        out += off_notes + [""]
 
     # 5 -- per-block detail and the HB health check
     out += ["## Per-block detail", "",

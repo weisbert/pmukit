@@ -2912,7 +2912,7 @@ function verifyWarn(d, dv){
 }
 /* "Diff against the previous deliverable": files, valid range, grades per port / block, the pin
    list, provenance, and the .scs / .va text (the server trims it to a readable size). */
-function gradeCls(g){ return { green:"b-ok", yellow:"b-warn", red:"b-bad" }[g] || "b-mute"; }
+function diffGradeCls(g){ return { green:"b-ok", yellow:"b-warn", red:"b-bad" }[g] || "b-mute"; }
 function deliverDiff(dv){
   var key = "ddiff:" + dv.stamp;
   var r = need(key, "/api/p/" + P() + "/deliverables/" + encodeURIComponent(dv.stamp) + "/diff", "deliver");
@@ -2934,8 +2934,8 @@ function deliverDiff(dv){
   out.push(sec("Grades per port and block") + (gr.length
     ? '<table class="t"><thead><tr><th>port</th><th>corner</th><th>block</th><th>before</th><th>now</th></tr></thead><tbody>'
       + gr.map(function(g){ return '<tr><td class="mono">' + esc(g.port) + "</td><td>" + esc(g.corner) + "</td><td>"
-        + esc(g.block) + '</td><td><span class="badge ' + gradeCls(g.a) + '">' + esc(g.a || "absent") + "</span></td>"
-        + '<td><span class="badge ' + gradeCls(g.b) + '">' + esc(g.b || "absent") + "</span></td></tr>"; }).join("")
+        + esc(g.block) + '</td><td><span class="badge ' + diffGradeCls(g.a) + '">' + esc(g.a || "absent") + "</span></td>"
+        + '<td><span class="badge ' + diffGradeCls(g.b) + '">' + esc(g.b || "absent") + "</span></td></tr>"; }).join("")
       + "</tbody></table>"
     : '<div class="hint">unchanged</div>'));
   var pn = x.pins || {};

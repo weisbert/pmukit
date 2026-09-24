@@ -439,9 +439,15 @@ def default_off(block: str, port: str, port_type=None, ls_default_on=()) -> bool
 
     Only the `ls` tier has a switch (`load_en_<rail>`), and it defaults on only for the rails
     that passed the HB health check (`ls_default_on`, which lists rails; a `load_en_<rail>`
-    spelling is accepted too).  Every other tier is what the delivered model does by default.
+    spelling is accepted too).  The `en` tier (the EN ramp) is always off: it is not emitted.
+    Every other tier is what the delivered model does by default.
     """
-    if _tier(block, port_type) != "ls":
+    tier = _tier(block, port_type)
+    if tier == "en":
+        # The EN ramp is fitted but never emitted: EN is a pass-through pin of the delivered
+        # model (contract 4), so no consumer ever meets this block.
+        return True
+    if tier != "ls":
         return False
     on = {str(x) for x in (ls_default_on or ())}
     return str(port) not in on and f"load_en_{port}" not in on
