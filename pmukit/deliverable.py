@@ -7,6 +7,7 @@
         report.md                  per-corner per-block grades, HB health check, what never ran
         grades.json                machine-readable sidecar of report.md (so diff never parses MD)
         provenance.json            config/dataset/spec sha, pmukit version, TB state, date
+        interface.json             the PMU's pins in order, the pass-through ones, the instance line
 
 This module owns the CONTAINER, not the model math: the directory layout, the section library,
 the envelope, the provenance header repeated inside every .va, the report renderer, and reading
@@ -60,6 +61,7 @@ REPORT_NAME = "report.md"
 GRADES_NAME = "grades.json"
 ENVELOPE_NAME = "envelope.json"
 PROVENANCE_NAME = "provenance.json"
+INTERFACE_NAME = "interface.json"
 
 
 # --------------------------------------------------------------------------- helpers
@@ -425,19 +427,33 @@ class DeliverableWriter:
     # -- report -----------------------------------------------------------
     def write_report(self, *, envelope: Envelope, grades: list[Grade],
                      hb_check: dict | None = None, not_run: list[str],
-                     stubs: list[str] | None = None) -> pathlib.Path:
-        """Renders report.md plus its machine-readable sidecar grades.json."""
+                     stubs: list[str] | None = None,
+                     pins: list[dict] | None = None) -> pathlib.Path:
+        """Renders report.md plus its machine-readable sidecar grades.json.
+
+        `pins` is the module's pin list in the PMU's order ({pin, modeled, what, role}); the
+        report says which pins are pass-through and what that means."""
         grades = [g if isinstance(g, Grade) else Grade.from_json(g) for g in grades]
         not_run = [str(x) for x in (not_run or [])]
         stubs = [str(x) for x in (stubs or [])]
+        pins = [dict(p) for p in (pins or [])]
         text = render_report(project=self.project, stamp=self.stamp, envelope=envelope,
-                             grades=grades, hb_check=hb_check, not_run=not_run, stubs=stubs)
+                             grades=grades, hb_check=hb_check, not_run=not_run, stubs=stubs,
+                             pins=pins)
         jsonio.write(self.path / GRADES_NAME, {
             "project": self.project, "stamp": self.stamp,
             "grades": [g.to_json() for g in grades],
             "hb_check": hb_check, "not_run": not_run, "stubs": stubs,
+            "pass_through": [p.get("pin") for p in pins if not p.get("modeled", True)],
         })
         return self._write(REPORT_NAME, text)
+
+    def write_interface(self, interface: dict) -> pathlib.Path:
+        """interface.json: how the consumer instantiates the model -- the PMU's pins in order,
+        which are pass-through, and the instance line per corner (the Deliver screen shows it).
+        It carries the testbench's instance and net names, so it is never excerpted into git,
+        exactly like the .scs whose comments say the same."""
+        return jsonio.write(self.path / INTERFACE_NAME, interface)
 
     # -- close ------------------------------------------------------------
     def finish(self) -> pathlib.Path:
@@ -499,8 +515,33 @@ def _md_cell(text: str) -> str:
     return _oneline(text).replace("|", "/") or "--"
 
 
+def _pins_section(pins: list[dict]) -> list[str]:
+    """Contract 4: the model has the PMU's pins in the PMU's order. Say which ones are only
+    declared -- a consumer who drives EN and sees nothing happen must find the reason here."""
+    through = [p for p in pins if not p.get("modeled", True)]
+    out = ["## Pins", "",
+           "The model has the same pins, in the same order, as the PMU subcircuit: replace the "
+           "PMU's master with the model and keep the instance's wiring.", "",
+           "| # | pin | in the model |", "|---|---|---|"]
+    for i, p in enumerate(pins, 1):
+        mark = "**pass-through:** " if not p.get("modeled", True) else ""
+        out.append(f"| {i} | {_md_cell(p.get('pin', ''))} | {mark}{_md_cell(p.get('what', ''))} |")
+    out.append("")
+    if through:
+        out.append(f"- **Pass-through pins** ({', '.join(str(p.get('pin')) for p in through)}): "
+                   "declared so the instance wires up exactly like the PMU, but NOT modeled. "
+                   "Whatever the bench drives onto them has no effect on the model; each is tied "
+                   "to the model's ground through 1 GOhm so it never floats.")
+        if any(p.get("role") == "en" for p in through):
+            out.append("- **EN has no effect:** the model is always on. Driving EN low in the "
+                       "system bench does not turn the rails or the biases off.")
+        out.append("")
+    return out
+
+
 def render_report(*, project: str, stamp: str, envelope: Envelope, grades: list[Grade],
-                  hb_check: dict | None, not_run: list[str], stubs: list[str]) -> str:
+                  hb_check: dict | None, not_run: list[str], stubs: list[str],
+                  pins: list[dict] | None = None) -> str:
     """report.md as CONTRACTS.md section 0c and section 4 describe it."""
     out = _fixed_paragraph(project, envelope, not_run, stubs)
     out += [f"Deliverable stamp `{stamp}`. Anything outside the valid range above is marked "
@@ -530,6 +571,10 @@ def render_report(*, project: str, stamp: str, envelope: Envelope, grades: list[
         out.append(f"- **RED:** {port} -- stub, not modeled. The pin is emitted as an ideal "
                    f"source at its DC value.")
     out.append("")
+
+    # 3b -- the pins: the same pins in the same order as the PMU, and which ones do nothing
+    if pins:
+        out += _pins_section(pins)
 
     # 4 -- one line per corner per rail, no internal scores
     out += ["## Trust per corner and rail", "",
@@ -684,6 +729,18 @@ class Deliverable:
         if not p.is_file():
             return []
         return [Grade.from_json(g) for g in jsonio.read(p).get("grades", [])]
+
+    def interface(self) -> dict | None:
+        """interface.json (the pins and the instance line), or None for a deliverable written
+        before pmukit recorded it -- the caller then has no instance line to show, not a guess."""
+        p = self.path / INTERFACE_NAME
+        if not p.is_file():
+            return None
+        try:
+            d = jsonio.read(p)
+        except (OSError, ValueError):
+            return None
+        return d if isinstance(d, dict) else None
 
     def _file_shas(self) -> dict[str, str]:
         return {n: jsonio.sha_file(self.path / n, 16) for n in self.files()}

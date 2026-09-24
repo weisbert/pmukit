@@ -30,6 +30,11 @@ parameters VSET=3                          // 输出档位变量，工具按 vse
 include "<pdk>/toplevel.scs" section=tt    // 带 section= 的 PDK include，工具按 corners 逐角改写
 ```
 
+**相对路径的 include**（`include "pdk/rc.scs"`、`ahdl_include "foo.va"`）按**你导出网表的那个目录**
+解析。每次仿真的网表写在它自己的 run 目录里（`$WORK_ROOT/pmukit/<项目>/runs/<id>/`），所以工具把
+这些行改成绝对路径，配方里看得到。ADE 写的裸名 `include "toplevel.scs"` 在网表旁边找不到，是仿真时靠
+`-I $MODEL_ROOT/alps` 找的，工具不动它；绝对路径也不动。
+
 **档位变量叫什么由你定**：你的 PMU 里控制输出档位的设计变量叫 `vout_sel` 就写 `vout_sel`，
 不用改名成 `VSET`。告诉工具它的名字：`pmukit check/new ... --vset-param vout_sel`
 （New 屏 “code var” 下拉框从网表的 `parameters` 里选）。不指定就当它叫 `VSET`。

@@ -518,6 +518,7 @@ class DerivedConfig:
     grounds: dict = field(default_factory=dict)
     en: dict = field(default_factory=dict)
     stubs: dict = field(default_factory=dict)
+    interface: dict = field(default_factory=dict)
     ignored: list = field(default_factory=list)
     loads: dict = field(default_factory=dict)
     transient: dict = field(default_factory=dict)
@@ -527,8 +528,8 @@ class DerivedConfig:
     site: dict = field(default_factory=dict)
 
     _FIELDS = ("project", "config_sha", "process", "temps_c", "dc_temp_sweep", "vset", "supply",
-               "rails", "biases", "grounds", "en", "stubs", "ignored", "loads", "transient",
-               "freq", "noise", "grouping", "site")
+               "rails", "biases", "grounds", "en", "stubs", "interface", "ignored", "loads",
+               "transient", "freq", "noise", "grouping", "site")
 
     def to_dict(self) -> dict:
         """What gets written to $PMUKIT_DATA/<project>/derived.json."""
@@ -605,7 +606,8 @@ def _pin_table(pins) -> dict[str, dict]:
             out[str(name)] = dict(entry)
         else:
             out[str(name)] = {k: getattr(entry, k) for k in
-                              ("role", "net", "gnd", "src", "dc", "fate", "ilimit")
+                              ("role", "net", "gnd", "src", "dc", "fate", "ilimit", "index",
+                               "is_ground")
                               if hasattr(entry, k)}
     return out
 
@@ -764,6 +766,24 @@ def derive(cfg: ProjectConfig, pins=None, site=None) -> DerivedConfig:
     d.grounds = {"by_pin": grounds, "nets": sorted(set(grounds.values())),
                  "provenance": "the ground net wired to each pin, read from the netlist "
                                "(0b row: split grounds)"}
+
+    # -- the PMU's own pin list, in ITS order ---------------------------------
+    # Contract 4: the delivered module has the PMU's pins in the PMU's order, so the consumer
+    # swaps the cell without rewiring. Every pin is here -- grounds and role-less pins too.
+    def _pos(item):
+        idx = item[1].get("index")
+        return int(idx) if isinstance(idx, int) and not isinstance(idx, bool) else 1 << 30
+
+    order = sorted(table.items(), key=_pos)                 # stable: no index -> table order
+    d.interface = {
+        "inst": str(getattr(pins, "pmu_inst", "") or ""),
+        "master": str(getattr(pins, "pmu_master", "") or ""),
+        "pins": [{"pin": pin, "index": i, "net": e.get("net"),
+                  "role": str(e.get("role") or "none"), "fate": _fate(cfg, pin, e),
+                  "ground": bool(e.get("is_ground"))} for i, (pin, e) in enumerate(order)],
+        "provenance": "the PMU subcircuit's port list in its own order, with the testbench net on "
+                      "each pin -- the delivered module declares exactly these pins in this "
+                      "order (contract 4)"}
 
     # -- supply ---------------------------------------------------------------
     nominal = [float(v["nominal_v"]) for v in supply_pins.values() if _is_num(v.get("nominal_v"))]

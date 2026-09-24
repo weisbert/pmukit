@@ -2193,17 +2193,35 @@ SCREENS.deliver = {
       '<table class="t"><thead><tr><th></th><th>File</th><th>What</th><th class="num">Size</th>'
       + "<th>sha</th></tr></thead><tbody>" + rows + "</tbody></table>",
       { flush: true, right: '<div class="rowflex">' + stamps + "</div>" });
-    var incl = 'include "' + dv.path + "/" + (dv.files.filter(function(f){
-        return /\.scs$/.test(f.name); })[0] || {}).name + '" section=' +
-      ((dv.envelope.corners || ["tt"])[0]);
+    var scsName = (dv.files.filter(function(f){ return /\.scs$/.test(f.name); })[0] || {}).name;
+    var corner0 = (dv.envelope.corners || ["tt"])[0];
+    var incl = 'include "' + dv.path + "/" + scsName + '" section=' + corner0;
+    // The instance line comes FROM the deliverable (interface.json): the PMU's own instance,
+    // its nets on the PMU's pins in the PMU's order, with the model as master.
+    var u = dv.use || null;
+    var inst = u && u.instance ? (u.instance[corner0] || u.instance[Object.keys(u.instance)[0]] || "") : "";
+    var through = (u && u.pass_through) || [];
+    var sw = (u && u.params && u.params.load_en) || [];
+    var instText = !inst
+      ? "// this deliverable predates interface.json -- its instance template is in the comments of "
+        + (scsName || "the .scs library") + ". Deliver again to see the instance line here."
+      : (u.pmu_order
+          ? "// your " + (u.pmu_inst || "PMU") + " instance with the model as master: the same pins, in the same order, as "
+            + (u.pmu_master || "your PMU") + " -- no rewiring\n"
+          : "// pins: supply, rails, biases, stubs, grounds -- NOT your PMU's order (re-read the netlist and deliver again)\n")
+        + inst
+        + (through.length ? "\n// pass-through (declared, not modeled -- driving them has no effect): " + through.join(" ") : "")
+        + (sw.length ? "\n// per-rail large-signal switches (instance parameters, off unless set): " + sw.join(" ") : "");
+    var nCorners = (dv.envelope.corners || []).length;
     var use = panel("Use it in your testbench", "",
-      '<div class="code wrap">' + esc(incl) + "\n\n"
-      + esc("// instance: the same pins as your PMU, plus the per-rail switches\n"
-            + "PMU_TOP (...) " + (dv.files[0] || {}).name.replace(/\.scs$/, "") + "  vset=3")
-      + "</div>"
+      '<div class="code wrap">' + esc(incl) + "\n\n" + esc(instText) + "</div>"
       + '<div class="rowflex" style="margin-top:8px"><button class="btn sm" data-act="'
       + regAction(function(){ copy(incl); }) + '">' + ICON.copy + " Copy the include line</button>"
+      + (inst ? '<button class="btn sm" data-act="' + regAction(function(){ copy(inst); }) + '">'
+        + ICON.copy + " Copy the instance line</button>" : "")
       + '<span class="hint">Temperature comes from your <span class="mono">options temp=</span>. '
+      + (inst && nCorners > 1 ? "The master names the corner: with <span class=\"mono\">section=</span> another corner, use that corner's module ("
+        + esc(Object.keys((u && u.modules) || {}).map(function(c){ return u.modules[c]; }).join(", ")) + "). " : "")
       + "Anything outside envelope.json is reported, never silently extrapolated.</span></div>",
       { style: "flex:none" });
     var body;

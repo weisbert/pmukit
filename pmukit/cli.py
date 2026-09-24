@@ -78,7 +78,11 @@ def _netlist_of(cfg, d: pathlib.Path):
             if (base / p).exists():
                 p = base / p
                 break
-    return nlmod.Netlist.from_file(p)
+    nl = nlmod.Netlist.from_file(p)
+    # A project the web shell made points at its COPY of the netlist; the original's directory
+    # is what the relative includes mean (the same origin the server sets).
+    nl.origin = nlmod.recorded_origin(p)
+    return nl
 
 
 def _plan_of(cfg, der, d: pathlib.Path, *, site=None):
@@ -458,26 +462,22 @@ def cmd_plan(a) -> int:
     return 0
 
 
-def _aux_for(cfg, d: pathlib.Path) -> list[pathlib.Path]:
+def _aux_for(cfg, d: pathlib.Path, site=None) -> list[pathlib.Path]:
     """Everything a run directory needs besides input.scs -- the netlist's relative includes.
 
     A testbench normally includes its PDK by a RELATIVE path (`include "pdk/toplevel.scs"`). The
     run directory is somewhere else (a scratch dir on the VM, a netlist dir on the queue), so
     unless those files travel with it the simulator answers
-    `ERROR (SFE-868): Can not open input file 'pdk/toplevel.scs'`. Absolute includes are left
-    alone -- they resolve on the far side or they do not, and copying a whole PDK would be worse.
+    `ERROR (SFE-868): Can not open input file 'pdk/toplevel.scs'`. Where the simulation sees
+    this filesystem the plan makes those lines absolute instead (plan.absolute_includes), so
+    only a run shipped to another host (spectre_ssh) needs the trees copied. Absolute includes
+    are left alone -- they resolve on the far side or they do not, and copying a whole PDK would
+    be worse.
     """
-    nl = _netlist_of(cfg, d)
-    base = pathlib.Path(nl.path).resolve().parent if nl.path else pathlib.Path.cwd()
-    out: list[pathlib.Path] = []
-    for file_path, _section in nl.includes():
-        p = pathlib.Path(file_path)
-        if p.is_absolute():
-            continue
-        top = base / p.parts[0]              # copy the whole `pdk/` tree, not one file of it
-        if top.exists() and top not in out:
-            out.append(top)
-    return out
+    planmod = _need("plan", "run")
+    if planmod.absolute_includes(site):
+        return []
+    return _netlist_of(cfg, d).include_trees()
 
 
 def cmd_run(a) -> int:
@@ -498,7 +498,7 @@ def cmd_run(a) -> int:
           else dsmod.Dataset.create(dpath, project=cfg.project, config_sha=cfg.sha(),
                                     dims=_dims_for(der, plan)))
     runner = rmod.Runner(cfg.project, plan, led, site, dataset=ds,
-                         jobs=a.jobs, aux=_aux_for(cfg, d))       # run dirs: paths.runs_dir
+                         jobs=a.jobs, aux=_aux_for(cfg, d, site))  # run dirs: paths.runs_dir
     result = runner.run_all(resume=not a.no_resume,
                             on_event=None if a.json else _progress)
     ds.close()

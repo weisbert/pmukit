@@ -119,9 +119,13 @@ def _analysis(t: dict, harmonics: int) -> list[str]:
 
 def model_deck(built: dict, derived, *, va_name: str, rail: str, t: dict, vset=None,
                harmonics: int = HARMONICS, temp_c: float = 25.0) -> str:
-    """The oscillator powered THROUGH the emitted model: its centre tap IS the rail pin."""
-    grounds = set(built["grounds"])
-    nets = ["0" if p in grounds else p for p in built["ports"]]
+    """The oscillator powered THROUGH the emitted model: its centre tap IS the rail pin.
+
+    The instance is positional over the module's ports, which are the PMU's pins in the PMU's
+    order; a pass-through pin (EN, a test pin) gets a net of its own and is held by the
+    module's internal tie, exactly as it would be in a consumer bench that leaves it open."""
+    from ..emit.va import bench_nets
+    nets = bench_nets(built)
     params = [f"vset={int(vset)}"] if vset is not None else []
     params += [f"load_en_{p}=0" for p in built["ls_ports"]]
 

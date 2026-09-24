@@ -35,10 +35,12 @@ New here:
 from __future__ import annotations
 
 import collections
+import os
 import pathlib
 import re
 from dataclasses import dataclass, field
 
+from . import jsonio
 from .errors import PmuError
 from .jsonio import sha_bytes
 
@@ -90,6 +92,23 @@ def parse_number(tok: str) -> float | None:
     except ValueError:
         return None
     return v * _SUFFIX.get(m.group(2), 1.0) if m.group(2) else v
+
+
+def recorded_origin(copy_path) -> str:
+    """The ORIGINAL netlist path recorded beside a project's copy of it, or ''.
+
+    The web shell copies the user's netlist to `<project>/netlists/input.scs` and writes where
+    it came from into `source.json` next to it. Whoever reads that copy (the CLI as well as the
+    server) sets `Netlist.origin` from this, so a relative include keeps meaning what it meant
+    next to the exported file."""
+    meta = pathlib.Path(copy_path).parent / "source.json"
+    if not meta.is_file():
+        return ""
+    try:
+        d = jsonio.read(meta)
+    except (OSError, ValueError):
+        return ""
+    return str(d.get("path") or "") if isinstance(d, dict) else ""
 
 
 # ---------------------------------------------------------------------- base-netlist parsing
@@ -855,6 +874,109 @@ class Netlist:
             if base.is_file():
                 return base
         return None
+
+    # ---- relative includes in the run decks
+    def _netlist_dirs(self) -> list[pathlib.Path]:
+        """Where a relative include line was written relative to: the ORIGINAL netlist's
+        directory, then this copy's. Never the cwd and never the PDK search path -- a bare
+        `toplevel.scs` found through `-I` is the simulator's business, not a file of this deck.
+
+        `abspath`, not `resolve`: a workarea reached through a symlink keeps the path the user
+        typed, which is the one that also exists on the queue's compute nodes."""
+        out: list[pathlib.Path] = []
+        for p in (self.origin, self.path):
+            if p:
+                d = pathlib.Path(os.path.abspath(p)).parent
+                if d not in out:
+                    out.append(d)
+        return out
+
+    @staticmethod
+    def _is_relative(file_path: str) -> bool:
+        """`pdk/rc.scs`, `../m.scs`, `foo.va` -- not `/pdk/x.scs`, `C:/x`, `$PDK/x`, `~/x`.
+        Both path flavours are asked, so a Linux path tested on Windows is still absolute."""
+        f = str(file_path).strip()
+        return bool(f) and not (f.startswith(("$", "~", "/", "\\"))
+                                or pathlib.PurePosixPath(f).is_absolute()
+                                or pathlib.PureWindowsPath(f).is_absolute())
+
+    def local_include(self, file_path: str) -> pathlib.Path | None:
+        """The file a RELATIVE include line names, next to the netlist; None when it is not there
+        (or the line is absolute, which is left exactly as the user wrote it)."""
+        if not self._is_relative(file_path):
+            return None
+        for base in self._netlist_dirs():
+            hit = pathlib.Path(os.path.normpath(base / file_path))
+            if hit.is_file():
+                return hit
+        return None
+
+    def _top_includes(self) -> list[str]:
+        """Every top-level `include`/`ahdl_include` path, in file order, each once."""
+        out: list[str] = []
+        for logical, _phys, d in _scoped_logical_lines(self.text):
+            s = logical.strip()
+            if d != 0 or not s.startswith(("include ", "ahdl_include ")):
+                continue
+            m = re.search(r'["\']([^"\']+)["\']', s)
+            if m and m.group(1) not in out:
+                out.append(m.group(1))
+        return out
+
+    def absolutize_includes(self) -> list[str]:
+        """Point every relative include that exists next to the netlist at its absolute path.
+
+        A run's deck is written into its own run directory (`$WORK_ROOT/pmukit/<project>/runs/
+        <id>/`), far from where the user exported the netlist, so `include "pdk/rc.scs"` would
+        resolve against the wrong directory there. A bare name that is NOT next to the netlist
+        (ADE's `include "toplevel.scs"`, found through `-I $MODEL_ROOT/alps`) and an absolute
+        path are left untouched. Every include line naming the file is rewritten -- ADE writes
+        `toplevel.scs` three times -- and each rewrite is a recipe line.
+
+        Returns one "include <as written> -> <absolute>" per file, for the plan notes.
+        """
+        notes: list[str] = []
+        for f in self._top_includes():
+            hit = self.local_include(f)
+            if hit is None:
+                continue
+            target = hit.as_posix()
+            quoted = re.compile(r'(["\'])' + re.escape(f) + r"\1")
+
+            def match(logical, quoted=quoted):
+                s = logical.strip()
+                return s.startswith(("include ", "ahdl_include ")) and bool(quoted.search(s))
+
+            def swap(line, quoted=quoted, target=target):
+                return quoted.sub(lambda m: f"{m.group(1)}{target}{m.group(1)}", line, count=1)
+
+            n = 0
+            while self._rewrite_statement(match, swap):
+                n += 1
+            if n:
+                notes.append(f"include {f} -> {target}")
+        return notes
+
+    def include_trees(self) -> list[pathlib.Path]:
+        """What a run directory needs copied beside its deck for the relative includes to keep
+        resolving there: the top directory of each (`pdk/`, not one file of it), or the file.
+
+        Only for a run that leaves this filesystem (spectre_ssh ships the run dir to another
+        host, which cannot see this machine's paths); every other engine gets absolute includes
+        instead. A `../` include cannot be made to resolve inside the run dir and is skipped.
+        """
+        out: list[pathlib.Path] = []
+        for f in self._top_includes():
+            hit = self.local_include(f)
+            parts = pathlib.PurePosixPath(f.replace("\\", "/")).parts
+            if hit is None or not parts or parts[0] == "..":
+                continue
+            top = hit
+            for _ in parts[1:]:
+                top = top.parent
+            if top not in out:
+                out.append(top)
+        return out
 
     def section_names(self, file_path: str) -> set[str] | None:
         """The `section <name>` declarations inside an included file, or None if unreadable.

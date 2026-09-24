@@ -5,9 +5,15 @@
 
 What the module looks like
 
-    module PMU_<project>_<corner>(<supply pins>, <rail pins>, <bias pins>, <stub pins>,
-                                  <ground pins>);
+    module PMU_<project>_<corner>(<every pin of the PMU subcircuit, in ITS order>);
 
+  * the module is PIN-COMPATIBLE with the PMU (contract 4): the consumer swaps the cell and keeps
+    the wiring.  Modeled pins behave as below; a pin the model has nothing for (a role-less
+    TESTMODE, the EN pin -- this model has no enable behaviour, it is always on -- a rail that
+    could not be emitted, a ground no block returns to) is a PASS-THROUGH pin: declared, and tied
+    to the module ground through `PASS_THROUGH_G` so it never floats.  `derived.interface` is
+    where the order comes from; an older derived config without it falls back to
+    supply / rails / biases / stubs / grounds and says so.
   * every rail and every bias returns to ITS OWN ground pin, read from
     `derived.grounds["by_pin"]`.  The module ground is a real PIN, never an implicit 0: a
     previous emitted module floated to -100 MV when its VSS was not tied.
@@ -86,7 +92,8 @@ from .primitives import C_NOM, GM_SOFT, OFF_OHM, Netlist, balanced_gain, biquad_
 
 __all__ = ["emit_va", "build_va", "module_name", "normalize_fits", "select_cell",
            "blocks_by_port", "dc_by_vset", "PSRR_BANDLIMIT_MARGIN", "DOUBLET_CANCEL",
-           "DOUBLET_POLE", "FLICKER_PER_DECADE", "FLICKER_BAND_MARGIN_DECADES"]
+           "DOUBLET_POLE", "FLICKER_PER_DECADE", "FLICKER_BAND_MARGIN_DECADES",
+           "PASS_THROUGH_G", "bench_nets"]
 
 #: The `G0` band-limit corner is this multiple of the project's `care_up_to_hz`.
 #:
@@ -127,6 +134,15 @@ TRACKER_BELOW_BAND = 0.01
 #: The tracker resistor: large enough to give that corner with a small cap, small enough that its
 #: conductance does not underflow at the top harmonic.
 TRACKER_R = 1.0e10
+#: A PASS-THROUGH pin (declared so the instance wires up exactly like the PMU, but not modeled)
+#: is tied to the module ground through this conductance -- 1 GOhm.  Left with no contribution
+#: at all it would be a node with no DC path wherever the consumer's bench does not drive it
+#: (a TESTMODE left open, a ground pin not tied), which Spectre and ALPS flag as a floating node
+#: and can fail the DC solve on.  1e-9 S is the same tie the no-value stub already uses: a
+#: thousand times gmin, so the matrix is well conditioned, and 1 nA at 1 V, which no driver of
+#: an enable or test pin notices.  It is linear and frequency-flat, so HB never feels it.
+PASS_THROUGH_G = 1.0e-9
+_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 # --------------------------------------------------------------------------- input shaping
@@ -956,21 +972,36 @@ def build_va(port_fits, derived, corner: str, *, provenance=None, hb_robust: boo
 
     rails, biases = list(rail_blocks), list(bias_blocks)
     stubs = list(d.stubs or {})
-    for p in supplies + rails + biases + stubs:
-        nl.port(p)
+    modeled = supplies + rails + biases + stubs
+    iface = list(((d.interface or {}).get("pins")) or [])
+    rename = _port_names(iface, modeled)
+    by_pin = {p: rename.get(g, g) for p, g in by_pin.items()}
     grounds: list[str] = []
-    for p in supplies + rails + biases + stubs:
+    for p in modeled:
         g = by_pin.get(p)
         if g and g not in grounds:
             grounds.append(g)
     if not grounds:
-        grounds = ["VSS"]
-        nl.note("no per-pin ground net was recorded, so a single 'VSS' ground PIN is emitted. "
-                "The module ground must be a real pin: an emitted module whose VSS was not tied "
-                "once floated to -100 MV.")
-    for g in grounds:
-        nl.port(g)
+        pmu_grounds = [rename.get(e["pin"], e["pin"]) for e in iface if e.get("ground")]
+        if pmu_grounds:
+            grounds = pmu_grounds[:1]
+            nl.note(f"no per-pin ground was recorded, so every block returns to the PMU's first "
+                    f"ground pin {grounds[0]}.")
+        else:
+            grounds = ["VSS"]
+            nl.note("no per-pin ground net was recorded, so a single 'VSS' ground PIN is emitted. "
+                    "The module ground must be a real pin: an emitted module whose VSS was not "
+                    "tied once floated to -100 MV.")
+    interface = _interface(nl, iface, rename, d, supplies=supplies, rails=rails, biases=biases,
+                           stubs=stubs, grounds=grounds, by_pin=by_pin, skipped=skipped)
+    for e in interface:
+        nl.port(e["pin"])
     nl.ground = grounds[0]
+    pass_through = [e["pin"] for e in interface if not e["modeled"]]
+    for p in pass_through:
+        nl.gleak(f"{p}.nc", p, PASS_THROUGH_G, grounds[0],
+                 why=f"{p} is a pass-through pin (declared, not modeled) -- 1 GOhm so it never "
+                     f"floats")
 
     vrf = _supply_tracker(nl, supply, by_pin.get(supply, grounds[0]), f_start)
     if vset_codes != [None]:
@@ -996,11 +1027,118 @@ def build_va(port_fits, derived, corner: str, *, provenance=None, hb_robust: boo
 
     _check_hybrid_coupled(nl, rails)
     text = _assemble(nl, name, corner, head, d, provenance, hb_robust, tnom, supplies, rails,
-                     biases, stubs, grounds)
+                     biases, stubs, grounds, pass_through=pass_through,
+                     pmu_order=bool(iface))
     return {"text": text, "netlist": nl, "module": name, "corner": corner,
             "grounds": grounds, "supplies": supplies, "rails": rails, "biases": biases,
             "stubs": stubs, "skipped": skipped, "notes": nl.notes, "temp_c": tnom,
-            "ports": nl.ports, "ls_ports": ls_ports}
+            "ports": nl.ports, "ls_ports": ls_ports, "interface": interface,
+            "pass_through": pass_through,
+            "ground_pins": [e["pin"] for e in interface if e["ground"]]}
+
+
+def bench_nets(built: dict) -> list[str]:
+    """The nets a pmukit bench wires the module's ports to, positionally: every ground pin of the
+    PMU -- modeled or pass-through -- on global 0 (an emitted module whose VSS was left floating
+    went to -100 MV once), every other pin on a net of its own name."""
+    grounds = set(built.get("grounds") or ()) | set(built.get("ground_pins") or ())
+    return ["0" if p in grounds else p for p in built["ports"]]
+
+
+def _port_names(iface, modeled) -> dict:
+    """PMU pin -> module port name, for the pins whose name is not a Verilog-A identifier.
+
+    Only a pass-through pin is ever renamed, and only when it must be: a subcircuit pmukit could
+    not read leaves the pins named after their nets, so the grounds come out as `0`, `0#9`.
+    Binding is positional, so the name is cosmetic -- the POSITION is what must not change."""
+    taken = {str(e.get("pin")) for e in iface} | set(modeled)
+    out: dict[str, str] = {}
+    for e in iface:
+        pin = str(e.get("pin"))
+        if pin in modeled or _IDENT.match(pin):
+            continue
+        base = re.sub(r"[^A-Za-z0-9_]", "_", pin)
+        base = base if re.match(r"[A-Za-z_]", base) else f"pin{e.get('index', '')}_{base}"
+        cand, k = base, 1
+        while cand in taken:
+            k += 1
+            cand = f"{base}_{k}"
+        taken.add(cand)
+        out[pin] = cand
+    return out
+
+
+def _interface(nl: Netlist, iface, rename, d: DerivedConfig, *, supplies, rails, biases, stubs,
+               grounds, by_pin, skipped) -> list[dict]:
+    """The module's pins, in the PMU subcircuit's order, each saying what the model does with it.
+
+    Contract 4: the consumer swaps the PMU cell for the model WITHOUT rewiring -- same pins, same
+    order. A pin the model has nothing for (a role-less TESTMODE, an EN the model has no
+    behaviour for, a rail that could not be emitted, a ground no block returns to) is still
+    declared, as a PASS-THROUGH pin. A derived config written before the PMU's order was recorded
+    falls back to supply / rails / biases / stubs / grounds, and says so.
+    """
+    modeled = supplies + rails + biases + stubs
+    kind = {**{p: "supply" for p in supplies}, **{p: "rail" for p in rails},
+            **{p: "bias" for p in biases}, **{p: "stub" for p in stubs}}
+    returns: dict[str, list[str]] = {}
+    for p in modeled:
+        returns.setdefault(by_pin.get(p) or grounds[0], []).append(p)
+    not_emitted = dict(skipped)
+
+    def what(pin: str, e: dict) -> tuple[bool, str]:
+        if pin in kind:
+            k = kind[pin]
+            return True, {"supply": "supply -- the PSRR input", "rail": "rail -- modeled",
+                          "bias": "current bias -- modeled",
+                          "stub": "stub -- an ideal DC source, not characterized"}[k]
+        if pin in grounds:
+            return True, "ground -- the return of " + ", ".join(returns.get(pin) or ["the model"])
+        role = str(e.get("role") or "none")
+        if e.get("ground"):
+            why = "ground -- no modeled block returns to it"
+        elif role == "en":
+            why = ("enable -- the model has no enable behaviour: driving it has no effect and "
+                   "the model is always on")
+        elif pin in not_emitted:
+            why = f"{role} -- not emitted: {not_emitted[pin]}"
+        elif role in ("rail", "bias", "supply") and e.get("fate") == "ignore":
+            why = f"{role} marked ignore -- not modeled, nothing drives it"
+        elif role == "none":
+            why = "no role in the testbench -- not modeled"
+        else:
+            why = f"{role} -- not modeled"
+        return False, why
+
+    out: list[dict] = []
+    if not iface:
+        nl.note("the PMU's own pin order is not in the derived config (it was written before "
+                "pmukit recorded it), so the module lists supply, rails, biases, stubs, grounds. "
+                "Re-read the netlist and deliver again to get the PMU's pins in the PMU's order.")
+        for i, p in enumerate(modeled + [g for g in grounds if g not in modeled]):
+            ok, why = what(p, {})
+            out.append({"pin": p, "pmu_pin": p, "index": i, "net": None,
+                        "role": kind.get(p, "ground"), "modeled": ok, "ground": p in grounds,
+                        "what": why})
+        return out
+    for e in iface:
+        pmu_pin = str(e.get("pin"))
+        pin = rename.get(pmu_pin, pmu_pin)
+        ok, why = what(pin, e)
+        out.append({"pin": pin, "pmu_pin": pmu_pin, "index": len(out), "net": e.get("net"),
+                    "role": str(e.get("role") or "none"), "modeled": ok,
+                    "ground": bool(e.get("ground")) or pin in grounds, "what": why})
+    have = {e["pin"] for e in out}
+    for p in modeled + grounds:
+        if p not in have:
+            nl.note(f"{p} is not a pin of the PMU subcircuit; it is appended after the PMU's "
+                    f"pins, so a positional instance needs one more net at the end.")
+            ok, why = what(p, {})
+            out.append({"pin": p, "pmu_pin": None, "index": len(out), "net": None,
+                        "role": kind.get(p, "ground"), "modeled": ok, "ground": p in grounds,
+                        "what": why})
+            have.add(p)
+    return out
 
 
 def _stub_block(nl: Netlist, stubs, d: DerivedConfig, supply: str, by_pin, gnd0: str,
@@ -1062,8 +1200,17 @@ def _check_hybrid_coupled(nl: Netlist, rails) -> None:
 
 
 def _assemble(nl: Netlist, name, corner, head, d: DerivedConfig, provenance, hb_robust, tnom,
-              supplies, rails, biases, stubs, grounds) -> str:
+              supplies, rails, biases, stubs, grounds, *, pass_through=(),
+              pmu_order: bool = False) -> str:
     ports = nl.ports
+    master = str((d.interface or {}).get("master") or "the PMU")
+    order = (f"// Pins     : the SAME pins in the SAME order as {master} -- swap the cell, keep "
+             f"the wiring.\n" if pmu_order else
+             "// Pins     : supply, rails, biases, stubs, grounds (the PMU's own order was not "
+             "recorded).\n")
+    if pass_through:
+        order += (f"//            pass-through (declared, NOT modeled, 1 GOhm to "
+                  f"{grounds[0]}): {', '.join(pass_through)}\n")
     decl = nl.declarations()
     body = nl.text()
     f_max = float((d.freq or {}).get("stop_hz", 0.0) or 0.0)
@@ -1083,7 +1230,7 @@ def _assemble(nl: Netlist, name, corner, head, d: DerivedConfig, provenance, hb_
 // Interface: supply {', '.join(supplies)} | rails {', '.join(rails) or '(none)'} |
 //            biases {', '.join(biases) or '(none)'} | stubs {', '.join(stubs) or '(none)'} |
 //            ground pins {', '.join(grounds)} -- REAL pins, never an implicit 0
-// Baked at : process {corner}, {tnom:g} C nominal. Temperature is CONTINUOUS inside this corner
+{order}// Baked at : process {corner}, {tnom:g} C nominal. Temperature is CONTINUOUS inside this corner
 //            through the rail dVout/dT and the bias dI/dT terms; the small-signal blocks are
 //            baked at the nominal temperature and the rail's typical load.
 // Band     : characterized up to {f_max:.4g} Hz. Outside envelope.json the model extrapolates,

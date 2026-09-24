@@ -146,8 +146,8 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
     """Write the whole contract-4 deliverable and return its stamped directory.
 
     One `.va` per process corner, the Spectre section library, `envelope.json`, `report.md` (with
-    its `grades.json` sidecar), `provenance.json` and `hb_check.txt` -- the full conditioning
-    report.  `grades` comes from `pmukit.verify` (a later milestone); when it is not supplied the
+    its `grades.json` sidecar), `provenance.json`, `interface.json` (the PMU's pins in order and
+    the instance line) and `hb_check.txt` -- the full conditioning report.  `grades` comes from `pmukit.verify` (a later milestone); when it is not supplied the
     report says so honestly instead of inventing a verdict.
 
     The model is marked HB-ready only when the conditioning lint passes on EVERY corner and
@@ -176,6 +176,7 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
 
     writer = DeliverableWriter(project, root=root, stamp=stamp)
     modules, ports_by_corner, checks, notes, skipped = {}, {}, {}, [], {}
+    iface_by_corner: dict = {}
     rails_seen, ls_seen = [], []
     for corner in corner_list:
         built = build_va(fit, d, corner, provenance=prov, hb_robust=hb_robust, project=project,
@@ -183,6 +184,7 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
         writer.add_va(corner, built["text"], provenance=prov)
         modules[corner] = built["module"]
         ports_by_corner[corner] = built["ports"]
+        iface_by_corner[corner] = built["interface"]
         checks[corner] = lint.report(built["netlist"], f_max_hz=float(
             (d.freq or {}).get("stop_hz", 0.0) or 0.0), harmonic=harmonic,
             grounds=built["grounds"], label=built["module"])
@@ -198,8 +200,11 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
 
     env_notes = []
     if d.en:
-        env_notes.append("EN power-up ramp: usable, not signed off -- it only guarantees that a "
-                         "bench toggling EN does not blow up. Sign startup off on the real LDO.")
+        # The emitted module has no enable behaviour: EN is a pass-through pin (contract 4).
+        # The ramp numbers exist in the fit and the grades; the model does not play them.
+        env_notes.append("EN power-up ramp: characterized (usable, not signed off), but this "
+                         "model has no enable behaviour -- EN is a pass-through pin and the "
+                         "model is always on. Sign startup off on the real LDO.")
     off = [p for p in ls_seen if p not in set(ls_default_on)]
     if off:
         env_notes.append(
@@ -208,11 +213,20 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
             "HB first-step residual check, which lives in the verify milestone.")
     envelope = _envelope(d, rails_seen, corner_list, ls_default_on, env_notes,
                          ports=(set(rails_seen) | set(d.biases or {}) | set(d.en or {})))
+    iface = d.interface or {}
+    codes = [c for c in ((d.vset or {}).get("codes") or []) if c is not None]
+    params = [("vset", int(codes[0]))] if codes else []
     writer.write_scs(provenance=prov,
                      extra_lines=scs.extra_lines(modules, library=f"PMU_{project}",
                                                  ports_by_corner=ports_by_corner,
-                                                 envelope=envelope))
+                                                 envelope=envelope, params=params,
+                                                 interface_by_corner=iface_by_corner,
+                                                 inst=str(iface.get("inst") or ""),
+                                                 master=str(iface.get("master") or "")))
     writer.write_envelope(envelope)
+    pins = _pins_for_report(iface_by_corner)
+    writer.write_interface(_interface_record(project, modules, iface_by_corner, iface, params,
+                                             pins, ls_seen, bool(iface.get("pins"))))
 
     hb_ok = all(c["ok"] for c in checks.values()) and hb_robust
     hb_check = {"status": "pass" if hb_ok else "fail"}
@@ -229,7 +243,7 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
                                 for g in (grades or [])],
                         hb_check=hb_check,
                         not_run=list(not_run) + _never_run(skipped, corner_list),
-                        stubs=list(d.stubs or {}))
+                        stubs=list(d.stubs or {}), pins=pins)
     writer.write_provenance(prov)
     (writer.path / HB_CHECK_NAME).write_text(
         _hb_check_text(project, checks, notes, hb_robust), encoding="utf-8", newline="\n")
@@ -237,6 +251,43 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
                  {"project": project, "hb_ready": hb_ok, "hb_robust": hb_robust,
                   "corners": {k: v for k, v in checks.items()}, "notes": notes})
     return writer.finish()
+
+
+def _pins_for_report(iface_by_corner: dict) -> list:
+    """The module's pins for report.md: one row per pin, pass-through if it is in ANY corner
+    (a rail that could not be emitted at ss is pass-through there), with the corners named."""
+    corners = list(iface_by_corner)
+    if not corners:
+        return []
+    out = []
+    for e in iface_by_corner[corners[0]]:
+        where = [c for c in corners
+                 if any(x["pin"] == e["pin"] and not x["modeled"] for x in iface_by_corner[c])]
+        row = {"pin": e["pin"], "role": e["role"], "modeled": not where, "what": e["what"]}
+        if where:
+            hit = next(x for x in iface_by_corner[where[0]] if x["pin"] == e["pin"])
+            row["what"] = hit["what"] + ("" if len(where) == len(corners)
+                                         else f" (corners: {', '.join(where)})")
+        out.append(row)
+    return out
+
+
+def _interface_record(project: str, modules: dict, iface_by_corner: dict, iface: dict, params,
+                      pins: list, ls_ports: list, pmu_order: bool) -> dict:
+    """interface.json: what the Deliver screen shows under "Use it in your testbench"."""
+    inst = str(iface.get("inst") or "")
+    return {
+        "library": f"PMU_{project}",
+        "pmu_inst": inst, "pmu_master": str(iface.get("master") or ""),
+        "pmu_order": pmu_order,
+        "pins": pins,
+        "pass_through": [p["pin"] for p in pins if not p["modeled"]],
+        "modules": dict(modules),
+        "instance": {c: scs.instance_line(m, iface_by_corner.get(c) or [], inst=inst,
+                                          params=params) for c, m in modules.items()},
+        "params": {"vset": dict(params).get("vset"),
+                   "load_en": [f"load_en_{p}" for p in ls_ports]},
+    }
 
 
 def _never_run(skipped: dict, corners: list) -> list:

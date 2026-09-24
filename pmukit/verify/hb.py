@@ -302,8 +302,7 @@ def bench_deck(built: dict, derived, *, va_name: str, drive: dict, on: str = "",
     -100 MV once, and it is not doing it again (TOOL_FACTS).
     """
     module = built["module"]
-    grounds = set(built["grounds"])
-    nets = ["0" if p in grounds else p for p in built["ports"]]
+    nets = emit.va.bench_nets(built)
     params = [f"vset={int(vset)}"] if vset is not None else []
     for p in built["ls_ports"]:
         params.append(f"load_en_{p}={1 if f'load_en_{p}' == on else 0}")

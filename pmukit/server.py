@@ -761,7 +761,11 @@ class Project:
         from .plan import compile_plan, measured_cost
         cfg = self.config()
         der = self.derived()
-        key = (cfg.sha(), der.sha(), jsonio.sha_file(self.netlist_path(), 12))
+        # The origin and the engine are in the key too: the run decks carry the relative includes
+        # made absolute against the ORIGINAL netlist's directory, and only when the engine runs
+        # on this filesystem (plan.absolute_includes).
+        key = (cfg.sha(), der.sha(), jsonio.sha_file(self.netlist_path(), 12),
+               str((self.netlist_source() or {}).get("path") or ""), self.site().engine)
         with _CACHE_LOCK:
             hit = _PLAN_CACHE.get(self.name)
         if hit and hit[0] == key:
@@ -1138,6 +1142,30 @@ DEMO_FILES = [
     ("provenance.json", "provenance", 640,
      "config sha, dataset sha, pmukit version, testbench state at characterization"),
 ]
+
+#: The demo deliverable's interface.json: what "Use it in your testbench" shows.
+_DEMO_PINS = [("VDDA_1V0", "supply", True, "supply -- the PSRR input"),
+              ("VDD0P8_A", "rail", True, "rail -- modeled"),
+              ("VDD0P8_B", "rail", True, "rail -- modeled"),
+              ("VDD0P8_C", "rail", True, "stub -- an ideal DC source, not characterized"),
+              ("IB_PTAT", "bias", True, "current bias -- modeled"),
+              ("IB_POLY", "bias", True, "current bias -- modeled"),
+              ("EN", "en", False, "enable -- the model has no enable behaviour: driving it has "
+                                  "no effect and the model is always on"),
+              ("TESTMODE", "none", False, "no role in the testbench -- not modeled"),
+              ("VSS_A", "none", True, "ground -- the return of VDD0P8_A"),
+              ("VSS_B", "none", True, "ground -- the return of VDD0P8_B, VDD0P8_C"),
+              ("AGND", "none", True, "ground -- the return of VDDA_1V0, IB_PTAT, IB_POLY")]
+DEMO_USE = {
+    "library": "PMU_demo_pmu", "pmu_inst": "PMU_TOP", "pmu_master": "pmu_demo",
+    "pmu_order": True,
+    "pins": [{"pin": p, "role": r, "modeled": m, "what": w} for p, r, m, w in _DEMO_PINS],
+    "pass_through": ["EN", "TESTMODE"],
+    "modules": {c: f"PMU_demo_pmu_{c}" for c in ("tt", "ss", "ff")},
+    "instance": {c: "PMU_TOP (VDDA_1V0 VDD0P8_A VDD0P8_B VDD0P8_C IB_PTAT IB_POLY EN TESTMODE "
+                    f"0 0 0) PMU_demo_pmu_{c} vset=3" for c in ("tt", "ss", "ff")},
+    "params": {"vset": 3, "load_en": ["load_en_VDD0P8_A", "load_en_VDD0P8_B"]},
+}
 
 DEMO_FILE_BODY = {
     "PMU_demo_pmu.scs": """// pmukit 0.1.0 | demo_pmu | 2026-09-15T14:02 | config 5d8ca1 | dataset a91fc3
@@ -2146,8 +2174,11 @@ class Api:
             site = pr.site(engine, account)
             job.say(f"backend {site.engine}"
                     + (f", account {site.project_account}" if site.engine == "donau_alps" else ""), 0.12)
+            # A run shipped to another host keeps its relative includes (plan.absolute_includes)
+            # and needs the trees they point into copied beside the deck.
+            aux = pr.netlist().include_trees() if site.engine == "spectre_ssh" else []
             with pr.ledger() as led:
-                runner = Runner(pr.name, plan, led, site,
+                runner = Runner(pr.name, plan, led, site, aux=aux,
                                 root=(pathlib.Path(self.root) / pr.name / "runs"
                                       if self.root is not None else None))
                 result = runner.run_all(on_event=on_event)
@@ -2667,6 +2698,7 @@ class Api:
                 "created": "2026-09-15T14:02:11Z",
                 "files": [{"name": n, "kind": k, "bytes": b, "desc": d,
                            "sha": jsonio.sha([n, b], 8)} for n, k, b, d in DEMO_FILES],
+                "use": DEMO_USE,
                 "envelope": json.loads(DEMO_FILE_BODY["envelope.json"]),
                 "provenance": json.loads(DEMO_FILE_BODY["provenance.json"])}]}
         from .deliverable import Deliverable
@@ -2678,7 +2710,10 @@ class Api:
                 files.append({"name": name, "kind": _file_kind(name),
                               "bytes": p.stat().st_size, "sha": jsonio.sha_file(p, 12),
                               "desc": _file_desc(name)})
+            # `use`: how to instantiate THIS deliverable (the PMU's own instance line with the
+            # model as master); None for a deliverable written before it was recorded.
             out.append({"stamp": d.stamp, "path": str(d.path), "files": files,
+                        "use": _clean(d.interface()),
                         "envelope": _clean(d.envelope.to_json()),
                         "provenance": _clean(d.provenance.to_json()),
                         "created": _clean(d.provenance.to_json()).get("created", "")})
@@ -3022,6 +3057,8 @@ def _file_desc(name: str) -> str:
         return "config sha, dataset sha, pmukit version, testbench state at characterization"
     if name == "report.md":
         return "trust summary, per-cell grades, HB health check, not-run list"
+    if name == "interface.json":
+        return "the PMU's pins in its order, which are pass-through, the instance line per corner"
     if name.endswith(".scs"):
         return "library with one section per corner, each including its .va"
     if name.endswith(".va"):

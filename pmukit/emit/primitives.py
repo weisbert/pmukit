@@ -111,9 +111,12 @@ WHITELIST: dict[str, tuple[str, str]] = {
         "split only MOVES the extreme (8890 H -> 8.89 uF, wC = 4.3e6 S -> NaN); the gm-C form "
         "turns 4.3e6 S into 0.487 S with an identical transfer."),
     "gleak": (
-        "I(n,gnd) <+ Gleak*V(n,gnd) on an otherwise purely capacitive node",
+        "I(n,gnd) <+ Gleak*V(n,gnd) on an otherwise purely capacitive node, or on a "
+        "pass-through port",
         "a pure capacitive node has no DC path, so the DC solve has nothing to pin it with. The "
-        "biquad's design is corrected for the leak EXACTLY, so the transfer is unchanged."),
+        "biquad's design is corrected for the leak EXACTLY, so the transfer is unchanged. A "
+        "pass-through port (declared for pin compatibility, not modeled) gets the same tie, so a "
+        "bench that leaves it open has no floating node."),
     "band_limited_tap": (
         "a gm-C one-pole in front of an otherwise flat supply->output injection",
         "a flat-to-infinity G0 injection never rolls off: it is the only PSRR path still at full "
@@ -479,12 +482,12 @@ class Netlist:
         self._add("resistor", name + ".Rpl", (a, b), Rpl, "resistor", detail)
 
     def gleak(self, name: str, n: str, G: float, gnd: str | None = None,
-              detail: str = "") -> None:
-        """The DC path of an otherwise purely capacitive node."""
+              detail: str = "", *, why: str = "DC path for a capacitive node") -> None:
+        """The DC path of an otherwise purely capacitive node (or of a pass-through port)."""
         g = self._g(gnd)
         n = _check_node(n, name)
         self.body.append(f"    I({n}, {g}) <+ {num(G)}*V({n}, {g});"
-                         f"   // Gleak: DC path for a capacitive node"
+                         f"   // Gleak: {why}"
                          + (f" ({detail})" if detail else ""))
         self._add("conductance", name, (n, g), G, "gleak", detail)
 

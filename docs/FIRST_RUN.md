@@ -195,6 +195,11 @@ include "<交付目录>/PMU_<项目名>.scs" section=<角名>
 
 角名和 PDK 的角变量同名，所以切角就是切 section。
 
+实例：把原来 PMU 那一行的 master 换成模型，线一根不改——模型的脚和 PMU 一模一样、顺序一样
+（Deliver 屏 “Use it in your testbench” 和 `.scs` 注释里有现成的一行可复制）。模块名带角名
+（`PMU_<项目名>_<角名>`），切 section 时 master 跟着换。`report.md` 的 “Pins” 一节列出直通脚：
+声明了但没建模，比如 EN——模型没有使能行为，EN 怎么驱动都无效，模型始终是开的。
+
 ☐ 真 HB 收敛
 ☐ 结果和真电路对得上（至少量级和趋势）
 

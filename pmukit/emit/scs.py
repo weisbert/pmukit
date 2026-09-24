@@ -10,14 +10,24 @@ include line to their corner setup and switches corners by section name.
 """
 from __future__ import annotations
 
-__all__ = ["extra_lines", "instance_template", "usage"]
+__all__ = ["extra_lines", "instance_template", "instance_line", "usage"]
 
 
-def instance_template(module: str, ports, *, params=()) -> str:
+def instance_template(module: str, ports, *, params=(), name: str = "I_PMU") -> str:
     """The one-line Spectre instantiation the consumer copies."""
     pins = " ".join(str(p) for p in ports)
     tail = "".join(f" {k}={v}" for k, v in params)
-    return f"I_PMU ({pins}) {module}{tail}"
+    return f"{name} ({pins}) {module}{tail}"
+
+
+def instance_line(module: str, interface, *, inst: str = "", params=()) -> str:
+    """The consumer's OWN PMU instance line with the model as its master.
+
+    The module's ports are the PMU's pins in the PMU's order (contract 4), so the testbench's
+    instance -- its name and the net on every pin, as read from the netlist -- stays exactly as
+    it was; only the master changes. A pin whose net was not recorded shows its pin name."""
+    nets = [str(e.get("net") or e.get("pin")) for e in interface]
+    return instance_template(module, nets, params=params, name=inst or "I_PMU")
 
 
 def usage(library: str, section_names) -> list[str]:
@@ -33,7 +43,8 @@ def usage(library: str, section_names) -> list[str]:
 
 def extra_lines(modules: dict, *, library: str = "PMU_<project>",
                 ports_by_corner: dict | None = None, params=(), envelope=None,
-                common=()) -> dict:
+                common=(), interface_by_corner: dict | None = None, inst: str = "",
+                master: str = "") -> dict:
     """Build the `extra_lines` mapping `DeliverableWriter.write_scs` accepts.
 
     `modules` maps corner -> emitted module name.  Each section gets a comment naming the module
@@ -58,8 +69,17 @@ def extra_lines(modules: dict, *, library: str = "PMU_<project>",
     out["*"] = shared
     for corner, module in modules.items():
         ports = (ports_by_corner or {}).get(corner, [])
+        iface = (interface_by_corner or {}).get(corner) or []
         lines = [f"// module {module} (process corner {corner})"]
-        if ports:
+        if iface:
+            who = f"{master}'s" if master else "the PMU's"
+            lines.append(f"// pins, in {who} order: {' '.join(e['pin'] for e in iface)}")
+            through = [e["pin"] for e in iface if not e.get("modeled", True)]
+            if through:
+                lines.append(f"// pass-through (declared, not modeled): {' '.join(through)}")
+            lines.append("// your PMU instance, master swapped -- no rewiring:")
+            lines.append(f"// {instance_line(module, iface, inst=inst, params=params)}")
+        elif ports:
             lines.append(f"// {instance_template(module, ports, params=params)}")
         out[corner] = lines
     return out

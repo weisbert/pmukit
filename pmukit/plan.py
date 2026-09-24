@@ -394,12 +394,29 @@ def _apply_corner(nl: Netlist, cfg: ProjectConfig, corner: str) -> list[str]:
     return nl.set_section_all(sections)
 
 
+def absolute_includes(site) -> bool:
+    """Whether the run decks get their relative includes made absolute (Netlist.
+    absolutize_includes). Yes wherever the simulation sees this machine's filesystem -- the
+    Donau queue on the box, dry_run, fake. Not for spectre_ssh: it ships the run directory to
+    another host, where this machine's paths do not exist; there the include trees travel WITH
+    the run directory (`Netlist.include_trees`, the runner's `aux`) and the relative lines stay."""
+    return getattr(site, "engine", "") != "spectre_ssh"
+
+
 def _base_variant(base: Netlist, cfg: ProjectConfig, derived: DerivedConfig, corner: str,
-                  temp: float | None, code: int, state: LoadState) -> Netlist:
-    """The netlist every run of one cell starts from: corner, output code, temperature, load state."""
+                  temp: float | None, code: int, state: LoadState, *,
+                  absolute: bool = True) -> Netlist:
+    """The netlist every run of one cell starts from: corner, output code, temperature, load state.
+
+    The corner is applied to the includes AS WRITTEN (the corner map names them that way), and
+    only then are the relative ones made absolute: the deck is written into its own run
+    directory, where `include "pdk/rc.scs"` would no longer mean the file next to the netlist.
+    """
     nl = base.copy()
     nl.edits.clear()
     _apply_corner(nl, cfg, corner)      # notes surface once, via compile_plan's dry pass
+    if absolute:
+        nl.absolutize_includes()
     nl.set_param(cfg.vset_param, code)
     if temp is not None:
         nl.set_temperature(float(temp))
@@ -505,6 +522,7 @@ def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
         for note in _apply_corner(probe, cfg, corner):
             if note not in plan_notes:
                 plan_notes.append(note)
+    plan_notes += _include_notes(netlist, site)
 
     states = load_states(derived)
     nominal = nominal_state(states, derived)
@@ -594,6 +612,21 @@ def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
     return plan
 
 
+def _include_notes(netlist: Netlist, site) -> list[str]:
+    """What happens to the relative includes in the run decks -- said once, on the Plan screen."""
+    probe = netlist.copy()
+    moved = probe.absolutize_includes()
+    notes: list[str] = []
+    if absolute_includes(site):
+        notes += [f"{m} (relative to the netlist's directory; each run deck is written in its "
+                  "own run directory, where the relative path would not resolve)" for m in moved]
+    elif moved:
+        notes.append("relative includes kept relative (" + ", ".join(
+            m.split(" -> ")[0][len("include "):] for m in moved) + "): spectre_ssh runs on "
+            "another host, so their directories are copied into each run directory instead")
+    return notes
+
+
 def _group_id(b: dict) -> str:
     """Groups are what the user ticks: one per analysis and stimulus, across all cells."""
     if b["analysis"] == "ac":
@@ -638,7 +671,8 @@ def _build_run(cfg: ProjectConfig, derived: DerivedConfig, base: Netlist, b: dic
                site=None, pins: PinTable | None = None) -> PlannedRun:
     """Write the netlist variant for one bucket and wrap it in a ledger Run."""
     analysis, stim, state = b["analysis"], b["stimulus"], b["state"]
-    nl = _base_variant(base, cfg, derived, b["corner"], b["temp"], b["code"], state)
+    nl = _base_variant(base, cfg, derived, b["corner"], b["temp"], b["code"], state,
+                       absolute=absolute_includes(site))
     saves: list[str] = []
     analyses: list[str] = []
 
