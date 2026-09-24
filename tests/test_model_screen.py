@@ -55,9 +55,11 @@ def proj(tmp_path):
     return server.Api(root=tmp_path), d
 
 
-def _verify(d, grades=GRADES, hb=None, envelope=ENVELOPE):
+def _verify(d, grades=GRADES, hb=None, envelope=ENVELOPE, ls_on=()):
+    """`ls_on`: the rails whose load_en passed the HB check and so ships ON by default."""
     jsonio.write(d / "verify.json", {"project": "p1", "grades": grades, "envelope": envelope,
-                                     "hb_check": hb or {"status": "not_run", "notes": ["x"]}})
+                                     "hb_check": hb or {"status": "not_run", "notes": ["x"]},
+                                     "ls_default_on": list(ls_on)})
     # verify runs after the fit: make that ordering visible to the mtime check
     later = time.time() + 5
     os.utime(d / "verify.json", (later, later))
@@ -79,7 +81,7 @@ def test_a_per_corner_verify_grade_reaches_every_temperature_of_that_corner(proj
     """verify.json carries no temperature, so keying the lookup by the cell's temperature
     never found it: after verify the grid still said FIT everywhere."""
     api, d = proj
-    _verify(d)
+    _verify(d, ls_on=[RAIL])              # load_en passed HB: it ships on, so it counts
     g, cells = _grid(api)
     assert g["graded_by"] == "verify" and not g["why"]
     # zout (yellow) is fitted at both temperatures, load_en (red) only at 125 C
@@ -93,7 +95,7 @@ def test_a_temperature_specific_grade_wins_over_the_corner_one(proj):
     grades = [dict(g) for g in GRADES if g["block"] != "load_en"] + [
         {"port": RAIL, "corner": "tt", "temp_c": 125.0, "block": "load_en", "grade": "red"},
         {"port": RAIL, "corner": "tt", "temp_c": -40.0, "block": "load_en", "grade": "green"}]
-    _verify(d, grades)
+    _verify(d, grades, ls_on=[RAIL])
     _g, cells = _grid(api)
     assert cells == {("tt", -40.0): "yellow", ("tt", 125.0): "red"}
 
@@ -171,6 +173,105 @@ def test_a_temperature_law_is_drawn_linear_in_its_own_unit():
     assert server._curve_units("dc_temp", "rail")[0] == "V"
     assert server._curve_units("dc_temp", "bias")[0] == "A"
     assert server._curve_units("ac_zout", "rail")[0] == "ohm"
+
+
+# --------------------------------------------------------------------------- default-off blocks
+def test_a_block_that_ships_off_is_graded_and_named_but_does_not_colour_the_cell(proj):
+    """load_en is OFF in the delivered model until the HB check clears it. Its red is real and
+    stays on screen -- beside the cell, with the switch that turns it on -- but a consumer who
+    instantiates the model as delivered never meets it, so it must not paint the cell FAIL."""
+    api, d = proj
+    _verify(d)                                           # HB not run: every ls term is off
+    g, cells = _grid(api)
+    assert cells == {("tt", -40.0): "yellow", ("tt", 125.0): "yellow"}
+    hot = [c for c in g["rows"][0]["cells"] if c["temp_c"] == 125.0][0]
+    assert [o["block"] for o in hot["off"]] == ["load_en"]
+    off = hot["off"][0]
+    assert off["grade"] == "red" and off["switch"] == f"load_en_{RAIL}=1"
+    assert "off by default" in off["note"] and "FAIL" in off["note"]
+
+    c = api.model_cell("p1", RAIL, "tt", "125")
+    assert c["grade"] == "yellow"
+    assert [o["block"] for o in c["off_by_default"]] == ["load_en"]
+    row = [b for b in c["blocks"] if b["name"] == "load_en"][0]
+    assert row["default_off"] is True and row["grade"] == "red"
+    assert row["switch"] == f"load_en_{RAIL}=1" and "off by default" in row["off_note"]
+    assert all(not b["default_off"] for b in c["blocks"] if b["name"] != "load_en")
+
+    usable = {u["item"]: u["note"] for u in api.model_summary("p1")["usable_not_signoff"]}
+    assert "off by default" in usable[f"{RAIL}.load_en"]
+
+
+def test_once_hb_clears_the_term_it_counts_again(proj):
+    api, d = proj
+    _verify(d, hb={"status": "pass", "ls_default_on": [RAIL], "terms": []})
+    _g, cells = _grid(api)
+    assert cells[("tt", 125.0)] == "red"
+    assert api.model_cell("p1", RAIL, "tt", "125")["off_by_default"] == []
+
+
+# --------------------------------------------------------------------------- held reasons
+HELD_FIT = {"project": "p1", "ports": {RAIL: "rail"}, "dataset_sha": "abc", "fits": {
+    f"{RAIL}/zout/tt/25C/vset3/1.0e-03A": dict(
+        _bf("zout", {"process": "tt", "temp_c": 25.0, "vset": 3, "load_a": 1e-3}, 0.039),
+        params={"Ra": 0.05, "Rpl": 3.2e4}, identifiability={"unidentifiable": ["Rpl"]}),
+}}
+
+
+def test_a_held_grade_says_why_on_the_row_and_marks_the_grid(tmp_path):
+    """zout at 0.039 dB against a 1 dB limit shows MARG; the reason -- the data does not pin
+    Rpl -- used to live only in a hover tooltip."""
+    from pmukit.fit._base import BlockFit
+    from pmukit.verify import grades as G
+
+    d = tmp_path / "p1"
+    d.mkdir()
+    jsonio.write(d / "fit.json", HELD_FIT)
+    bf = BlockFit.from_dict(next(iter(HELD_FIT["fits"].values())))
+    grade, detail = G.grade_block(bf)
+    assert grade == "yellow" and G.is_held(detail)
+    _verify(d, [{"port": RAIL, "corner": "tt", "block": "zout", "grade": grade,
+                 "detail": detail, "score": 0.039}])
+    api = server.Api(root=tmp_path)
+
+    g = api.model_grades("p1")
+    cell = g["rows"][0]["cells"][0]
+    assert cell["grade"] == "yellow" and cell["held"] is True and cell["held_by"] == ["zout"]
+
+    c = api.model_cell("p1", RAIL, "tt", "25")
+    assert c["held"] is True
+    row = c["blocks"][0]
+    assert row["held"] is True and row["held_by"] == ["Rpl"]
+    assert row["reason"].startswith("held at yellow") and "Rpl" in row["reason"]
+    assert "held at yellow" in row["reason_full"]
+
+
+def test_a_non_green_row_carries_a_short_reason(proj):
+    api, d = proj
+    _verify(d, ls_on=[RAIL])
+    rows = api.model_cell("p1", RAIL, "tt", "125")["blocks"]
+    by = {b["name"]: b for b in rows}
+    assert by["load_en"]["reason"] == "outside the acceptance limit"
+    assert by["load_en"]["reason_full"]
+
+
+# --------------------------------------------------------------------------- chart axes
+def test_every_curve_has_a_concrete_unit_and_the_right_axis():
+    """A dB quantity drawn on a log axis is the log of a log. dB -> linear y; a magnitude
+    spanning decades -> log y; a DC law -> linear. No unit is 'A or V'."""
+    for (ptype, obs), (unit, label, scale) in server.CURVE_AXES.items():
+        assert unit and " or " not in unit and label, (ptype, obs)
+        assert scale in ("log", "db", "linear"), (ptype, obs)
+        assert (unit == "dB") == (scale == "db"), (ptype, obs)
+    assert server._curve_axis("ac_psrr", "rail")[2] == "db"
+    assert server._curve_axis("ac_zout", "rail")[2] == "log"
+    assert server._curve_axis("noise_v", "rail")[2] == "log"
+    assert server._curve_axis("noise_i", "bias")[2] == "log"
+    assert server._curve_axis("dc_temp", "rail")[2] == "linear"
+    # every observable the curve view draws has a row, for its own port type
+    for (ptype, block), obs in server.CURVE_OBSERVABLE.items():
+        assert (ptype, obs) in server.CURVE_AXES, (ptype, block)
+    assert server._to_db([1.0, 0.001, 0.0, None]) == [0.0, -60.0, None, None]
 
 
 # --------------------------------------------------------------------------- machine probes

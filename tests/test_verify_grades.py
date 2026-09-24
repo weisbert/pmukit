@@ -249,3 +249,63 @@ def test_a_block_nobody_planned_a_run_for_is_not_run():
 def test_grades_round_trip_through_json():
     for g in G.grade_project(result(bf(), bf(block="dc", metric="vout % RMS", score=0.1))):
         assert Grade.from_json(g.to_json()).to_json() == g.to_json()
+
+
+# --------------------------------------------------------------------------- as delivered
+def _off_case():
+    """VDD0P8_B: zout green, load_en red -- the fake engine's 208 % droop."""
+    return G.grade_project(result(
+        bf(port="VDD0P8_B", score=0.1),
+        bf(port="VDD0P8_B", block="load_en", metric="load-step droop % error", score=208.0),
+        ports={"VDD0P8_B": "rail"}))
+
+
+def test_a_block_that_ships_off_does_not_colour_the_rollup_but_is_reported():
+    """The headline is what the delivered model does BY DEFAULT: load_en ships switched off
+    until the HB check clears it, so its red is listed beside the cell, not averaged into it."""
+    rows = _off_case()
+    cell = G.rollup(rows)["VDD0P8_B"]["tt"]
+    assert cell["grade"] == "green" and cell["block"] == "zout"
+    [off] = cell["off_by_default"]
+    assert off["block"] == "load_en" and off["grade"] == "red"
+    assert off["switch"] == "load_en_VDD0P8_B=1"
+    assert off["note"].startswith("off by default: load_en FAIL")
+    assert not SCORE_RE.search(off["note"]), "the note lands in the rail table: no scores"
+    assert G.worst(rows) == "green"
+    text = G.rollup_table(rows)
+    assert "worst overall: green" in text
+    assert "Off by default" in text and "load_en_VDD0P8_B=1" in text
+
+
+def test_once_the_hb_check_clears_it_the_term_counts():
+    rows = _off_case()
+    for on in (["VDD0P8_B"], ["load_en_VDD0P8_B"]):
+        cell = G.rollup(rows, ls_default_on=on)["VDD0P8_B"]["tt"]
+        assert cell["grade"] == "red" and cell["block"] == "load_en"
+        assert cell["off_by_default"] == []
+        assert G.worst(rows, ls_default_on=on) == "red"
+
+
+def test_only_the_ls_tier_is_ever_default_off():
+    assert G.default_off("load_en", "VDD0P8_A", "rail")
+    assert G.default_off("load_en", "VDD0P8_A")                 # port type looked up
+    assert not G.default_off("load_en", "VDD0P8_A", "rail", ["VDD0P8_A"])
+    for block, pt in (("zout", "rail"), ("psrr", "bias"), ("idc", "bias"), ("ramp", "en"),
+                      ("no_sink", "rail")):
+        assert not G.default_off(block, "X", pt), block
+
+
+def test_a_held_grade_is_marked_and_carries_a_short_reason():
+    held = bf(score=0.039, ident={"unidentifiable": ["Rpl"]}, params={"Ra": 0.05, "Rpl": 3e4})
+    v = G.block_verdict(held)
+    assert v["grade"] == "yellow" and v["band"] == "green"
+    assert v["held"] and v["held_by"] == ["Rpl"]
+    assert v["reason"] == "held at yellow: the data does not pin Rpl"
+    assert G.is_held(v["detail"])
+    rows = G.grade_project(result(held))
+    cell = G.rollup(rows)["VDD0P8_A"]["tt"]
+    assert cell["held"] and cell["held_by"] == ["zout"]
+    plain = G.block_verdict(bf(score=2.0))
+    assert plain["grade"] == "yellow" and not plain["held"]
+    assert plain["reason"] == "past the green limit, still usable"
+    assert G.block_verdict(bf(score=0.1))["reason"] == ""

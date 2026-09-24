@@ -422,15 +422,45 @@ def test_17_the_curve_is_ground_truth_and_model_on_the_same_points(api):
             # says so in four parts rather than drawing something it cannot.
             assert "error" in c and c["error"]["do"], c
             continue
+        if c.get("empty"):
+            # one characterized temperature: the dc law is flat, and the payload says so
+            assert c["why"] and c["unit"], c
+            continue
         assert len(c["x"]) == len(c["gt"]["mag"]) == len(c["model"]["mag"]) > 0, \
             f"{b['name']}: the two sides are not on the same points"
         assert len(c["gt"]["phase_deg"]) == len(c["x"])
         assert c["source"].endswith("." + port), "the payload must name the measured variable"
-        assert c["unit"]
+        assert c["unit"] and " or " not in c["unit"]
         assert any(v is not None for v in c["model"]["mag"]), \
             f"{b['name']}: predict() produced nothing"
+        # a dB quantity is drawn on a LINEAR y axis, never as |H| on a log axis labelled dB
+        assert (c["unit"] == "dB") == bool(c["y_db"]), c["unit"]
+        if c["y_db"]:
+            assert c["y_log"] is False and c["y_scale"] == "linear"
+        elif b["name"] in ("zout", "noise", "yout", "psrr"):
+            assert c["y_log"] is True, f"{b['name']}: a magnitude spanning decades is log"
+        if b["name"] == "noise":
+            # the stored PSD and predict()'s amplitude must be drawn in ONE unit
+            assert c["unit"].endswith("/rtHz"), c["unit"]
+            pairs = [m / g for g, m in zip(c["gt"]["mag"], c["model"]["mag"]) if g and m]
+            pairs.sort()
+            assert pairs and 0.1 < pairs[len(pairs) // 2] < 10, "GT and model on one scale"
         drawn += 1
     assert drawn, "not one block of this cell could be drawn"
+
+    # the rail PSRR specifically: dB values (a transfer below 0 dB), linear axis
+    fit = json.loads((api.root / PROJECT / "fit.json").read_text(encoding="utf-8"))
+    rail = next(k for k, v in sorted(fit["ports"].items()) if v == "rail")
+    key = next(k for k, bf in sorted(fit["fits"].items())
+               if bf.get("port", k.split("/")[0]) == rail and "/psrr/" in k
+               and not bf.get("missing"))
+    q = urllib.parse.urlencode({"port": rail, "cell": "/".join(key.split("/")[2:]),
+                                "block": "psrr"})
+    c = api.need("GET", f"/api/p/{PROJECT}/model/curve?{q}")
+    assert c["unit"] == "dB" and c["y_db"] is True and c["y_log"] is False
+    vals = [v for v in c["gt"]["mag"] + c["model"]["mag"] if v is not None]
+    # a raw |H| is never negative; a supply rejection in dB is
+    assert vals and min(vals) < 0 and max(vals) < 20, "PSRR in dB of a V/V transfer, not |H|"
     STATE["curve"] = drawn
 
 
@@ -450,14 +480,28 @@ def test_18b_the_verify_colours_reach_the_grid_the_cell_and_the_tiles(api):
     """After verify the grid shows verify's colours -- not FIT everywhere -- and the tiles read
     what verify wrote: the HB check under `hb_check`, the envelope under its own keys."""
     requires("verify")
+    from pmukit.verify.grades import default_off
     ver = json.loads((api.root / PROJECT / "verify.json").read_text(encoding="utf-8"))
-    worst = {}
+    ls_on = ver.get("ls_default_on") or []
+    worst, off_bad = {}, set()
     rank = {"green": 0, "yellow": 1, "not_run": 2, "red": 3}
     for gr in ver["grades"]:
+        # the grid's colour is the model AS DELIVERED: a block that ships switched off is
+        # named beside the cell, never in its colour
+        if default_off(gr["block"], gr["port"], None, ls_on):
+            if gr["grade"] != "green":
+                off_bad.add((gr["port"], gr["block"]))
+            continue
         if rank.get(gr["grade"], 0) >= rank.get(worst.get(gr["port"], "green"), 0):
             worst[gr["port"]] = gr["grade"]
     g = api.need("GET", f"/api/p/{PROJECT}/model/grades")
     shown = {row["port"]: {c["grade"] for c in row["cells"]} for row in g["rows"]}
+    named = {(row["port"], o["block"]) for row in g["rows"] for c in row["cells"]
+             for o in c["off"]}
+    assert off_bad <= named, f"a default-off block that grades badly must be named: {off_bad}"
+    for port, grade in worst.items():
+        assert rank[max(shown.get(port, {"green"}), key=lambda x: rank.get(x, 0))] \
+            <= rank[grade], f"{port}: the grid is worse than any block that ships on"
     assert "fitted" not in set().union(*shown.values()), \
         f"verify ran, yet a cell still says only FIT: {shown}"
     assert not g["why"], "every block is graded, so the provisional banner must be gone"
