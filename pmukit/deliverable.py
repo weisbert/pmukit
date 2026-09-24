@@ -2,7 +2,7 @@
 
     $PMUKIT_DATA/<project>/deliver/<stamp>/
         PMU_<project>.scs          Spectre library: one `section` per process corner
-        PMU_<project>_<corner>.va  one Verilog-A per corner
+        PMU_<project>_<corner>.va  one Verilog-A per corner, every one defining module PMU_<project>
         envelope.json              validity envelope
         report.md                  per-corner per-block grades, HB health check, what never ran
         grades.json                machine-readable sidecar of report.md (so diff never parses MD)
@@ -83,11 +83,12 @@ def _num(x: float) -> str:
     return f"{float(x):g}"
 
 
-def _eng(x: float, unit: str) -> str:
+def eng(x: float, unit: str = "") -> str:
     """Engineering notation for the prose of report.md: 2e-06 A -> '2 uA', 1e+09 Hz -> '1 GHz'.
 
-    Only the human-read report uses it; envelope.json, grades.json and provenance.json keep
-    plain floats so a script reads exactly what was characterized."""
+    Only human-read text uses it (report.md, the conditioning lines of `pmukit.emit.lint`, the
+    .scs comments); envelope.json, grades.json and provenance.json keep plain floats so a script
+    reads exactly what was characterized."""
     v = float(x)
     if v == 0 or not math.isfinite(v):
         return f"{_num(v)} {unit}".strip()
@@ -97,6 +98,24 @@ def _eng(x: float, unit: str) -> str:
         if a >= 10.0 ** exp * (1 - 1e-12) or exp == -15:
             return f"{sign}{a / 10.0 ** exp:.4g} {prefix}{unit}".strip()
     return f"{_num(v)} {unit}".strip()                                 # pragma: no cover
+
+
+_eng = eng
+
+
+def ratio(x: float) -> str:
+    """A dimensionless ratio for human-read text: 1e+06 -> '1e6', 3.2e+07 -> '3.2e7', 250 -> '250'.
+
+    A range or a gain has no unit to hang an SI prefix on ('1 M' reads like a resistance), so it
+    keeps a power of ten -- without the '+0' of Python's float formatting."""
+    v = float(x)
+    if not math.isfinite(v):
+        return "n/a" if v != v else ("inf" if v > 0 else "-inf")
+    if v == 0 or 1e-3 <= abs(v) < 1e4:
+        return f"{v:.4g}"
+    mant, _, exp = f"{v:.3e}".partition("e")
+    mant = mant.rstrip("0").rstrip(".")
+    return f"{mant}e{int(exp)}"
 
 
 def _stamp_now() -> str:
@@ -401,6 +420,10 @@ class DeliverableWriter:
         matching `ahdl_include` line. The consumer adds ONE include line to their corner setup and
         switches corners by section name (CONTRACTS.md section 4 rule 4).
 
+        Every .va defines the same module name, which is only legal because each lives in its
+        own section: `include "<lib>.scs" section=<x>` makes Spectre read section <x> and skip
+        the others, so exactly one `ahdl_include` -- one definition -- is live.
+
         `extra_lines` maps a corner (or '*' for every section) to extra lines placed inside that
         section, e.g. a `parameters` line the emitter needs."""
         if not self._corners:
@@ -445,20 +468,29 @@ class DeliverableWriter:
     def write_report(self, *, envelope: Envelope, grades: list[Grade],
                      hb_check: dict | None = None, not_run: list[str],
                      stubs: list[str] | None = None,
-                     pins: list[dict] | None = None) -> pathlib.Path:
+                     pins: list[dict] | None = None, graded_by: str = "",
+                     provisional: str = "") -> pathlib.Path:
         """Renders report.md plus its machine-readable sidecar grades.json.
 
         `pins` is the module's pin list in the PMU's order ({pin, modeled, what, role}); the
-        report says which pins are pass-through and what that means."""
+        report says which pins are pass-through and what that means.
+
+        `graded_by` says where the grades came from ("verify" or "fit"); `provisional` is the
+        sentence saying why they are not verify's verdict on THIS fit (verify is older than the
+        fit, or never ran). Both land in grades.json, and `provisional` is printed in report.md
+        next to the stamp and above the trust table."""
         grades = [g if isinstance(g, Grade) else Grade.from_json(g) for g in grades]
         not_run = [str(x) for x in (not_run or [])]
         stubs = [str(x) for x in (stubs or [])]
         pins = [dict(p) for p in (pins or [])]
         text = render_report(project=self.project, stamp=self.stamp, envelope=envelope,
                              grades=grades, hb_check=hb_check, not_run=not_run, stubs=stubs,
-                             pins=pins)
+                             pins=pins, provisional=provisional)
         jsonio.write(self.path / GRADES_NAME, {
             "project": self.project, "stamp": self.stamp,
+            "graded_by": str(graded_by or ("fit" if provisional else
+                                           "verify" if grades else "")),
+            "provisional": str(provisional or ""),
             "grades": [g.to_json() for g in grades],
             "hb_check": hb_check, "not_run": not_run, "stubs": stubs,
             "pass_through": [p.get("pin") for p in pins if not p.get("modeled", True)],
@@ -561,11 +593,17 @@ def _pins_section(pins: list[dict]) -> list[str]:
 
 def render_report(*, project: str, stamp: str, envelope: Envelope, grades: list[Grade],
                   hb_check: dict | None, not_run: list[str], stubs: list[str],
-                  pins: list[dict] | None = None) -> str:
+                  pins: list[dict] | None = None, provisional: str = "") -> str:
     """report.md as CONTRACTS.md section 0c and section 4 describe it."""
     out = _fixed_paragraph(project, envelope, not_run, stubs)
     out += [f"Deliverable stamp `{stamp}`. Anything outside the valid range above is marked "
             "**RED:** below; the model never silently extrapolates.", ""]
+    warn = []
+    if provisional:
+        warn = [f"> **Provisional grades:** {_oneline(provisional)}. Every grade below is the "
+                "fit's own verdict, not the HB health check's; run verify, then deliver again "
+                "for the signed-off grades.", ""]
+    out += warn
 
     # 2 -- usable but not signed off ("en" tier), then the large-signal terms that are on
     out += ["## Usable but not signed off", ""]
@@ -597,7 +635,7 @@ def render_report(*, project: str, stamp: str, envelope: Envelope, grades: list[
         out += _pins_section(pins)
 
     # 4 -- one line per corner per rail, no internal scores
-    out += ["## Trust per corner and rail", "",
+    out += ["## Trust per corner and rail", ""] + warn + [
             "| rail | corner | grade | worst block | what it means |",
             "|---|---|---|---|---|"]
     worst = _worst_by_cell(grades)
@@ -762,8 +800,40 @@ class Deliverable:
             return None
         return d if isinstance(d, dict) else None
 
+    def grades_meta(self) -> dict:
+        """{"graded_by", "provisional"} from grades.json: where the grades came from and, when
+        they are not verify's verdict on this fit, why. Empty strings for an older deliverable
+        that did not record it."""
+        p = self.path / GRADES_NAME
+        try:
+            d = jsonio.read(p) if p.is_file() else {}
+        except (OSError, ValueError):
+            d = {}
+        d = d if isinstance(d, dict) else {}
+        return {"graded_by": str(d.get("graded_by") or ""),
+                "provisional": str(d.get("provisional") or "")}
+
+    def scs_name(self) -> str:
+        """The section library's file name ('' when this deliverable has none)."""
+        return next((n for n in self.files() if n.endswith(".scs")), "")
+
+    def include_line(self, corner: str | None = None) -> str:
+        """The ONE line the consumer adds: the library's path as this OS writes it -- one
+        separator throughout, POSIX on the red zone -- and the section to select."""
+        name = self.scs_name()
+        if not name:
+            return ""
+        sec = corner or (self.envelope.corners[0] if self.envelope.corners else "tt")
+        return f'include "{self.path / name}" section={sec}'
+
     def _file_shas(self) -> dict[str, str]:
         return {n: jsonio.sha_file(self.path / n, 16) for n in self.files()}
+
+    def _text(self, name: str) -> str:
+        try:
+            return (self.path / name).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return ""
 
     # -- compare ----------------------------------------------------------
     def diff(self, other: "Deliverable") -> dict:
@@ -788,7 +858,80 @@ class Deliverable:
         grades = {k: (a_g.get(k), b_g.get(k))
                   for k in sorted(set(a_g) | set(b_g)) if a_g.get(k) != b_g.get(k)}
 
-        return {"provenance": prov, "envelope": env, "files": files, "grades": grades}
+        return {"provenance": prov, "envelope": env, "files": files, "grades": grades,
+                "pins": _pins_diff(self.interface(), other.interface()),
+                "text": _text_diffs(self, other, files["changed"])}
+
+
+# --------------------------------------------------------------------------- diff helpers
+#: A text diff is for reading, not for patching: bounded per file and in total.
+DIFF_LINES_PER_FILE = 160
+DIFF_LINES_TOTAL = 480
+DIFF_CONTEXT = 2
+
+
+def _pins_diff(a: dict | None, b: dict | None) -> dict:
+    """What changed in the module's pin list (interface.json). {} when nothing did."""
+    if not a or not b:
+        if not a and not b:
+            return {}
+        return {"note": ("the older" if not a else "the newer") + " deliverable predates "
+                "interface.json, so its pin list was not recorded"}
+    pa = [(str(p.get("pin")), bool(p.get("modeled", True))) for p in a.get("pins") or []]
+    pb = [(str(p.get("pin")), bool(p.get("modeled", True))) for p in b.get("pins") or []]
+    if pa == pb:
+        return {}
+    na, nb = [p for p, _m in pa], [p for p, _m in pb]
+    ma, mb = dict(pa), dict(pb)
+    out = {"a": na, "b": nb,
+           "added": [p for p in nb if p not in ma],
+           "removed": [p for p in na if p not in mb],
+           "modeled": {p: [ma[p], mb[p]] for p in nb if p in ma and ma[p] != mb[p]}}
+    common_a = [p for p in na if p in mb]
+    common_b = [p for p in nb if p in ma]
+    out["order_changed"] = common_a != common_b
+    return out
+
+
+def _strip_provenance(text: str) -> str:
+    """Drop the provenance header block at the top of a .va/.scs: it changes on every delivery
+    (the date, the shas) and the diff reports provenance on its own."""
+    lines = text.splitlines()
+    rule = re.compile(r"^\s*(//|\*)\s-{20,}\s*$")
+    if lines and rule.match(lines[0]):
+        for i in range(1, len(lines)):
+            if rule.match(lines[i]):
+                return "\n".join(lines[i + 1:]).lstrip("\n")
+    return text
+
+
+def _text_diffs(a: "Deliverable", b: "Deliverable", changed) -> list[dict]:
+    """A unified diff of every changed .scs / .va, provenance header left out, trimmed."""
+    import difflib
+    out, budget = [], DIFF_LINES_TOTAL
+    for name in sorted(changed, key=lambda n: (not n.endswith(".scs"), n)):
+        if not name.endswith((".scs", ".va")):
+            continue
+        ta, tb = _strip_provenance(a._text(name)), _strip_provenance(b._text(name))
+        if ta == tb:
+            out.append({"file": name, "diff": "", "added": 0, "removed": 0, "truncated": False,
+                        "note": "only the provenance header changed"})
+            continue
+        lines = list(difflib.unified_diff(ta.splitlines(), tb.splitlines(),
+                                          fromfile=f"{a.stamp}/{name}", tofile=f"{b.stamp}/{name}",
+                                          n=DIFF_CONTEXT, lineterm=""))
+        added = sum(1 for ln in lines if ln.startswith("+") and not ln.startswith("+++"))
+        removed = sum(1 for ln in lines if ln.startswith("-") and not ln.startswith("---"))
+        keep = max(0, min(DIFF_LINES_PER_FILE, budget))
+        cut = len(lines) > keep
+        shown = lines[:keep]
+        if cut:
+            shown.append(f"... {len(lines) - keep} more diff line(s) not shown -- open both "
+                         f"files for the rest")
+        budget -= min(len(lines), keep)
+        out.append({"file": name, "diff": "\n".join(shown), "added": added, "removed": removed,
+                    "truncated": cut})
+    return out
 
 
 def sha_text(text: str, n: int = 16) -> str:

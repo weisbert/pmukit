@@ -179,6 +179,8 @@ pmukit report <项目名>
 ```
 
 **期望**：`report.md` 第一段就是「有效范围 / 能用不签核 / 没跑 / 每角每轨绿黄红」。
+`deliver` 用 `fit` 存下的 `fit.json`，几秒钟就完，不再重拟合；只有数据集在拟合之后又变了才会重拟合，
+并打印 `NOTE: re-fitted the dataset: ...`。
 
 ☐ 报告第一段看得懂，且和你的实际使用范围对得上
 ☐ 红的地方有解释，不是沉默的外推
@@ -195,10 +197,16 @@ include "<交付目录>/PMU_<项目名>.scs" section=<角名>
 
 角名和 PDK 的角变量同名，所以切角就是切 section。
 
-实例：把原来 PMU 那一行的 master 换成模型，线一根不改——模型的脚和 PMU 一模一样、顺序一样
-（Deliver 屏 “Use it in your testbench” 和 `.scs` 注释里有现成的一行可复制）。模块名带角名
-（`PMU_<项目名>_<角名>`），切 section 时 master 跟着换。`report.md` 的 “Pins” 一节列出直通脚：
+只加这**一行**、只选**一个** section：每个角的模块都叫 `PMU_<项目名>`，同时 include 两个角会重复定义。
+Deliver 屏上的 include 行就是交付目录在本机上的真实路径（红区上是 POSIX 路径），直接复制。
+
+实例：把原来 PMU 那一行的 master 换成 `PMU_<项目名>`，线一根不改——模型的脚和 PMU 一模一样、顺序一样
+（Deliver 屏 “Use it in your testbench” 和 `.scs` 注释里有现成的一行可复制）。切角只改
+`section=`，master 不用动。`report.md` 的 “Pins” 一节列出直通脚：
 声明了但没建模，比如 EN——模型没有使能行为，EN 怎么驱动都无效，模型始终是开的。
+
+如果 `report.md` 开头写着 “Provisional grades: verify is older than the fit”，说明交付时 verify
+比拟合旧，评分来自拟合本身：先 `pmukit verify <项目名>`（或 Deliver 屏的 “Verify first”），再交付一次。
 
 ☐ 真 HB 收敛
 ☐ 结果和真电路对得上（至少量级和趋势）

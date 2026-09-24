@@ -1,4 +1,5 @@
-"""The model emitter: fitted parameters -> one HB-safe Verilog-A module per process corner.
+"""The model emitter: fitted parameters -> one HB-safe Verilog-A file per process corner, every
+one defining the same module `PMU_<project>` (the library's `section` picks the corner).
 
 This is the most safety-critical module in the tool, because everything downstream of it runs
 inside somebody else's harmonic-balance simulation.  Three rules shape it:
@@ -13,7 +14,9 @@ inside somebody else's harmonic-balance simulation.  Three rules shape it:
 
 Public API:
 
+    deliver_project(project, *, root=None, on_progress=None) -> dict   # the whole Deliver step
     deliver(project, *, root=None, fit=None, ...) -> pathlib.Path
+    saved_fit(project, *, root=None) -> (FitResult, note)   # fit.json; re-fits only if stale
     emit_va(port_fits, derived, corner, *, provenance, hb_robust=True) -> str
     build_va(...) -> {"text", "netlist", ...}          # emit_va plus what the lint measures
     lint.report(netlist, *, f_max_hz, harmonic=16) -> dict
@@ -31,7 +34,8 @@ from . import lint, primitives, scs
 from .primitives import FORBIDDEN, WHITELIST, Netlist
 from .va import build_va, emit_va, module_name
 
-__all__ = ["deliver", "verify_inputs", "emit_va", "build_va", "module_name", "lint", "primitives", "scs",
+__all__ = ["deliver", "deliver_project", "saved_fit", "delivery_grades", "verify_state",
+           "verify_inputs", "STALE_VERIFY", "NO_VERIFY", "emit_va", "build_va", "module_name", "lint", "primitives", "scs",
            "Netlist", "WHITELIST", "FORBIDDEN", "HB_CHECK_NAME"]
 
 #: Where the full conditioning report lands inside the deliverable (report.md links to it).
@@ -105,17 +109,70 @@ def verify_inputs(verify) -> dict:
 
 
 def _resolve_fit(project: str, derived: DerivedConfig, fit, root):
-    """The fitted blocks: whatever the caller passed, else fit the project's dataset now.
-
-    `pmukit.fit` is imported LAZILY and its absence degrades with a four-part error rather than
-    an ImportError traceback -- the emitter's own job does not depend on the fitter being present,
-    only on being handed parameters.
-    """
+    """The fitted blocks: whatever the caller passed, else the project's saved fit (fit.json),
+    re-fitting only when that is missing or older than the dataset."""
     if fit is not None:
         return fit
+    return saved_fit(project, root=root, derived=derived)[0]
+
+
+#: What report.md / grades.json / the Deliver screen say when the grades are the fit's own.
+STALE_VERIFY = "verify is older than the fit -- grades are from the fit"
+NO_VERIFY = "verify has not run on this fit -- grades are from the fit"
+
+
+def _project_dir(project: str, root) -> pathlib.Path:
+    return (pathlib.Path(root) if root is not None else paths.data_root()) / project
+
+
+def _fit_is_current(fit_path: pathlib.Path, fit, ds_dir: pathlib.Path) -> tuple[bool, str]:
+    """(current?, why not). The fit records the sha of the dataset it was fitted on; when it did
+    not (an older fit.json), the file times decide: index.json is rewritten on every write."""
+    index = ds_dir / "index.json"
+    if not index.is_file():
+        return True, ""                      # nothing to be older than: use what was fitted
+    want = str(getattr(fit, "dataset_sha", "") or "")
+    if want:
+        try:
+            ds_mod = importlib.import_module("pmukit.dataset")
+            ds = ds_mod.Dataset.open(ds_dir)
+            try:
+                have = ds.sha()
+            finally:
+                close = getattr(ds, "close", None)
+                if close:
+                    close()
+        except Exception:                                   # noqa: BLE001 -- fall back to times
+            have = ""
+        if have:
+            return (have == want, "" if have == want else
+                    f"the dataset changed since the fit (fit.json was fitted on dataset {want}, "
+                    f"the dataset is now {have})")
+    try:
+        newer = index.stat().st_mtime > fit_path.stat().st_mtime
+    except OSError:
+        newer = False
+    return (not newer, "the dataset was written after fit.json" if newer else "")
+
+
+def saved_fit(project: str, *, root=None, derived=None, on_progress=None,
+              save: bool = True) -> tuple:
+    """(FitResult, note) -- the fit the Model screen shows, i.e. fit.json, WITHOUT re-fitting.
+
+    Deliver used to re-fit the whole dataset (as long as the fit itself -- minutes) and could
+    hand over a model that is not the one the Model screen graded. Now the saved fit is the
+    model; only when fit.json is missing, unreadable or older than the dataset is the dataset
+    fitted again, and `note` then says so in one sentence (the web job and the CLI print it).
+    The fresh fit is written back to fit.json (`save`), so the Model screen, verify and the
+    deliverable all look at the same one.
+
+    `on_progress(message, fraction)` follows a re-fit (fraction 0..1 of the fit alone).
+    `pmukit.fit` is imported LAZILY and its absence degrades with a four-part error.
+    """
+    d = _project_dir(project, root)
+    fit_path, ds_dir = d / "fit.json", d / "dataset"
     try:
         fit_mod = importlib.import_module("pmukit.fit")
-        ds_mod = importlib.import_module("pmukit.dataset")
     except ImportError as exc:
         raise PmuError(
             what="deliver() was called without fitted parameters and the fitter is not available.",
@@ -123,18 +180,45 @@ def _resolve_fit(project: str, derived: DerivedConfig, fit, root):
                 f"and importing pmukit.fit failed: {exc}.",
             do=["pass fit=<FitResult, or the list of BlockFit records> to deliver()",
                 "or run the Model screen / `pmukit fit <project>` first and hand the result over"],
-            where="pmukit/emit/__init__.py:_resolve_fit") from None
-    base = pathlib.Path(root) if root is not None else paths.data_root()
-    ds_dir = base / project / "dataset"
-    if not ds_dir.is_dir():
+            where="pmukit/emit/__init__.py:saved_fit") from None
+    why = ""
+    if fit_path.is_file():
+        try:
+            fit = fit_mod.FitResult.from_dict(jsonio.read(fit_path))
+        except (OSError, ValueError, PmuError) as exc:
+            why = f"fit.json could not be read ({getattr(exc, 'what', exc)})"
+        else:
+            ok, why = _fit_is_current(fit_path, fit, ds_dir)
+            if ok:
+                return fit, ""
+    else:
+        why = "there is no fit.json yet"
+    fit = _fit_dataset(project, derived, root, fit_mod, on_progress)
+    if save:
+        jsonio.write(fit_path, fit.to_dict() if hasattr(fit, "to_dict") else fit)
+    return fit, f"re-fitted the dataset: {why}"
+
+
+def _fit_dataset(project: str, derived, root, fit_mod, on_progress):
+    d = _load_derived(project, derived, root)
+    ds_mod = importlib.import_module("pmukit.dataset")
+    ds_dir = _project_dir(project, root) / "dataset"
+    if not (ds_dir / "index.json").is_file():
         raise PmuError(
-            what=f"no characterization dataset for project {project!r}.",
-            why="with no `fit=` argument the emitter fits the project's dataset itself, and "
-                f"{ds_dir} does not exist -- nothing has been measured yet.",
-            do=["run the Plan and Run screens (or `pmukit run <project>`) first",
+            what=f"no fitted model and no characterization dataset for project {project!r}.",
+            why="the deliverable is emitted from the saved fit (fit.json), which does not exist, "
+                f"and {ds_dir} does not exist either -- nothing has been measured yet.",
+            do=["run the Plan and Run screens (or `pmukit run <project>`), then fit",
                 "or pass fit=<FitResult> to deliver() if the fit already happened elsewhere"],
             where=str(ds_dir))
-    return fit_mod.fit_project(ds_mod.Dataset.open(ds_dir), derived)
+    kw = {}
+    if on_progress is not None:
+        def _step(done, total, port, cell):
+            where = "/".join(str(v) for v in (cell or {}).values() if v is not None)
+            on_progress(f"re-fitting {port}{' at ' + where if where else ''} -- step "
+                        f"{done + 1} of {total}", done / max(1, total))
+        kw["on_progress"] = _step
+    return fit_mod.fit_project(ds_mod.Dataset.open(ds_dir), d, **kw)
 
 
 def _envelope(d: DerivedConfig, rails, corners, ls_default_on, notes, ports=None) -> Envelope:
@@ -169,17 +253,25 @@ def _envelope(d: DerivedConfig, rails, corners, ls_default_on, notes, ports=None
 def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, grades=None,
             provenance=None, stamp=None, hb_robust: bool = True, harmonic: int = lint.HARMONIC,
             flicker_mode: str = "bank", ls_default_on=(), not_run=(), dataset_sha: str = "",
-            tb_state_note: str = "", netlist_sha: str = "") -> pathlib.Path:
+            tb_state_note: str = "", netlist_sha: str = "", graded_by: str = "",
+            provisional: str = "", on_progress=None) -> pathlib.Path:
     """Write the whole contract-4 deliverable and return its stamped directory.
 
-    One `.va` per process corner, the Spectre section library, `envelope.json`, `report.md` (with
-    its `grades.json` sidecar), `provenance.json`, `interface.json` (the PMU's pins in order and
-    the instance line) and `hb_check.txt` -- the full conditioning report.  `grades` comes from `pmukit.verify` (a later milestone); when it is not supplied the
-    report says so honestly instead of inventing a verdict.
+    One `.va` per process corner -- every one defining the SAME module `PMU_<project>` -- the
+    Spectre section library, `envelope.json`, `report.md` (with its `grades.json` sidecar),
+    `provenance.json`, `interface.json` (the PMU's pins in order and the instance line) and
+    `hb_check.txt` -- the full conditioning report.  `grades` comes from `pmukit.verify`; when it
+    is not supplied the report says so honestly instead of inventing a verdict, and
+    `provisional` is the sentence report.md prints when the grades are the fit's own.
+
+    With no `fit=`, the saved fit (fit.json) is used -- see `saved_fit()`; nothing is re-fitted
+    unless it is missing or older than the dataset.  `deliver_project()` is the whole step the
+    CLI and the web shell run.  `on_progress(message, fraction)` is called once per corner.
 
     The model is marked HB-ready only when the conditioning lint passes on EVERY corner and
     `hb_robust` is True.
     """
+    say = on_progress or (lambda _m, _f: None)
     d = _load_derived(project, derived, root)
     fit = _resolve_fit(project, d, fit, root)
     corner_list = [str(c) for c in (corners or (d.process or {}).get("corners") or [])]
@@ -206,7 +298,10 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
     modules, ports_by_corner, checks, notes, skipped = {}, {}, {}, [], {}
     iface_by_corner: dict = {}
     rails_seen, ls_seen = [], []
-    for corner in corner_list:
+    n = len(corner_list)
+    for i, corner in enumerate(corner_list):
+        say(f"emitting corner {corner} ({i + 1} of {n}): the .va and its conditioning check",
+            0.9 * i / n)
         built = build_va(fit, d, corner, provenance=prov, hb_robust=hb_robust, project=project,
                          flicker_mode=flicker_mode, ls_default_on=ls_default_on)
         writer.add_va(corner, built["text"], provenance=prov)
@@ -215,7 +310,7 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
         iface_by_corner[corner] = built["interface"]
         checks[corner] = lint.report(built["netlist"], f_max_hz=float(
             (d.freq or {}).get("stop_hz", 0.0) or 0.0), harmonic=harmonic,
-            grounds=built["grounds"], label=built["module"])
+            grounds=built["grounds"], label=f"{built['module']} at {corner}")
         notes += [f"{corner}: {n}" for n in built["notes"]]
         for p, why in built["skipped"]:
             skipped.setdefault((p, why), []).append(corner)
@@ -239,6 +334,8 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
             "Large-signal load-event terms are OFF by default on " + ", ".join(off) +
             " (instance parameter load_en_<rail>); the `ls` tier may only default on after the "
             "HB first-step residual check, which lives in the verify milestone.")
+    say(f"writing the section library, envelope, report and provenance ({n} corner"
+        f"{'s' if n != 1 else ''} emitted)", 0.92)
     envelope = _envelope(d, rails_seen, corner_list, ls_default_on, env_notes,
                          ports=(set(rails_seen) | set(d.biases or {}) | set(d.en or {})))
     iface = d.interface or {}
@@ -271,14 +368,99 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
                                 for g in (grades or [])],
                         hb_check=hb_check,
                         not_run=list(not_run) + _never_run(skipped, corner_list),
-                        stubs=list(d.stubs or {}), pins=pins)
+                        stubs=list(d.stubs or {}), pins=pins, graded_by=graded_by,
+                        provisional=provisional)
     writer.write_provenance(prov)
     (writer.path / HB_CHECK_NAME).write_text(
         _hb_check_text(project, checks, notes, hb_robust), encoding="utf-8", newline="\n")
     jsonio.write(writer.path / "hb_check.json",
                  {"project": project, "hb_ready": hb_ok, "hb_robust": hb_robust,
                   "corners": {k: v for k, v in checks.items()}, "notes": notes})
-    return writer.finish()
+    out = writer.finish()
+    say(f"deliverable {out.name} written", 1.0)
+    return out
+
+
+def verify_state(project: str, *, root=None) -> tuple:
+    """(verify.json or None, state) with state one of "current" / "stale" / "missing".
+
+    "stale" is the Model screen's rule: fit.json was rewritten AFTER verify.json, so verify's
+    grades and its HB check judge a model that no longer exists."""
+    d = _project_dir(project, root)
+    vpath, fpath = d / "verify.json", d / "fit.json"
+    try:
+        ver = jsonio.read(vpath) if vpath.is_file() else None
+    except (OSError, ValueError):
+        ver = None
+    if not isinstance(ver, dict):
+        return None, "missing"
+    try:
+        stale = fpath.stat().st_mtime > vpath.stat().st_mtime
+    except OSError:
+        stale = False
+    return ver, ("stale" if stale else "current")
+
+
+def delivery_grades(project: str, fit, *, root=None, derived=None) -> tuple:
+    """(deliver() keyword arguments, verify state) -- the grades the deliverable carries.
+
+    verify.json current: its grades, its not-run list and the `ls` terms its HB check cleared.
+    Older than the fit, or never run: the fit's own grades (`pmukit.verify.grades`, a pure
+    function of the fit -- no simulator), every `ls` term OFF (no HB check has seen THIS model),
+    and a `provisional` sentence report.md and grades.json print. Delivering is never blocked."""
+    ver, state = verify_state(project, root=root)
+    if state == "current":
+        kw = verify_inputs(ver)
+        kw["graded_by"] = "verify"
+        return kw, state
+    gmod = importlib.import_module("pmukit.verify.grades")
+    ds = None
+    ds_dir = _project_dir(project, root) / "dataset"
+    if (ds_dir / "index.json").is_file():
+        try:
+            ds = importlib.import_module("pmukit.dataset").Dataset.open(ds_dir)
+        except Exception:                                  # noqa: BLE001 -- holes are optional
+            ds = None
+    if not hasattr(fit, "fits"):
+        fit = importlib.import_module("pmukit.fit").FitResult.from_dict(fit)
+    rows = gmod.grade_project(fit, derived=_load_derived(project, derived, root), dataset=ds)
+    not_run = [f"{g.port} {g.block} at corner {g.corner}: {g.detail}"
+               for g in rows if g.grade == "not_run"]
+    not_run += gmod.never_run_lines(ds)
+    kw = {"grades": rows, "not_run": not_run, "graded_by": "fit",
+          "provisional": STALE_VERIFY if state == "stale" else NO_VERIFY}
+    return kw, state
+
+
+def deliver_project(project: str, *, root=None, derived=None, on_progress=None,
+                    stamp=None) -> dict:
+    """The Deliver step: `pmukit deliver` and the Deliver screen both run exactly this.
+
+    1. the saved fit (fit.json) -- re-fitted only when missing or older than the dataset,
+       and then `refit` says why;
+    2. the grades: verify.json when it is newer than the fit, else the fit's own, marked
+       provisional (`delivery_grades`);
+    3. `deliver()`, reporting per corner.
+
+    `on_progress(message, fraction)` sees the whole step, 0..1. Returns {"path", "stamp",
+    "refit", "verify", "graded_by", "provisional"}.
+    """
+    say = on_progress or (lambda _m, _f: None)
+    d = _load_derived(project, derived, root)
+    say("reading the saved fit (fit.json)", 0.03)
+    fit, refit = saved_fit(project, root=root, derived=d,
+                           on_progress=lambda m, f: say(m, 0.05 + 0.55 * f))
+    if refit:
+        say(refit, 0.6)
+    start = 0.6 if refit else 0.08
+    kw, state = delivery_grades(project, fit, root=root, derived=d)
+    say({"current": "grades: verify.json",
+         "stale": f"grades: {STALE_VERIFY}",
+         "missing": f"grades: {NO_VERIFY}"}[state], start)
+    out = deliver(project, root=root, fit=fit, derived=d, stamp=stamp,
+                  on_progress=lambda m, f: say(m, start + (0.99 - start) * f), **kw)
+    return {"path": out, "stamp": out.name, "refit": refit, "verify": state,
+            "graded_by": kw.get("graded_by", ""), "provisional": kw.get("provisional", "")}
 
 
 def _pins_for_report(iface_by_corner: dict) -> list:
@@ -302,17 +484,26 @@ def _pins_for_report(iface_by_corner: dict) -> list:
 
 def _interface_record(project: str, modules: dict, iface_by_corner: dict, iface: dict, params,
                       pins: list, ls_ports: list, pmu_order: bool) -> dict:
-    """interface.json: what the Deliver screen shows under "Use it in your testbench"."""
+    """interface.json: what the Deliver screen shows under "Use it in your testbench".
+
+    `module` / `instance_line` are THE master and THE line -- one for every corner, since every
+    section defines the same module. `modules` / `instance` (per corner) stay for a reader
+    written against the older per-corner layout; on a new deliverable their values agree."""
     inst = str(iface.get("inst") or "")
+    per_corner = {c: scs.instance_line(m, iface_by_corner.get(c) or [], inst=inst, params=params)
+                  for c, m in modules.items()}
+    names = sorted(set(modules.values()))
     return {
         "library": f"PMU_{project}",
+        "module": names[0] if len(names) == 1 else "",
+        "instance_line": next(iter(per_corner.values()), "") if len(names) == 1 else "",
+        "sections": list(modules),
         "pmu_inst": inst, "pmu_master": str(iface.get("master") or ""),
         "pmu_order": pmu_order,
         "pins": pins,
         "pass_through": [p["pin"] for p in pins if not p["modeled"]],
         "modules": dict(modules),
-        "instance": {c: scs.instance_line(m, iface_by_corner.get(c) or [], inst=inst,
-                                          params=params) for c, m in modules.items()},
+        "instance": per_corner,
         "params": {"vset": dict(params).get("vset"),
                    "load_en": [f"load_en_{p}" for p in ls_ports]},
     }

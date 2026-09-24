@@ -97,9 +97,13 @@ HELP: dict[str, dict] = {
         "title": "Deliver -- the files you take away",
         "lines": [
             "One .scs library with a section per process corner, each including its own .va; add "
-            "one include line to your corner setup and switch corners by section name.",
+            "one include line to your corner setup and switch corners by section name. Every "
+            "corner's module has the same name, so the instance's master never changes. It is "
+            "emitted from the saved fit the Model screen shows (re-fitted only if the dataset "
+            "changed since, and it says so).",
             "envelope.json is the validity envelope and report.md says, in the first paragraph, "
-            "what the model is good for and what was never run.",
+            "what the model is good for and what was never run; when verify is older than the "
+            "fit, the grades are the fit's own and marked provisional.",
             "Every .va repeats the provenance in its header, so a file that leaves this directory "
             "can still be traced back to the configuration and the data it came from.",
         ],

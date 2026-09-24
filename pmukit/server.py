@@ -256,6 +256,16 @@ class Jobs:
                        f"GET /api/jobs/{job_id}")
         return job
 
+    def busy(self, project: str, kinds=()) -> "Job | None":
+        """The job of one of `kinds` still queued or running for `project`, or None."""
+        with self._lock:
+            jobs = [self._jobs[j] for j in self._order if j in self._jobs]
+        for job in reversed(jobs):
+            if (job.project == project and (not kinds or job.kind in kinds)
+                    and job.status in ("queued", "running")):
+                return job
+        return None
+
     def recent(self, project: str = "", limit: int = 20) -> list[dict]:
         with self._lock:
             ids = list(reversed(self._order))
@@ -1228,9 +1238,12 @@ DEMO_USE = {
     "pmu_order": True,
     "pins": [{"pin": p, "role": r, "modeled": m, "what": w} for p, r, m, w in _DEMO_PINS],
     "pass_through": ["EN", "TESTMODE"],
-    "modules": {c: f"PMU_demo_pmu_{c}" for c in ("tt", "ss", "ff")},
+    "module": "PMU_demo_pmu", "sections": ["tt", "ss", "ff"],
+    "instance_line": "PMU_TOP (VDDA_1V0 VDD0P8_A VDD0P8_B VDD0P8_C IB_PTAT IB_POLY EN TESTMODE "
+                     "0 0 0) PMU_demo_pmu vset=3",
+    "modules": {c: "PMU_demo_pmu" for c in ("tt", "ss", "ff")},
     "instance": {c: "PMU_TOP (VDDA_1V0 VDD0P8_A VDD0P8_B VDD0P8_C IB_PTAT IB_POLY EN TESTMODE "
-                    f"0 0 0) PMU_demo_pmu_{c} vset=3" for c in ("tt", "ss", "ff")},
+                    "0 0 0) PMU_demo_pmu vset=3" for c in ("tt", "ss", "ff")},
     "params": {"vset": 3, "load_en": ["load_en_VDD0P8_A", "load_en_VDD0P8_B"]},
 }
 
@@ -1674,7 +1687,9 @@ class Api:
                 "diff": {"provenance": {k: list(v) for k, v in diff["provenance"].items()},
                          "envelope": {k: list(v) for k, v in diff["envelope"].items()},
                          "files": diff["files"],
-                         "grades": {"|".join(k): list(v) for k, v in diff["grades"].items()}}}
+                         "grades": {"|".join(k): list(v) for k, v in diff["grades"].items()},
+                         "pins": _clean(diff.get("pins") or {}),
+                         "text": diff.get("text") or []}}
 
     def _deliverable_at(self, ref: str):
         from .deliverable import Deliverable
@@ -2718,26 +2733,49 @@ class Api:
     # ---------------------------------------------------------------- Deliver
     def deliver(self, project: str, body: dict) -> dict:
         pr = Project(project, self.root)
+        busy = JOBS.busy(project, ("fit", "deliver"))
+        if busy is not None:
+            raise _err(f"{project} is still {'fitting' if busy.kind == 'fit' else 'delivering'}.",
+                       "A deliverable is emitted from the saved fit; delivering while a fit or "
+                       "another delivery is running would emit from a fit that is about to "
+                       "change, or write two stamps at once.",
+                       [f"Wait for '{busy.title}' to finish ({busy.message})",
+                        "Then Deliver again"],
+                       f"job {busy.id}")
+        if (not self.demo and pr.fit_result() is None
+                and not (pr.dataset_path / "index.json").is_file()):
+            raise _err(f"{project} has no fitted model to deliver.",
+                       "The deliverable is the emitted model: there is nothing to emit until "
+                       "the fit has run.",
+                       ["Run the fit from the Run screen"], str(pr.fit_path))
 
         def work(job):
             emit = _lazy("pmukit.emit", "Writing the deliverable")
-            fn = _attr(emit, "deliver", "Writing the deliverable")
-            fit = pr.fit_result()
-            if fit is None:
-                raise _err(f"{project} has no fitted model to deliver.",
-                           "The deliverable is the emitted model: there is nothing to emit until "
-                           "the fit has run.",
-                           ["Run the fit from the Run screen"], str(pr.fit_path))
-            # The same call as `pmukit deliver`: the emitter fits the dataset itself and takes
-            # verify.json's grades, so the two deliverables cannot differ.
-            job.say("emitting one .va per corner, report.md and envelope.json", 0.3)
-            kw = _attr(emit, "verify_inputs", "Writing the deliverable")(pr.verify_result())
-            out = fn(pr.name, root=(pathlib.Path(self.root) if self.root is not None
-                                    else paths.data_root()), derived=pr.derived(), **kw)
+            fn = _attr(emit, "deliver_project", "Writing the deliverable")
+            # The same call as `pmukit deliver`: the SAVED fit (fit.json -- re-fitted only when it
+            # is missing or older than the dataset), verify.json's grades when they are newer
+            # than the fit and the fit's own marked provisional otherwise.
+            res = fn(pr.name, root=(pathlib.Path(self.root) if self.root is not None
+                                    else paths.data_root()), derived=pr.derived(),
+                     on_progress=lambda m, f: job.say(m, f))
+            if res.get("refit"):
+                job.error = _err(f"the deliverable was emitted from a NEW fit: {res['refit']}.",
+                                 "Deliver reuses the fit the Model screen shows; that fit was "
+                                 "missing or older than the dataset, so the dataset was fitted "
+                                 "again and fit.json replaced.",
+                                 ["Check the Model screen: it now shows the fit this "
+                                  "deliverable was emitted from",
+                                  "Run verify, then Deliver again for signed-off grades"],
+                                 str(pr.fit_path)).to_dict()["error"]
             st = pr.state()
-            st.go("deliver").note("deliverable written", "model")
+            st.go("deliver").note("deliverable written" + (" (re-fitted)" if res.get("refit")
+                                                            else ""), "model")
             st.save()
-            return {"deliverable": {"path": str(out), "stamp": pathlib.Path(out).name}}
+            out = res["path"]
+            return {"deliverable": {"path": str(out), "stamp": pathlib.Path(out).name},
+                    "refit": res.get("refit", ""), "verify": res.get("verify", ""),
+                    "graded_by": res.get("graded_by", ""),
+                    "provisional": res.get("provisional", "")}
 
         return {"job": JOBS.submit("deliver", project, "write the deliverable", work).id}
 
@@ -2748,9 +2786,13 @@ class Api:
                 "created": "2026-09-15T14:02:11Z",
                 "files": [{"name": n, "kind": k, "bytes": b, "desc": d,
                            "sha": jsonio.sha([n, b], 8)} for n, k, b, d in DEMO_FILES],
-                "use": DEMO_USE,
+                "use": DEMO_USE, "scs": "PMU_demo_pmu.scs", "sep": "/",
+                "include": 'include "~/pmukit_data/demo_pmu/deliver/20260915-140211/'
+                           'PMU_demo_pmu.scs" section=tt',
+                "graded_by": "verify", "provisional": "",
                 "envelope": json.loads(DEMO_FILE_BODY["envelope.json"]),
-                "provenance": json.loads(DEMO_FILE_BODY["provenance.json"])}]}
+                "provenance": json.loads(DEMO_FILE_BODY["provenance.json"])}],
+                "verify": {"state": "current", "why": ""}}
         from .deliverable import Deliverable
         out = []
         for d in Deliverable.list(project, self.root):
@@ -2762,12 +2804,88 @@ class Api:
                               "desc": _file_desc(name)})
             # `use`: how to instantiate THIS deliverable (the PMU's own instance line with the
             # model as master); None for a deliverable written before it was recorded.
+            # `include`: the one line to add, the path joined by the OS that wrote it (one
+            # separator throughout -- the page never glues a '/' onto a Windows path).
+            meta = d.grades_meta()
             out.append({"stamp": d.stamp, "path": str(d.path), "files": files,
                         "use": _clean(d.interface()),
+                        "scs": d.scs_name(), "include": d.include_line(),
+                        "sep": os.sep,
+                        "graded_by": meta["graded_by"], "provisional": meta["provisional"],
                         "envelope": _clean(d.envelope.to_json()),
                         "provenance": _clean(d.provenance.to_json()),
                         "created": _clean(d.provenance.to_json()).get("created", "")})
-        return {"deliverables": out}
+        return {"deliverables": out, "verify": self._verify_now(project)}
+
+    def _verify_now(self, project: str) -> dict:
+        """The project's verify.json against its fit.json RIGHT NOW: what the next Deliver will
+        grade with. The Deliver screen warns and offers "Verify first" when it is not current."""
+        pr = Project(project, self.root)
+        if pr.fit_result() is None:
+            return {"state": "no_fit", "why": ""}
+        if pr.verify_result() is None:
+            return {"state": "missing", "why": "verify has not run on this fit -- the next "
+                                               "deliverable's grades come from the fit"}
+        if pr.verify_stale():
+            return {"state": "stale", "why": "verify is older than the fit -- the next "
+                                             "deliverable's grades come from the fit"}
+        return {"state": "current", "why": ""}
+
+    def deliverable_diff(self, project: str, stamp: str, against: str = "") -> dict:
+        """What changed between one deliverable and another -- by default the one before it.
+
+        Files added / removed / changed, the valid range, the grades per port / corner / block,
+        the pin list, provenance, and a unified diff of the .scs and .va text (provenance header
+        left out, trimmed to a readable size)."""
+        where = f"GET /api/p/{project}/deliverables/<stamp>/diff"
+        stamp = _safe_name(stamp, STAMP_RE, "deliverable stamp", where)
+        if self.demo:
+            return {"a": "20260914-091502", "b": stamp, "previous": "20260914-091502",
+                    "diff": {"provenance": {"dataset_sha": ["a91fc3", "c07d12"]},
+                             "envelope": {"freq_max_hz": [1e10, 2e10]},
+                             "valid": [{"what": "freq", "a": "<= 10 GHz", "b": "<= 20 GHz"}],
+                             "files": {"added": [], "removed": [],
+                                       "changed": ["PMU_demo_pmu_ss.va", "report.md"]},
+                             "grades": [{"port": "VDD0P8_B", "corner": "ss", "block": "noise",
+                                         "a": "yellow", "b": "green"}],
+                             "pins": {}, "text": []}}
+        from .deliverable import Deliverable
+        stamps = [d.stamp for d in Deliverable.list(project, self.root)]
+        if stamp not in stamps:
+            raise _err(f"{stamp!r} is not a deliverable of {project}.",
+                       "The diff compares two stamped folders under deliver/; this one is not "
+                       "there (or is missing its envelope / provenance).",
+                       [f"Pick one of: {', '.join(stamps) or '(none yet)'}"], where)
+        if against:
+            against = _safe_name(against, STAMP_RE, "deliverable stamp", where)
+        else:
+            older = stamps[stamps.index(stamp) + 1:]
+            if not older:
+                raise _err(f"{stamp} is the first deliverable of {project}.",
+                           "There is no earlier stamp to compare it with.",
+                           ["Deliver again after a change, then diff the two",
+                            f"Or pick another stamp: {', '.join(stamps)}"], where)
+            against = older[0]
+        base = Project(project, self.root).dir / "deliver"
+        da, db = Deliverable.open(base / against), Deliverable.open(base / stamp)
+        diff = da.diff(db)
+        def _valid_lines(env: dict) -> dict:
+            out = _envelope_text(env)
+            out["large-signal on"] = ", ".join(env.get("ls_default_on") or []) or "(none)"
+            return out
+
+        valid_a, valid_b = _valid_lines(da.envelope.to_json()), _valid_lines(db.envelope.to_json())
+        valid = [{"what": k, "a": valid_a.get(k, ""), "b": valid_b.get(k, "")}
+                 for k in list(valid_a) + [k for k in valid_b if k not in valid_a]
+                 if valid_a.get(k) != valid_b.get(k)]
+        grades = [{"port": k[0], "corner": k[1], "block": k[2], "a": v[0], "b": v[1]}
+                  for k, v in diff["grades"].items()]
+        return {"a": against, "b": stamp, "previous": against, "project": project,
+                "diff": {"provenance": {k: list(v) for k, v in diff["provenance"].items()},
+                         "envelope": {k: list(v) for k, v in diff["envelope"].items()},
+                         "valid": _clean(valid), "files": diff["files"],
+                         "grades": _clean(grades), "pins": _clean(diff["pins"]),
+                         "text": diff["text"]}}
 
     def deliverable_file(self, project: str, stamp: str, name: str) -> dict:
         stamp = _safe_name(stamp, STAMP_RE, "deliverable stamp",
@@ -3108,11 +3226,12 @@ def _file_desc(name: str) -> str:
     if name == "report.md":
         return "trust summary, per-cell grades, HB health check, not-run list"
     if name == "interface.json":
-        return "the PMU's pins in its order, which are pass-through, the instance line per corner"
+        return "the PMU's pins in its order, which are pass-through, the instance line"
     if name.endswith(".scs"):
-        return "library with one section per corner, each including its .va"
+        return "library with one section per corner, each including its own .va"
     if name.endswith(".va"):
-        return "one corner, temperature continuous, vset and load-EN as instance parameters"
+        return ("one corner (same module name on every corner), temperature continuous, vset "
+                "and load-EN as instance parameters")
     return ""
 
 
@@ -3961,6 +4080,11 @@ def _r_deliverables(api, h, a, q, b):
 @route("GET", r"/api/p/<project>/deliverables/<stamp>/files/<name>")
 def _r_deliverable_file(api, h, a, q, b):
     return api.deliverable_file(a["project"], a["stamp"], a["name"])
+
+
+@route("GET", r"/api/p/<project>/deliverables/<stamp>/diff")
+def _r_deliverable_diff(api, h, a, q, b):
+    return api.deliverable_diff(a["project"], a["stamp"], _one(q, "against", ""))
 
 
 # ---- Digest

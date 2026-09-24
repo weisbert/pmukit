@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import math
 
+from ..deliverable import eng, ratio
 from .primitives import GM_SOFT, WHITELIST
 
 __all__ = ["report", "render", "RANGE_MAX", "Y_FLOOR", "Y_CEIL", "HARMONIC"]
@@ -61,10 +62,28 @@ _STRAIN = {
 }
 
 
-def _fmt(x: float) -> str:
+#: The unit of an element's value, for the engineering notation of the report lines.
+_UNIT = {"inductor": "H", "capacitor": "F", "resistor": "Ohm", "conductance": "S", "vccs": "S"}
+
+
+def _fmt(x: float, unit: str | None = None) -> str:
+    """Report text: engineering notation with the unit (1e+09 Hz -> '1 GHz'), the same helper
+    report.md uses; with no unit a dimensionless ratio as a power of ten (1e+06 -> '1e6')."""
     if x is None or not math.isfinite(x):
         return "n/a"
-    return f"{x:.4g}"
+    return ratio(x) if unit is None else eng(x, unit)
+
+
+def _hz(x: float) -> str:
+    return _fmt(x, "Hz")
+
+
+def _s(x: float) -> str:
+    return _fmt(x, "S")
+
+
+def _val(el) -> str:
+    return _fmt(el.value, _UNIT.get(el.kind, ""))
 
 
 def _node_totals(elements, skip: set[str]):
@@ -113,10 +132,10 @@ def report(netlist, *, f_max_hz: float, harmonic: int = HARMONIC, range_max: flo
                 findings.append({
                     "rule": "node_range", "severity": "fail", "f_hz": f, "value": rng,
                     "node": lo_node,
-                    "what": (f"internal node admittance spans {_fmt(rng)} at {_fmt(f)} Hz "
-                             f"(limit {_fmt(range_max)}): {lo_node} = {_fmt(lo)} S against "
-                             f"{hi_node} = {_fmt(hi)} S"),
-                    "elements": [f"{n} ({_fmt(y)} S)"
+                    "what": (f"internal node admittance spans {_fmt(rng)} at {_hz(f)} "
+                             f"(limit {_fmt(range_max)}): {lo_node} = {_s(lo)} against "
+                             f"{hi_node} = {_s(hi)}"),
+                    "elements": [f"{n} ({_s(y)})"
                                  for n, y in sorted(who.get(lo_node, []), key=lambda t: t[1])[:4]],
                     "strains": "gm_c_biquad",
                     "why": WHITELIST["gm_c_biquad"][1],
@@ -130,8 +149,8 @@ def report(netlist, *, f_max_hz: float, harmonic: int = HARMONIC, range_max: flo
                         "rule": "controlled_gain", "severity": "fail", "f_hz": f,
                         "value": abs(el.value), "node": el.nodes[0], "element": el.name,
                         "what": (f"controlled source {el.name} has |gm| = "
-                                 f"{_fmt(abs(el.value))} S, at or above {_fmt(gm_max)} S"),
-                        "elements": [f"{el.name} = {_fmt(el.value)} S"],
+                                 f"{_s(abs(el.value))}, at or above {_s(gm_max)}"),
+                        "elements": [f"{el.name} = {_s(el.value)}"],
                         "strains": "gm_c_biquad",
                         "why": WHITELIST["gm_c_biquad"][1],
                     })
@@ -146,11 +165,11 @@ def report(netlist, *, f_max_hz: float, harmonic: int = HARMONIC, range_max: flo
             findings.append({
                 "rule": "element_extreme", "severity": "fail" if synth else "warn", "f_hz": f,
                 "value": y, "element": el.name, "node": el.nodes[0],
-                "what": (f"{el.kind} {el.name} = {_fmt(el.value)} has |Y| = {_fmt(y)} S at "
-                         f"{_fmt(f)} Hz, {'below' if side == 'low' else 'above'} the "
-                         f"{_fmt(y_floor if side == 'low' else y_ceil)} S limit"
+                "what": (f"{el.kind} {el.name} = {_val(el)} has |Y| = {_s(y)} at "
+                         f"{_hz(f)}, {'below' if side == 'low' else 'above'} the "
+                         f"{_s(y_floor if side == 'low' else y_ceil)} limit"
                          + (" -- SYNTHESIZED" if synth else "")),
-                "elements": [f"{el.name} = {_fmt(el.value)}"],
+                "elements": [f"{el.name} = {_val(el)}"],
                 "strains": strains,
                 "why": WHITELIST[strains][1],
             })
@@ -202,7 +221,7 @@ def _summary(label, fails, warns, ranges, range_max, f_max, harmonic) -> str:
     where = f"{label}: " if label else ""
     rng = max(ranges) if ranges else float("nan")
     head = (f"{where}worst internal node admittance range {_fmt(rng)} "
-            f"(limit {_fmt(range_max)}) at {_fmt(f_max)} Hz and harmonic {harmonic}")
+            f"(limit {_fmt(range_max)}) at {_hz(f_max)} and harmonic {harmonic}")
     if not fails and not warns:
         return head + " -- PASS, the model is numerically well conditioned for HB."
     if not fails:
@@ -214,13 +233,13 @@ def render(rep: dict) -> str:
     """The lint report as plain text, for report.md and for the CLI."""
     out = [rep["summary"], ""]
     out.append(f"  elements {rep['n_elements']}, internal nodes {rep['n_internal_nodes']}, "
-               f"evaluated at {', '.join(_fmt(f) + ' Hz' for f in rep['frequencies'])}")
+               f"evaluated at {', '.join(_hz(f) for f in rep['frequencies'])}")
     for row in rep["per_frequency"]:
         if row.get("range") is None:
             continue
-        out.append(f"  at {_fmt(row['f_hz'])} Hz: range {_fmt(row['range'])} "
-                   f"({row['min_node']} {_fmt(row['min_y'])} S .. "
-                   f"{row['max_node']} {_fmt(row['max_y'])} S)")
+        out.append(f"  at {_hz(row['f_hz'])}: range {_fmt(row['range'])} "
+                   f"({row['min_node']} {_s(row['min_y'])} .. "
+                   f"{row['max_node']} {_s(row['max_y'])})")
     if not rep["findings"]:
         out.append("  no finding.")
         return "\n".join(out)

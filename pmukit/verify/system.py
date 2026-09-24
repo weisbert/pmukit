@@ -354,7 +354,9 @@ def oscillator_check(fit, derived, *, corner: str = "", project: str = "pmu", ra
         # overwrite each other's deck and log, or the evidence for the first one is gone.
         work = base / corner / _tag(r)
         work.mkdir(parents=True, exist_ok=True)
-        va_name = f"{built['module']}.va"
+        # one corner per deck (the module name is shared by every corner), named like the
+        # deliverable's file for that corner
+        va_name = f"{built['module']}_{corner}.va"
         va_path = work / va_name
         va_path.write_text(built["text"], encoding="utf-8", newline="\n")
         report["rails"][r] = _bench_rail(

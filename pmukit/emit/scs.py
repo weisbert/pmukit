@@ -6,9 +6,13 @@ that belong inside a section, so the consumer can read the library and know, wit
 `.va`, which module a corner selects and how to instantiate it.
 
 Contract 4 rule 4: corners are selected by Spectre `section`, so the consumer adds exactly ONE
-include line to their corner setup and switches corners by section name.
+include line to their corner setup and switches corners by section name.  Every section defines
+the SAME module name (`PMU_<project>`) from its own corner's `.va`; `include ... section=<x>` reads
+only section <x>, so one definition is live and the instance's master never changes.
 """
 from __future__ import annotations
+
+from ..deliverable import eng as _eng
 
 __all__ = ["extra_lines", "instance_template", "instance_line", "usage"]
 
@@ -30,15 +34,20 @@ def instance_line(module: str, interface, *, inst: str = "", params=()) -> str:
     return instance_template(module, nets, params=params, name=inst or "I_PMU")
 
 
-def usage(library: str, section_names) -> list[str]:
-    """The two lines a consumer adds to their own netlist, as comments."""
-    first = list(section_names)[0] if list(section_names) else "tt"
-    return [
+def usage(library: str, section_names, module: str = "") -> list[str]:
+    """The lines a consumer reads before adding their one include line, as comments."""
+    names = [str(s) for s in section_names]
+    first = names[0] if names else "tt"
+    out = [
         f"// consumer setup: include \"{library}.scs\" section={first}",
-        f"// switch corners by changing section= to one of: "
-        f"{', '.join(str(s) for s in section_names)}",
+        f"// switch corners by changing section= to one of: {', '.join(names)}",
         f"// library name: {library}",
     ]
+    if module:
+        out.append(f"// every section defines the same module {module} from its own corner's "
+                   f".va -- include ONE section only (two would define {module} twice); the "
+                   f"instance's master stays {module} on every corner")
+    return out
 
 
 def extra_lines(modules: dict, *, library: str = "PMU_<project>",
@@ -56,13 +65,15 @@ def extra_lines(modules: dict, *, library: str = "PMU_<project>",
     consumer writes, which is exactly what the template shows.
     """
     out: dict[str, list[str]] = {}
-    shared = list(usage(library, list(modules)))
+    names = sorted(set(modules.values()))
+    shared = list(usage(library, list(modules), module=names[0] if len(names) == 1 else ""))
     if envelope is not None:
-        loads = "; ".join(f"{p} {lo:g}..{hi:g} A" for p, (lo, hi) in envelope.load_a.items())
+        loads = "; ".join(f"{p} {_eng(lo, 'A')}..{_eng(hi, 'A')}"
+                          for p, (lo, hi) in envelope.load_a.items())
         shared.append(
             f"// valid: {loads or 'no rail characterized'} | "
             f"{envelope.temp_c[0]:g}..{envelope.temp_c[1]:g} C | up to "
-            f"{envelope.freq_max_hz:g} Hz | VSET "
+            f"{_eng(envelope.freq_max_hz, 'Hz')} | VSET "
             f"{', '.join(str(v) for v in envelope.vset_codes) or '(none)'} "
             f"-- see envelope.json and report.md")
     shared += [str(x) for x in common]
@@ -70,7 +81,7 @@ def extra_lines(modules: dict, *, library: str = "PMU_<project>",
     for corner, module in modules.items():
         ports = (ports_by_corner or {}).get(corner, [])
         iface = (interface_by_corner or {}).get(corner) or []
-        lines = [f"// module {module} (process corner {corner})"]
+        lines = [f"// module {module} (process corner {corner}, from {library}_{corner}.va)"]
         if iface:
             who = f"{master}'s" if master else "the PMU's"
             lines.append(f"// pins, in {who} order: {' '.join(e['pin'] for e in iface)}")

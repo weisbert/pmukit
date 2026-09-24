@@ -627,19 +627,33 @@ def cmd_report(a) -> int:
 def cmd_deliver(a) -> int:
     cfg, der, d = _load(a.project)
     emod = _need("emit", "deliver")
-    # Pick up whatever `pmukit verify` already decided (emit.verify_inputs says why it matters).
-    kw: dict = {}
-    vpath = d / "verify.json"
-    if vpath.exists():
-        kw = emod.verify_inputs(jsonio.read(vpath))
-        print(f"using the grades from {vpath} ({len(kw.get('grades', []))} rows)")
-    else:
-        print(f"no {vpath} yet -- the report will say nothing was graded.")
-        print(f"  Run `{PROG} verify {a.project}` first to fill it in.")
+    # The same step as the Deliver screen (emit.deliver_project): the SAVED fit (fit.json),
+    # re-fitted only when missing or older than the dataset; verify.json's grades when they
+    # are newer than the fit, the fit's own marked provisional otherwise.
     # `root` is the $PMUKIT_DATA ROOT -- deliver() appends <project>/deliver/<stamp> itself.
-    path = emod.deliver(a.project, root=paths.data_root(), derived=der, **kw)
+    last = {"msg": ""}
+
+    def progress(msg, frac):
+        if msg != last["msg"] and not a.json:
+            last["msg"] = msg
+            print(f"  [{int(round(100 * frac)):3d}%] {msg}")
+
+    res = emod.deliver_project(a.project, root=paths.data_root(), derived=der,
+                               on_progress=progress)
+    path = res["path"]
+    if a.json:
+        _out({k: str(v) for k, v in res.items()}, True)
+        return 0
     print(f"delivered -> {path}")
-    print(f"\nAdd to your corner setup:\n  include \"{path}/PMU_{a.project}.scs\" section=<corner>")
+    if res.get("refit"):
+        print(f"NOTE: {res['refit']} -- fit.json was replaced; the Model screen now shows it.")
+    if res.get("provisional"):
+        print(f"NOTE: {res['provisional']}.")
+        print(f"  Run `{PROG} verify {a.project}`, then deliver again for signed-off grades.")
+    corners = list((getattr(der, "process", None) or {}).get("corners") or []) or ["<corner>"]
+    print(f"\nAdd ONE line to your corner setup (switch corners by section= alone):\n"
+          f"  include \"{pathlib.Path(path) / f'PMU_{a.project}.scs'}\" section={corners[0]}")
+    print(f"The instance's master is PMU_{a.project} on every corner.")
     return 0
 
 
