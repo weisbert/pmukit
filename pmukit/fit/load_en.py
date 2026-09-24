@@ -34,6 +34,8 @@ label, which may be opaque.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from ._base import (BlockFit, NoData, block_cell, missing_fit, read_curve, var_layout)
@@ -95,38 +97,53 @@ def rail_trace(Ra, sections, Cext, i_from, i_to, iaG, iaV, vreg, t0, edge, tstop
         srcblk = 0.5 * (1.0 - np.tanh(I / ovIsc))
         return g * srcblk * ovVmax * np.tanh((ovR / ovVmax) * I)
 
+    # The internal-node KCL is LINEAR with a CONSTANT matrix: `A V = D ivec + g0 Vo + c`. So it
+    # is factored ONCE here instead of assembled and solved at every right-hand-side call (the
+    # ODE takes ~4000 steps, and this solve was 70 % of the fit's large-signal time).
+    A = np.zeros((N, N))
+    D = np.zeros((N, N))
+    g0 = np.zeros(N)
+    c = np.zeros(N)
+    for k in range(N):
+        A[k, k] += G[k]
+        if k > 0:
+            A[k, k - 1] -= G[k]
+        else:
+            g0[k] += G[k]
+        if k < N - 1:
+            A[k, k] += G[k + 1]
+            A[k, k + 1] -= G[k + 1]
+            D[k, k] += 1.0
+            D[k, k + 1] -= 1.0
+        else:
+            A[k, k] += Gra
+            D[k, k] += 1.0
+            c[k] += Gra * vreg
+    Ainv = np.linalg.inv(A)
+    P, q, r = Ainv @ D, Ainv @ g0, Ainv @ c          # V = P ivec + q Vo + r
+    if discharge is not None:
+        # with the dump engaged the last branch is nonlinear: split V[N-1] = a - I_Ra * bb
+        A0 = A.copy()
+        A0[N - 1, N - 1] -= Gra
+        A0inv = np.linalg.inv(A0)
+        c0 = c.copy()
+        c0[N - 1] -= Gra * vreg
+        P0, q0, r0 = A0inv @ D, A0inv @ g0, A0inv @ c0
+        e = np.zeros(N)
+        e[N - 1] = 1.0
+        y = A0inv @ e
+        bb = float(y[N - 1])
+
     def algebraic(ivec, Vo):
-        A = np.zeros((N, N))
-        b = np.zeros(N)
-        for k in range(N):
-            A[k, k] += G[k]
-            if k > 0:
-                A[k, k - 1] -= G[k]
-            else:
-                b[k] += G[k] * Vo
-            if k < N - 1:
-                A[k, k] += G[k + 1]
-                A[k, k + 1] -= G[k + 1]
-                b[k] += ivec[k] - ivec[k + 1]
-            else:
-                A[k, k] += Gra
-                b[k] += ivec[k] + Gra * vreg
-        V = np.linalg.solve(A, b)
+        V = P @ ivec + q * Vo + r
         if discharge is None:
             return V
         vov = Vo - vreg
         if vov <= ovVdz:                      # the gate's value AND slope vanish -> linear
             return V
         from scipy.optimize import brentq
-        A0 = A.copy()
-        A0[N - 1, N - 1] -= Gra
-        b_base = b.copy()
-        b_base[N - 1] -= Gra * vreg
-        e = np.zeros(N)
-        e[N - 1] = 1.0
-        x = np.linalg.solve(A0, b_base)
-        y = np.linalg.solve(A0, e)
-        a, bb = x[N - 1], y[N - 1]            # V[N-1] = a - I_Ra*bb
+        x = P0 @ ivec + q0 * Vo + r0
+        a = float(x[N - 1])                   # V[N-1] = a - I_Ra*bb
         I0 = (a - vreg) / (Ra + bb)
 
         def gfun(I):
@@ -145,18 +162,24 @@ def rail_trace(Ra, sections, Cext, i_from, i_to, iaG, iaV, vreg, t0, edge, tstop
     def iload(t):
         return i_from if t < t0 else i_from + (i_to - i_from) * min(1.0, (t - t0) / edge)
 
+    iaV2 = iaV * iaV
+
     def iassist(Vo):
         verr = vreg - Vo
-        return iaG * np.tanh(verr * abs(verr) / (iaV * iaV)) if iaG > 0 else 0.0
+        return iaG * math.tanh(verr * abs(verr) / iaV2) if iaG > 0 else 0.0
+
+    G0 = float(G[0])
 
     def f(t, x):
         ivec = x[:N]
-        Vo = x[N]
+        Vo = float(x[N])
         V = algebraic(ivec, Vo)
-        Vprev = np.concatenate(([Vo], V[:-1]))
-        di = (Vprev - V) / L
-        dVo = (iassist(Vo) - iload(t) - ivec[0] - G[0] * (Vo - V[0])) / Cext
-        return list(di) + [dVo]
+        out = np.empty(N + 1)
+        out[0] = Vo - V[0]
+        out[1:N] = V[:-1] - V[1:]
+        out[:N] /= L
+        out[N] = (iassist(Vo) - iload(t) - ivec[0] - G0 * (Vo - V[0])) / Cext
+        return out
 
     x0 = list(np.full(N, -i_from)) + [vreg - i_from * Ra]
     return solve_ivp(f, (0, t0 + tstop), x0, method="LSODA", max_step=5 * edge,

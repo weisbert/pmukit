@@ -111,17 +111,71 @@ def test_a_rail_with_a_shorter_grid_holds_its_last_point():
 
 
 # ------------------------------------------------------------------- the superposition merge
-def test_rail_and_bias_psrr_are_one_supply_injection(plan):
+def test_rail_and_bias_psrr_are_one_supply_injection(plan, parts):
     """The whole point of AC superposition: one supply injection reads every port."""
     ac_supply = [g for g in plan.groups if g.id.startswith("ac:VS_")]
     assert len(ac_supply) == 1
     g = ac_supply[0]
-    reads = set(g.runs[0].run.reads)
+    nominal = nominal_state(plan.states, parts[1])
+    at_nominal = [r for r in g.runs if r.run.load_key == nominal.key]
+    reads = set(at_nominal[0].run.reads)
     # both the rails' PSRR and the biases' PSRR come out of this single run
     assert "ac_psrr.a" in reads and "ac_psrr.b" in reads
     assert "ac_psrr.ptat" in reads and "ac_psrr.poly" in reads
     # ...and it is genuinely one simulation, not four
     assert len({r.run_id for r in g.runs}) == g.n_runs
+
+
+def test_a_member_without_the_load_axis_is_read_from_the_nominal_state_only(plan, parts):
+    """The supply injection walks every load state for the RAILS' PSRR, but the bias PSRR has
+    no load axis: read from every state, each run would overwrite the one bias cell (and the
+    importer would flag the values as DIFFERING). It is read from the nominal state only --
+    while every run still SAVES the bias probe, so the netlist and the run_id do not change."""
+    _cfg, der, _nl, _pins = parts
+    nominal = nominal_state(plan.states, der)
+    g = plan.group("ac:VS_VDDA_1V0")
+    assert {r.run.load_key for r in g.runs} == {"L0", "L1", "L2", "L3"}
+    for r in g.runs:
+        bias = {"ac_psrr.ptat", "ac_psrr.poly"} & set(r.run.reads)
+        assert {"ac_psrr.a", "ac_psrr.b"} <= set(r.run.reads)
+        if r.run.load_key == nominal.key:
+            assert bias == {"ac_psrr.ptat", "ac_psrr.poly"}
+            assert any(p == "ptat" and b == "psrr" for p, b, _ in r.feeds)
+        else:
+            assert not bias, f"{r.run.load_key} writes the bias PSRR cell too"
+            assert not any(p in ("ptat", "poly") for p, _b, _ in r.feeds)
+        assert "VB_IB_PTAT:p" in r.netlist_text          # saved everywhere: run_id unchanged
+    # exactly one writer per (corner, temp) bias cell
+    writers = {}
+    for r in g.runs:
+        if "ac_psrr.ptat" in r.run.reads:
+            writers.setdefault((r.run.process, r.run.temp_c), []).append(r.run_id)
+    assert all(len(v) == 1 for v in writers.values())
+    assert len(writers) == len(CFG["corners"]) * len(CFG["temps_c"])
+    # nothing about the bias block is lost by this
+    assert plan.consequences() == []
+
+
+def test_a_rail_with_a_shorter_grid_is_written_once_per_own_load_point():
+    """Rail b declares no my_load, so it has ONE load point and every shared state holds it.
+    Its cells are keyed by its OWN load, so the four states would write one cell four times;
+    only the state nearest the testbench load writes it, and its own injection is run once."""
+    cfg = ProjectConfig.from_dict(dict(CFG, my_load={"a": CFG["my_load"]["a"]}))
+    nl = Netlist(DEMO, "tb/input.scs")
+    pins = nl.scan("PMU_TOP", ports=cfg.ports)
+    der = derive(cfg, pins, SiteConfig(engine="spectre_ssh"))
+    assert len(der.loads["b"]["points_a"]) == 1
+    plan = compile_plan(cfg, der, nl, pins, site=SiteConfig(engine="spectre_ssh"))
+    nominal = nominal_state(plan.states, der)
+    zb = plan.group("ac:IL_VDD0P8_B")
+    assert {r.run.load_key for r in zb.runs} == {nominal.key}
+    assert zb.n_runs == len(CFG["corners"]) * len(CFG["temps_c"]) * len(CFG["vset_codes"])
+    # rail a still walks all four of its points
+    assert {r.run.load_key for r in plan.group("ac:IL_VDD0P8_A").runs} == {"L0", "L1", "L2", "L3"}
+    supply = plan.group("ac:VS_VDDA_1V0")
+    writers = [r for r in supply.runs if "ac_psrr.b" in r.run.reads]
+    assert {r.run.load_key for r in writers} == {nominal.key}
+    assert all("ac_psrr.a" in r.run.reads for r in supply.runs)
 
 
 def test_zout_is_one_injection_per_rail(plan):
@@ -133,7 +187,7 @@ def test_zout_is_one_injection_per_rail(plan):
 
 def test_dc_temp_is_one_sweep_reading_every_port(plan):
     g = plan.group("dc_temp")
-    reads = set(g.runs[0].run.reads)
+    reads = set().union(*(r.run.reads for r in g.runs))
     assert {"dc_temp.a", "dc_temp.b", "dc_temp.ptat", "dc_temp.poly"} <= reads
     # temperature is swept INSIDE the run, so there is no run PER temperature...
     assert all(r.run.temp_c != r.run.temp_c for r in g.runs)          # NaN == "T swept"

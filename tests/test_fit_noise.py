@@ -126,3 +126,79 @@ def test_missing_noise_is_missing_not_a_bad_fit(tmp_path):
     ds.put(f"ac_zout.{RAIL}", CELL, zout.predict(ZTRUE, f=NOISE_FREQ))
     bf = noise.fit(ds, RAIL, CELL, zout_by_load={5e-4: ZTRUE})
     assert bf.missing is True and bf.params == {}
+
+
+# --------------------------------------------------------------------------- the solver
+
+
+def _bank_targets():
+    """Three loads, deliberately NOT on one frequency grid, with a non-trivial T2 and Z2."""
+    rng = np.random.default_rng(7)
+    out = {}
+    for j, (lo, hi, n) in enumerate([(10.0, 1e8, 141), (20.0, 5e7, 97), (10.0, 1e8, 60)]):
+        f = np.logspace(np.log10(lo), np.log10(hi), n)
+        T2 = 1.0 / (1.0 + (f / 3e5) ** 2) + 0.1
+        Z2 = 0.5 + (f / 1e6) ** 2 / (1.0 + (f / 1e6) ** 2)
+        out[float(j)] = (f, rng.uniform(1e-18, 1e-16, n), T2, Z2)
+    return out
+
+
+@pytest.mark.parametrize("mode", ["norton", "hybrid"])
+def test_the_vectorized_bank_is_the_per_load_formula(mode):
+    """`_Bank.model` evaluates every load at once; it must give the numbers the per-load
+    reconstruction (`_eval_goal`, which the adaptive loop uses) gives."""
+    targets = _bank_targets()
+    keys = sorted(targets)
+    M = 4
+    prob = noise._Bank(targets, keys, M, mode)
+    rng = np.random.default_rng(11)
+    p = np.concatenate([np.log(np.logspace(2, 7, M))]
+                       + [rng.uniform(-45.0, -30.0, M + 2) for _ in keys])
+    got = prob.per_load(p)
+    rest = p[M:].reshape(len(keys), M + 2)
+    for j, key in enumerate(keys):
+        f, _goal, T2, Z2 = targets[key]
+        row = {"white": np.sqrt(np.exp(rest[j, 0])), "flicker": np.sqrt(np.exp(rest[j, 1])),
+               "amp_i": list(np.sqrt(np.exp(rest[j, 2:]))),
+               "corner_i_hz": list(np.exp(p[:M]))}
+        want = noise._eval_goal(row, f, T2, Z2, mode)
+        assert got[j].shape == f.shape
+        assert np.allclose(got[j], want, rtol=1e-12, atol=0.0)
+    # one log residual per sample, plus the M-1 separation-penalty rows
+    assert prob.resid(p).size == sum(t[0].size for t in targets.values()) + (M - 1)
+
+
+def test_the_stall_guard_counts_iterations_not_jacobian_probes(monkeypatch):
+    """A probe (one coordinate moved by a relative ~1e-8) is not an iteration; an iterate that
+    does not beat the cost by STALL_RTOL is, and STALL_WINDOW of those end the solve with the
+    best point seen kept for the caller."""
+    monkeypatch.setattr(noise, "STALL_WINDOW", 5)
+    targets = _bank_targets()
+    prob = noise._Bank(targets, sorted(targets), 2, "norton")
+    p = np.concatenate([np.log([1e3, 1e5])] + [np.full(4, -40.0) for _ in targets])
+    r0 = prob.resid(p)
+    assert prob.iterations == 1
+    for i in range(p.size):                            # one forward-difference Jacobian
+        q = p.copy()
+        q[i] += 1.49e-8 * max(1.0, abs(q[i]))
+        prob.resid(q)
+    assert prob.iterations == 1, "the Jacobian's probes were counted as iterations"
+    with pytest.raises(noise._Stalled):
+        for k in range(1, 20):                         # iterates that go nowhere
+            prob.resid(p + 1e-3 * (k % 2))
+    # 5 stagnant iterates after the first (and at most one that still counted as progress)
+    assert 1 + 5 <= prob.iterations <= 1 + 5 + 1
+    assert prob.best[1] is not None and prob.best[0] <= 0.5 * float(r0 @ r0)
+
+
+def test_a_solve_that_converges_never_meets_the_guard(tmp_path, monkeypatch):
+    """The guard exists for the crawl along the separation hinge. An ordinary fit converges
+    before STALL_WINDOW stagnant iterations, so switching the guard off changes nothing."""
+    ds = build(tmp_path)
+    zmap = {il: ZTRUE for il in TRUE}
+    on = noise.fit_bank(ds, RAIL, CELL, zout_by_load=zmap)
+    monkeypatch.setattr(noise, "STALL_WINDOW", 10 ** 9)
+    off = noise.fit_bank(ds, RAIL, CELL, zout_by_load=zmap)
+    for il in TRUE:
+        assert on[il].params == off[il].params
+        assert on[il].score == off[il].score

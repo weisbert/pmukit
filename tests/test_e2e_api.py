@@ -358,6 +358,8 @@ def test_13_the_fit_turns_the_dataset_into_model_parameters(api):
     assert len(steps) > 3, [e["text"] for e in job["events"]]
     fr = [e["progress"] for e in steps]
     assert fr == sorted(fr) and fr[-1] > fr[0]
+    # and a step that can take seconds says what it is busy with, not just its number
+    assert any("noise bank" in e["text"] for e in steps), [e["text"] for e in steps]
     STATE["fit"] = summary
 
 

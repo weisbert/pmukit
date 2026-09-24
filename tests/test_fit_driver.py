@@ -130,6 +130,24 @@ def test_events_are_reported_for_progress(tmp_path):
     assert set(seen[0]) == {"port", "block", "cell", "score", "metric", "missing"}
 
 
+def test_on_block_names_each_block_as_it_is_fitted_and_never_a_cache_hit(tmp_path):
+    """The sub-step a UI shows while one (port, cell) step is busy: called BEFORE a block is
+    fitted, once per fitted block -- so the joint noise bank, which fills every load at once,
+    is announced once per corner, not once per load."""
+    ds = build(tmp_path)
+    blocks = []
+    progress = []
+    res = fit_project(ds, DERIVED, on_block=lambda p, b, c: blocks.append((p, b, dict(c))),
+                      on_progress=lambda d, t, p, c: progress.append(d))
+    assert len(progress) > 1
+    announced = [(p, b) for p, b, _c in blocks]
+    assert len(announced) == len(set((p, b, str(sorted(c.items()))) for p, b, c in blocks))
+    assert announced.count((RAIL, "noise")) == 1, announced
+    assert set(announced) <= {(bf.port, bf.block) for bf in res.fits.values()}
+    from pmukit.fit import LONG_BLOCKS
+    assert set(LONG_BLOCKS) <= {b.name for b in spec.blocks_for("rail")}
+
+
 # --------------------------------------------------------------------------- the result
 
 
