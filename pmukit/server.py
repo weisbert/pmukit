@@ -687,18 +687,38 @@ class Project:
                    "Every screen below New reads the pin roles out of one Spectre netlist; none "
                    "has been loaded for this project.",
                    ["Drop an input.scs on the New screen",
-                    "Or POST /api/p/<project>/netlist with {\"path\": \"...\"}"],
+                    "Or type its path on this machine in the box on the New screen"],
                    str(self.netlist_dir / "input.scs"))
+
+    @property
+    def source_meta_path(self) -> pathlib.Path:
+        return self.netlist_dir / "source.json"
+
+    def netlist_source(self) -> dict | None:
+        """Where the project's netlist copy came from: {path, typed, name, via, sha, bytes,
+        loaded_at, changes}. None for a project loaded before this was recorded."""
+        try:
+            d = jsonio.read(self.source_meta_path)
+        except (OSError, ValueError):
+            return None
+        return d if isinstance(d, dict) else None
+
+    def save_netlist_source(self, meta: dict) -> None:
+        jsonio.write(self.source_meta_path, meta)
 
     def netlist(self):
         from .netlist import Netlist
-        return Netlist.from_file(self.netlist_path())
+        nl = Netlist.from_file(self.netlist_path())
+        nl.origin = str((self.netlist_source() or {}).get("path") or "")
+        return nl
 
     def pins(self, nl=None):
         nl = nl if nl is not None else self.netlist()
         cfg = self.config_or_none()
         inst = cfg.pmu_inst if cfg is not None else guess_pmu_inst(nl)
         ports = dict(cfg.ports) if cfg is not None else {}
+        if nl.find_instance(inst) is None:
+            raise _inst_gone(nl, inst)
         return nl.scan(inst, ports=ports or None)
 
     # ---- derived + plan
@@ -807,29 +827,70 @@ class Project:
             return None
 
 
+#: Spectre primitives: a top-level instance of one is a bench source, probe or passive, never
+#: the PMU, so it is not offered as a candidate.
+_PRIMITIVES = frozenset({
+    "isource", "vsource", "iprobe", "resistor", "capacitor", "inductor", "mutual_inductor",
+    "vcvs", "vccs", "ccvs", "cccs", "pvcvs", "pvccs", "pccvs", "pcccs", "bsource", "diode",
+    "switch", "relay", "port", "tline", "nport", "delay", "winding", "core"})
+
+
+def pmu_candidates(nl) -> list[dict]:
+    """Top-level instances that could be the PMU, best first -- the ranking `guess_pmu_inst` uses.
+
+    A master defined as a subckt (in the deck, or in a plain include it can read) ranks above
+    one that is not; then the most pins; then file order. The first is marked `guess` only when
+    its subckt is defined -- an undefined master is offered, never picked.
+    """
+    out = []
+    for order, (name, nodes, master, _rest) in enumerate(nl.instances(0)):
+        if master in _PRIMITIVES:
+            continue
+        out.append({"name": name, "master": master, "pins": len(nodes),
+                    "defined": nl.subckt_home(master) is not None, "order": order})
+    out.sort(key=lambda c: (not c["defined"], -c["pins"], c["order"]))
+    for i, c in enumerate(out):
+        del c["order"]
+        c["guess"] = i == 0 and c["defined"]
+    return out
+
+
 def guess_pmu_inst(nl) -> str:
     """The instance with the most pins whose master is a subckt defined in the file.
 
     The convention sources (IL_/VB_/VS_/VEN_) are two-node primitives, so the PMU instance is
-    unambiguous in every deck that follows the convention. When it is not, the caller passes
-    `pmu_inst` explicitly -- we report, we do not guess twice.
+    unambiguous in every deck that follows the convention. When it is not, the user picks from
+    the candidates the error carries -- we report, we do not guess twice.
     """
-    best, best_n = "", -1
-    subckts = set(re.findall(r"^\s*subckt\s+(\S+)", nl.text, re.MULTILINE))
-    for name, nodes, master, _rest in nl.instances(0):
-        if master not in subckts:
-            continue
-        if len(nodes) > best_n:
-            best, best_n = name, len(nodes)
-    if not best:
-        raise _err("could not tell which instance is the PMU.",
-                   "The PMU is the top-level instance whose master is a subckt defined in the "
-                   "netlist; this deck has none (or the subckt lives in an include).",
-                   ["Pass the instance name: POST /api/p/<project>/netlist "
-                    "{\"path\": \"...\", \"pmu_inst\": \"PMU_TOP\"}",
-                    "Check that the testbench instantiates the PMU at the top level"],
-                   "netlist: top-level instances")
-    return best
+    cands = pmu_candidates(nl)
+    if cands and cands[0]["guess"]:
+        return cands[0]["name"]
+    raise PmuError(
+        what="could not tell which instance is the PMU.",
+        why="The PMU is the top-level instance whose master is a subckt defined in the netlist "
+            "(or in an include pmukit can read); this deck has "
+            + (f"{len(cands)} other top-level instance(s), none of them defined."
+               if cands else "no top-level instance of a subckt at all."),
+        do=["Pick the PMU instance from the list here" if cands else
+            "Check that the testbench instantiates the PMU at the top level",
+            "Or re-export the netlist with the PMU subckt in it"],
+        where=f"{nl.path or 'netlist'}: top-level instances",
+        extra={"candidates": cands})
+
+
+def _inst_gone(nl, inst: str) -> PmuError:
+    """The configured PMU instance is not in this netlist: offer the ones that are."""
+    cands = pmu_candidates(nl)
+    return PmuError(
+        what=f"there is no top-level instance named {inst!r} in the netlist.",
+        why="The PMU instance is named in the project config (or was just picked); the netlist "
+            "read last has no top-level instance by that name -- renamed in the bench, or "
+            "another deck.",
+        do=["Pick the PMU instance from the list here" if cands else
+            "Check that the testbench instantiates the PMU at the top level",
+            f"Or rename the instance back to {inst} in the bench and re-read the netlist"],
+        where=f"{nl.path or 'netlist'}: top-level instances",
+        extra={"candidates": cands})
 
 
 # ============================================================================== demo data
@@ -870,6 +931,7 @@ def _demo_pins() -> dict:
                      "reason": ("no IL_/VB_/VS_/VEN_ source drives this pin"
                                 if name == "TESTMODE" else "")})
     return {"pmu_inst": "PMU_TOP", "pmu_master": "pmu_demo", "pins": pins,
+            "candidates": _demo_netlist_info()["candidates"],
             "sections": {"pdk/toplevel.scs": "tt", "pdk/rc.scs": "typ"},
             "params": {"VSET": "3"},
             "analyses": ["dcOp dc", "ac1 ac start=1 stop=1G dec=10"],
@@ -877,6 +939,22 @@ def _demo_pins() -> dict:
             "summary": {"rails": 2, "biases": 2, "stubs": 1, "grounds": 3,
                         "unclassified": ["TESTMODE"]},
             "netlist": {"path": "tb/input.scs", "sha": "9c1e4bb7", "bytes": 41984}}
+
+
+def _demo_netlist_info() -> dict:
+    return {"source": {"path": "/work/pmu_tb/spectre/schematic/netlist/input.scs",
+                       "typed": "$WORK_ROOT/pmu_tb/spectre/schematic/netlist/input.scs",
+                       "name": "input.scs", "via": "path", "sha": "9c1e4bb7", "bytes": 41984,
+                       "loaded_at": "2026-09-15T14:02:11Z", "on_disk": "same",
+                       "changes": {"first": False, "unchanged": True, "pmu_inst": "PMU_TOP",
+                                   "text": "input.scs is unchanged since the last read "
+                                           "(byte-identical); every answer is kept"}},
+            "copy": {"path": "tb/input.scs", "sha": "9c1e4bb7", "bytes": 41984},
+            "pmu_inst": "PMU_TOP", "cwd": "/work",
+            "candidates": [{"name": "PMU_TOP", "master": "pmu_demo", "pins": 11,
+                            "defined": True, "guess": True},
+                           {"name": "XREF", "master": "bgr_ref", "pins": 3,
+                            "defined": True, "guess": False}]}
 
 
 def _demo_groups() -> list[dict]:
@@ -1226,6 +1304,45 @@ def _safe_name(value: str, pattern: re.Pattern, kind: str, where: str) -> str:
     return value
 
 
+_UNSET_VAR = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+
+
+def _resolve_user_path(typed: str, where: str) -> pathlib.Path:
+    """A path as a tcsh user types it -> an absolute path to an existing netlist file.
+
+    `~` and `$VAR` / `${VAR}` are expanded (against the SERVER's environment -- it is the server
+    that reads the file); quotes pasted along with the path are dropped; a relative path is
+    resolved against the server's cwd, and the error says so, with both paths spelled out. A
+    directory is accepted when it holds an `input.scs` (ADE's netlist directory).
+    """
+    raw = str(typed).strip().strip("'\"").strip()
+    expanded = os.path.expandvars(os.path.expanduser(raw))
+    left = [m.group(1) for m in _UNSET_VAR.finditer(expanded) if m.group(1) not in os.environ]
+    if left:
+        raise _err(f"${left[0]} is not set in the pmukit server's environment.",
+                   f"{raw!r} names an environment variable; the server expands it with its own "
+                   f"environment (the shell `pmukit ui` was started from), where it is not set.",
+                   [f"Type the path without ${left[0]}", f"Or setenv {left[0]} ... in the shell "
+                    "and restart `pmukit ui`"], where)
+    p = pathlib.Path(expanded)
+    if not p.is_absolute():
+        p = pathlib.Path.cwd() / p
+    p = pathlib.Path(os.path.normpath(str(p)))
+    if p.is_dir() and (p / "input.scs").is_file():
+        p = p / "input.scs"
+    if not p.is_file():
+        rel = "" if pathlib.Path(expanded).is_absolute() else (
+            f" A relative path is read from the server's working directory, {pathlib.Path.cwd()}.")
+        raise _err(f"there is no netlist at {p}.",
+                   f"{raw!r} does not point at a readable file on the machine the pmukit server "
+                   f"runs on" + (" (it is a directory without an input.scs)" if p.is_dir() else "")
+                   + "." + rel,
+                   ["Type the full path, e.g. $WORK_ROOT/sim/pmu_tb/spectre/schematic/netlist/"
+                    "input.scs", "Or drop the file on the New screen instead"],
+                   str(p))
+    return p
+
+
 def site_path(root=None):
     """site.json under the server's data root when one was given, else $PMUKIT_DATA's."""
     return (pathlib.Path(root) / "site.json") if root is not None else None
@@ -1494,6 +1611,7 @@ class Api:
         biases = [p for p in pins if p["role"] == "bias" and p["fate"] == "model"]
         path = pr.netlist_path()
         return {"pmu_inst": table.pmu_inst, "pmu_master": table.pmu_master, "pins": pins,
+                "candidates": pmu_candidates(nl),
                 "sections": table.sections, "params": table.params,
                 "analyses": table.analyses, "notes": table.notes,
                 "summary": {"rails": len(rails), "biases": len(biases),
@@ -1505,27 +1623,80 @@ class Api:
                 "netlist": {"path": str(path), "sha": jsonio.sha_file(path, 12),
                             "bytes": path.stat().st_size}}
 
+    def netlist_info(self, project: str) -> dict:
+        """The New screen's Netlist row, readable even when the pins are not: where the file
+        came from (so it can be re-read in one click), whether that file changed on disk since,
+        the copy the project works on, the PMU candidates and what changed at the last read."""
+        if self.demo:
+            return _demo_netlist_info()
+        pr = Project(project, self.root)
+        src = pr.netlist_source()
+        if src and src.get("path"):
+            sp = pathlib.Path(src["path"])
+            if not sp.is_file():
+                src["on_disk"] = "missing"
+            else:
+                try:
+                    data = sp.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+                    same = jsonio.sha_bytes(data.encode("utf-8"), 12) == src.get("sha")
+                    src["on_disk"] = "same" if same else "changed"
+                except OSError:
+                    src["on_disk"] = "missing"
+        cfg = pr.config_or_none()
+        try:
+            path = pr.netlist_path()
+        except PmuError:
+            path = None
+        copy, cands = None, []
+        if path is not None:
+            copy = {"path": str(path), "sha": jsonio.sha_file(path, 12),
+                    "bytes": path.stat().st_size}
+            try:
+                cands = pmu_candidates(pr.netlist())
+            except PmuError:
+                cands = []
+        return {"source": src, "copy": copy, "pmu_inst": cfg.pmu_inst if cfg is not None else "",
+                "candidates": cands, "cwd": str(pathlib.Path.cwd())}
+
     def load_netlist(self, project: str, body: dict) -> dict:
         """Copy the netlist into the project and parse it. Runs as a job (parse is the slow part
-        on a real deck, and the New screen wants a loading state with a real backing)."""
+        on a real deck, and the New screen wants a loading state with a real backing).
+
+        Three ways in: `text` (dropped or chosen in the browser, with its `name`), `path` on this
+        machine (`~` and `$VAR` expanded), or `reread` -- the path it was last loaded from, so a
+        bench fixed in Virtuoso and exported to the same place is one click. A re-read keeps
+        every config answer that still applies, drops those of vanished pins, and says so.
+        """
+        where = f"POST /api/p/{project}/netlist"
         pr = Project(project, self.root).ensure()
         text = body.get("text")
         src = body.get("path")
         pmu_inst = str(body.get("pmu_inst") or "").strip()
         target = pr.netlist_dir / "input.scs"
+        prev = pr.netlist_source() or {}
+        if body.get("reread"):
+            if not prev.get("path"):
+                raise _err("there is no path to re-read the netlist from.",
+                           "This project's netlist was " +
+                           ("dropped into the browser, and a browser never tells the server "
+                            "where a file came from." if prev.get("via") == "upload" else
+                            "loaded before pmukit recorded where netlists come from."),
+                           ["Type its path on this machine in the box on the New screen",
+                            "Or drop the file again"], where)
+            src, text = prev["path"], None
         if isinstance(text, str) and text.strip():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text.replace("\r\n", "\n"), encoding="utf-8", newline="\n")
+            new_text = text.replace("\r\n", "\n")
+            name = re.split(r"[\\/]", str(body.get("name") or "input.scs"))[-1] or "input.scs"
+            meta = {"path": "", "typed": "", "name": name, "via": "upload"}
         elif isinstance(src, str) and src.strip():
-            sp = pathlib.Path(src).expanduser()
-            if not sp.is_file():
-                raise _err(f"there is no netlist at {sp}.",
-                           "The path does not point at a readable file on this machine.",
-                           ["Check the path, or drop the file on the New screen instead"],
-                           str(sp))
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(sp.read_text(encoding="utf-8", errors="replace")
-                              .replace("\r\n", "\n"), encoding="utf-8", newline="\n")
+            sp = _resolve_user_path(src, where)
+            try:
+                new_text = sp.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+            except OSError as exc:
+                raise _err(f"could not read {sp}.", f"The server cannot open it: {exc}.",
+                           ["Check the file's permissions", "Or drop the file on the New screen"],
+                           str(sp)) from None
+            meta = {"path": str(sp), "typed": str(src).strip(), "name": sp.name, "via": "path"}
         else:
             raise _err("no netlist was given.",
                        "POST /api/p/<project>/netlist needs either the file's text or a path to "
@@ -1533,26 +1704,112 @@ class Api:
                        ["Drop the file on the New screen",
                         "Or send {\"path\": \"/full/path/input.scs\"}"],
                        "POST /api/p/<project>/netlist")
+        data = new_text.encode("utf-8")
+        meta.update(sha=jsonio.sha_bytes(data, 12), bytes=len(data), loaded_at=_now())
+        copy_sha = jsonio.sha_file(target, 12) if target.is_file() else ""
+        before = prev.get("sha") or copy_sha
+        unchanged = bool(copy_sha) and before == meta["sha"]
+        # Roles assigned on this screen are written into the COPY; a changed source replaces it.
+        edited = bool(copy_sha and prev.get("sha") and copy_sha != prev["sha"])
 
         def work(job):
             from .netlist import Netlist
-            job.say(f"reading {target.name}", 0.2)
+            cfg = pr.config_or_none()
+            old = None
+            if cfg is not None and copy_sha and not unchanged:
+                job.say("reading the pins of the netlist loaded before", 0.1)
+                try:
+                    old = pr.pins()
+                except PmuError:
+                    old = None            # the previous copy did not scan either
+            if not unchanged:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(new_text, encoding="utf-8", newline="\n")
+            # Recorded before the scan: a deck the scan refuses can still be re-read once fixed.
+            pr.save_netlist_source(dict(meta, changes=None))
+            job.say(f"reading {meta['name']}", 0.3)
             nl = Netlist.from_file(target)
-            inst = pmu_inst or guess_pmu_inst(nl)
+            nl.origin = meta["path"]
+            inst = pmu_inst or (cfg.pmu_inst if cfg is not None else guess_pmu_inst(nl))
+            if nl.find_instance(inst) is None:
+                raise _inst_gone(nl, inst)
             job.say(f"resolving the pins of {inst}", 0.6)
             table = nl.scan(inst, ports=None)
+            if cfg is None:
+                pr.save_config(_seed_config(project, target, inst, table), "seeded from the netlist")
+                changes = {"first": True, "unchanged": False, "pmu_inst": inst,
+                           "text": f"read {meta['name']}: {inst}, {len(table.pins)} pins"}
+            elif unchanged and inst == cfg.pmu_inst:
+                changes = {"first": False, "unchanged": True, "pmu_inst": inst,
+                           "text": f"{meta['name']} is unchanged since the last read "
+                                   f"(byte-identical); every answer is kept"}
+            else:
+                new_cfg, changes = _carry_over(cfg, table, old, inst)
+                if edited:
+                    changes["text"] += ("; the role sources pmukit had written into the previous "
+                                        "copy are replaced by this file")
+                pr.save_config(new_cfg, "netlist re-read: " + changes["text"])
+            meta["changes"] = changes
+            pr.save_netlist_source(meta)
             st = pr.state()
             st.netlist = str(target)
-            st.go("new").note(f"netlist parsed: {inst}, {len(table.pins)} pins", "new")
+            st.go("new").note(f"netlist read: {changes['text']}", "new")
             st.save()
-            cfg = pr.config_or_none()
-            if cfg is None:
-                seed = _seed_config(project, target, inst, table)
-                pr.save_config(seed, "seeded from the netlist")
+            with _CACHE_LOCK:
+                _PLAN_CACHE.pop(project, None)
             job.say("done", 1.0)
-            return self.pins(project)
+            out = self.pins(project)
+            out["changes"] = changes
+            return out
 
-        return {"job": JOBS.submit("parse", project, f"parse {target.name}", work).id}
+        return {"job": JOBS.submit("parse", project, f"read {meta['name']}", work).id,
+                "source": meta}
+
+    def set_instance(self, project: str, body: dict) -> dict:
+        """The PMU instance picker: re-scan with another instance.
+
+        The pins are a different set, so ports and loads are re-seeded for it; every other
+        answer (corners, temperatures, codes, the code variable, fmax, the state note) is kept,
+        and the change goes through the config history so Ctrl-Z brings the old instance back.
+        """
+        where = f"PUT /api/p/{project}/netlist/instance"
+        if self.demo:
+            raise _err("--demo cannot switch the PMU instance.",
+                       "Demo mode serves a fixed synthetic PMU and never touches $PMUKIT_DATA.",
+                       ["Restart without --demo to work on real projects"], where)
+        inst = str(body.get("pmu_inst") or "").strip()
+        if not inst:
+            raise _err("no PMU instance was given.",
+                       "The picker sends the name of a top-level instance of the netlist.",
+                       ["Pick one in the PMU instance list on the New screen"], where)
+        pr = Project(project, self.root)
+        nl = pr.netlist()
+        if nl.find_instance(inst) is None:
+            raise _inst_gone(nl, inst)
+        table = nl.scan(inst, ports=None)
+        cfg = pr.config_or_none()
+        if cfg is None:
+            new_cfg = _seed_config(project, pr.netlist_path(), inst, table)
+            changes = {"first": True, "unchanged": False, "pmu_inst": inst,
+                       "text": f"PMU instance {inst}: {len(table.pins)} pins"}
+        elif cfg.pmu_inst == inst:
+            return {"pmu_inst": inst, "pins": self.pins(project),
+                    "changes": {"first": False, "unchanged": True, "pmu_inst": inst,
+                                "text": f"{inst} already is the PMU instance"}}
+        else:
+            new_cfg, changes = _carry_over(cfg, table, None, inst)
+        pr.save_config(new_cfg, f"PMU instance -> {inst}")
+        meta = pr.netlist_source()
+        if meta is not None:
+            meta["changes"] = changes
+            pr.save_netlist_source(meta)
+        st = pr.state()
+        st.netlist = str(pr.netlist_path())
+        st.note(changes["text"], "new")
+        st.save()
+        with _CACHE_LOCK:
+            _PLAN_CACHE.pop(project, None)
+        return {"pmu_inst": inst, "changes": changes, "pins": self.pins(project)}
 
     def set_pin(self, project: str, pin: str, body: dict) -> dict:
         """The Model column and the right-click 'set role'.
@@ -1566,9 +1823,8 @@ class Api:
         changed = []
         role = body.get("role")
         if role:
-            from .netlist import Netlist
             path = pr.netlist_path()
-            nl = Netlist.from_file(path)
+            nl = pr.netlist()
             table = nl.scan(cfg.pmu_inst, ports=dict(cfg.ports))
             if pin not in table.pins:
                 raise _err(f"{pin!r} is not a pin of {cfg.pmu_inst}.",
@@ -2603,6 +2859,72 @@ def _seed_config(project: str, netlist: pathlib.Path, inst: str, table):
         "state_note": ""}, where=str(netlist))
 
 
+def _carry_over(cfg, table, old, inst: str):
+    """(config, changes) after a netlist re-read or a PMU instance switch.
+
+    Corners, temperatures, codes, the code variable, fmax and the state note are the user's and
+    always kept. Per pin, the Model answer, the load and the stub level are kept while the pin
+    still exists with the same role. A pin that is new, or whose role changed (an IL_ source
+    added in the bench), is seeded the way a first read seeds it; a pin that vanished takes its
+    answers with it. A switch to an instance with other pins re-seeds them all. Every one of
+    those is listed in `changes`, never done quietly.
+    """
+    from .config import ProjectConfig
+    seed = _seed_config(cfg.project, pathlib.Path(cfg.netlist), inst, table)
+    switched = inst != cfg.pmu_inst
+    carry = not switched or set(table.pins) == set(cfg.ports)
+    compare = old is not None and not switched
+    before = list(old.pins) if compare else list(cfg.ports)
+    old_role = {n: p.role for n, p in old.pins.items()} if compare else {}
+    ports, loads, stub, roles = {}, {}, {}, []
+    for name, pin in table.pins.items():
+        was = old_role.get(name)
+        if was is not None and was != pin.role:
+            roles.append({"pin": name, "from": was, "to": pin.role})
+        if carry and name in cfg.ports and (was is None or was == pin.role):
+            ports[name] = cfg.ports[name]
+            if name in cfg.my_load:
+                loads[name] = cfg.my_load[name]
+            if name in cfg.stub_dc:
+                stub[name] = cfg.stub_dc[name]
+        else:
+            ports[name] = seed.ports[name]
+            if name in seed.my_load:
+                loads[name] = seed.my_load[name]
+    added = [n for n in table.pins if n not in before]
+    removed = [n for n in before if n not in table.pins]
+    dropped = {"ports": [n for n in cfg.ports if n not in ports],
+               "my_load": [n for n in cfg.my_load if n not in loads],
+               "stub_dc": [n for n in cfg.stub_dc if n not in stub]}
+    d = cfg.to_dict()
+    d.update(pmu_inst=inst, ports=ports, my_load={k: v.to_dict() for k, v in loads.items()})
+    d.pop("stub_dc", None)
+    if stub:
+        d["stub_dc"] = stub
+    new = ProjectConfig.from_dict(d, where=getattr(cfg, "source_path", "") or "project config")
+    if switched:
+        text = (f"PMU instance {cfg.pmu_inst} -> {inst}: {len(table.pins)} pins; "
+                + ("same pin names, so the pin answers carry over" if carry else
+                   "Model column and loads re-seeded for it")
+                + "; corners, temperatures, codes and fmax kept")
+    else:
+        parts = [f"{inst} still found"]
+        if added:
+            parts.append(f"{len(added)} pin(s) added ({', '.join(added)})")
+        if removed:
+            parts.append(f"{len(removed)} pin(s) gone ({', '.join(removed)}): their answers "
+                         "were dropped")
+        if roles:
+            parts.append("role changed: " + ", ".join(f"{r['pin']} {r['from']} -> {r['to']}"
+                                                      for r in roles) + " (re-seeded)")
+        if len(parts) == 1:
+            parts.append("same pins, every answer kept")
+        text = "; ".join(parts)
+    return new, {"first": False, "unchanged": False, "pmu_inst": inst, "prev_inst": cfg.pmu_inst,
+                 "inst_switched": switched, "pins_added": added, "pins_removed": removed,
+                 "roles_changed": roles, "dropped": dropped, "text": text}
+
+
 def _demo_config() -> dict:
     return {"project": "demo_pmu", "netlist": "tb/input.scs", "pmu_inst": "PMU_TOP",
             "corners": ["tt", "ss", "ff"], "temps_c": [-40.0, 25.0, 125.0], "vset_codes": [3],
@@ -3166,6 +3488,16 @@ def _r_diff(api, h, a, q, b):
 @route("POST", r"/api/p/<project>/netlist")
 def _r_netlist(api, h, a, q, b):
     return api.load_netlist(a["project"], b)
+
+
+@route("GET", r"/api/p/<project>/netlist")
+def _r_netlist_info(api, h, a, q, b):
+    return api.netlist_info(a["project"])
+
+
+@route("PUT", r"/api/p/<project>/netlist/instance")
+def _r_netlist_instance(api, h, a, q, b):
+    return api.set_instance(a["project"], b)
 
 
 @route("POST", r"/api/p/<project>/import")

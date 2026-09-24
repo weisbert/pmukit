@@ -115,6 +115,8 @@ ROUTE_TABLE = [
     ("GET", "/api/deliverables/diff?a=demo_pmu/a&b=demo_pmu/b", None),
     # New
     ("POST", "/api/p/demo_pmu/netlist", {}),
+    ("GET", "/api/p/demo_pmu/netlist", None),
+    ("PUT", "/api/p/demo_pmu/netlist/instance", {"pmu_inst": "PMU_TOP"}),
     ("POST", "/api/p/demo_pmu/import", {"dirs": []}),
     ("GET", "/api/p/demo_pmu/pins", None),
     ("PUT", "/api/p/demo_pmu/pins/VDD0P8_A", {"fate": "model"}),
@@ -410,7 +412,8 @@ def test_page_renders_every_screen_without_throwing(tmp_path, demo):
     fixtures = {
         "home": {"projects": g("/api/projects"), "machine": g("/api/machine"),
                  "state": g("/api/state/demo_pmu")},
-        "new": {"pins": g("/api/p/demo_pmu/pins"), "config": g("/api/p/demo_pmu/config")},
+        "new": {"pins": g("/api/p/demo_pmu/pins"), "config": g("/api/p/demo_pmu/config"),
+                "netlistsrc": g("/api/p/demo_pmu/netlist")},
         "plan": {"plan": plan, "consequences": g("/api/p/demo_pmu/plan/consequences"),
                  "planruns:" + group: g("/api/p/demo_pmu/plan/runs?group="
                                         + urllib.parse.quote(group))},

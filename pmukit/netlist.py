@@ -304,7 +304,11 @@ class Netlist:
     def __init__(self, text: str, path: str | pathlib.Path | None = None):
         self.text = text.replace("\r\n", "\n").replace("\r", "\n")
         self.path = str(path or "")
+        #: Where the user's file really lives, when `path` is a copy of it (the web shell copies
+        #: the netlist into the project). Relative `include` lines resolve against it first.
+        self.origin = ""
         self.edits: list[str] = []
+        self._inc_texts: dict[str, tuple[str, str] | None] = {}
 
     # ---- construction
     @classmethod
@@ -320,6 +324,7 @@ class Netlist:
 
     def copy(self) -> "Netlist":
         n = Netlist(self.text, self.path)
+        n.origin = self.origin
         n.edits = list(self.edits)
         return n
 
@@ -410,11 +415,15 @@ class Netlist:
                 where=self.path or "(netlist text)")
         _name, nodes, master, _rest = inst
 
-        port_names = self._subckt_ports(master)
+        home = self.subckt_home(master)
+        port_names = self._subckt_ports(master, home[0]) if home else None
         table = PinTable(pmu_inst=pmu_inst, pmu_master=master)
+        if home and home[1]:
+            table.notes.append(f"subcircuit '{master}' is read from the include {home[1]}")
         if port_names is None:
             table.notes.append(
-                f"subcircuit '{master}' is not defined in this netlist -- pin names fall back to "
+                f"subcircuit '{master}' is not defined in this netlist (nor in an include "
+                "pmukit could read) -- pin names fall back to "
                 "the connected net names, and per-pin grounds cannot be read from the wiring")
             # Several pins can share a net (every ground tied to 0), so de-duplicate positionally
             # rather than let one pin silently swallow the others.
@@ -492,7 +501,7 @@ class Netlist:
             table.pins[pin] = p
 
         self._check_rail_loads(table, pmu_inst)
-        self._attach_grounds(table, master)
+        self._attach_grounds(table, master, home[0] if home else None)
 
         table.sections = {f: s for f, s in self.includes() if s is not None}
         table.params = self.parameters()
@@ -539,9 +548,49 @@ class Netlist:
                 f"{n} ({m}) also hangs on rail {p.name} (net {p.net}): it is part of what gets "
                 "characterized and fitted into the model; remove it unless that is intended")
 
-    def _subckt_ports(self, master: str) -> list[str] | None:
+    def _plain_includes(self) -> list[str]:
+        """Top-level `include "<file>"` lines WITHOUT a section= -- the only includes that can
+        hold the PMU's subckt. A section= include is a PDK model library (large, and never the
+        DUT); an ahdl_include is Verilog-A."""
+        out = []
+        for logical, _phys, d in _scoped_logical_lines(self.text):
+            s = logical.strip()
+            if d != 0 or not s.startswith("include ") or re.search(r"\bsection\s*=", s):
+                continue
+            m = re.search(r'["\']([^"\']+)["\']', s)
+            if m:
+                out.append(m.group(1))
+        return out
+
+    def _definition_texts(self):
+        """(text, where): the deck itself, then each plain include this machine can read.
+
+        One level deep, read lazily and once per Netlist: scan only needs them when the PMU's
+        master is not defined in the deck.
+        """
+        yield self.text, ""
+        for f in self._plain_includes():
+            if f not in self._inc_texts:
+                hit = self._resolve_include(f)
+                try:
+                    self._inc_texts[f] = ((hit.read_text(encoding="utf-8", errors="replace"),
+                                           str(hit)) if hit is not None else None)
+                except OSError:
+                    self._inc_texts[f] = None
+            if self._inc_texts[f] is not None:
+                yield self._inc_texts[f]
+
+    def subckt_home(self, master: str) -> tuple[str, str] | None:
+        """(text, include path or '') of the first file defining `subckt <master>`, or None."""
+        for text, where in self._definition_texts():
+            # the substring test keeps a large include from being parsed for every master
+            if master in text and self._subckt_ports(master, text) is not None:
+                return text, where
+        return None
+
+    def _subckt_ports(self, master: str, text: str | None = None) -> list[str] | None:
         """Port list of `subckt <master> (a b c)` / `subckt <master> a b c`, or None if absent."""
-        for logical, _phys, _d in _scoped_logical_lines(self.text):
+        for logical, _phys, _d in _scoped_logical_lines(self.text if text is None else text):
             s = logical.strip()
             toks = s.split()
             if len(toks) < 2:
@@ -565,10 +614,10 @@ class Netlist:
             return out
         return None
 
-    def _subckt_body(self, master: str) -> list[str]:
+    def _subckt_body(self, master: str, text: str | None = None) -> list[str]:
         """Logical statements inside `subckt <master> ... ends`."""
         body, inside, depth = [], False, 0
-        for logical, _phys, _d in _scoped_logical_lines(self.text):
+        for logical, _phys, _d in _scoped_logical_lines(self.text if text is None else text):
             toks = logical.strip().split()
             if not toks:
                 continue
@@ -590,7 +639,7 @@ class Netlist:
             body.append(logical)
         return body
 
-    def _attach_grounds(self, table: PinTable, master: str) -> None:
+    def _attach_grounds(self, table: PinTable, master: str, text: str | None = None) -> None:
         """Each rail/bias returns to the ground PIN nearest to it in the subcircuit's device graph.
 
         This is "read the ground from the wiring" (contract 0a) taken literally: build the node
@@ -613,7 +662,7 @@ class Netlist:
                                "single global reference")
             return
 
-        body = self._subckt_body(master)
+        body = self._subckt_body(master, text)
         if not body:
             for p in signal:
                 p.gnd_from = "subcircuit body not in this netlist"
@@ -783,9 +832,15 @@ class Netlist:
     _SECTION_CACHE: dict[str, set[str] | None] = {}
 
     def _resolve_include(self, file_path: str) -> pathlib.Path | None:
-        """Where an include line's path actually points, relative to this netlist."""
+        """Where an include line's path actually points, relative to this netlist.
+
+        Relative to the ORIGINAL file first: a deck copied into the project still means the
+        `include "models/x.scs"` next to where the user exported it.
+        """
         p = pathlib.Path(file_path)
         bases = []
+        if self.origin:
+            bases.append(pathlib.Path(self.origin).resolve().parent)
         if self.path:
             bases.append(pathlib.Path(self.path).resolve().parent)
         bases.append(pathlib.Path.cwd())
