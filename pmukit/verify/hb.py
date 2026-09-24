@@ -415,8 +415,9 @@ def hb_check(fit, derived, *, corner: str = "", project: str = "pmu", site=None,
     if not ok:
         report["status"] = "not_run"
         report["notes"].append(
-            f"no simulator: {why}. Every large-signal term therefore stays OFF -- the `ls` tier "
-            f"may only default on after a real HB run, and an unrun check is not a pass.")
+            f"no simulator: {str(why).rstrip('.')}. Every large-signal term therefore stays "
+            f"OFF -- the `ls` tier may only default on after a real HB run, and an unrun check "
+            f"is not a pass.")
         report["terms"] = [{"term": t, "status": "not_run", "why": why} for t in terms]
         return report
 
