@@ -690,7 +690,16 @@ def derive(cfg: ProjectConfig, pins=None, site=None) -> DerivedConfig:
                     f"netlist declares: {have}",
                     "Or ask for one code only, if this PMU has no output-code variable"],
                    getattr(cfg, "source_path", "") or "project config (CONTRACTS.md 0a)")
-    d.vset = {"codes": [int(v) for v in cfg.vset_codes], "param": name,
+    # The code the bench was exported at is the nominal one: it goes first, because every run
+    # that does not sweep the code, and the delivered model's default `vset`, use codes[0].
+    codes = [int(v) for v in cfg.vset_codes]
+    try:
+        nominal = int(float((declared or {}).get(name)))
+    except (TypeError, ValueError):
+        nominal = None
+    if nominal in codes:
+        codes = [nominal] + [c for c in codes if c != nominal]
+    d.vset = {"codes": codes, "param": name,
               "provenance": f"config.vset_codes -> the netlist parameter {name} (config."
                             f"vset_param) is rewritten per code (0b row: VSET)"}
 

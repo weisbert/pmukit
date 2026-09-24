@@ -1171,7 +1171,7 @@ SCREENS.new = {
   foot: function(){
     var pins = S.data["pins"];
     var ready = !!(pins && pins.pins && pins.pins.length);
-    var id = regAction(function(){ go("plan"); });
+    var id = regAction(function(){ buildPlan(); });
     var sum = pins && pins.summary
       ? pins.summary.rails + " rails, " + pins.summary.biases + " biases modeled, "
         + pins.summary.stubs + " stub" + (pins.summary.unclassified.length
@@ -1565,7 +1565,7 @@ function toggleSwitch(rail){
 }
 /* Only the boxes that were typed into are read (a shown value is rounded for display and must
    not overwrite the saved one). Every bad box is marked; nothing is sent until all read. */
-function saveLoadsFromInputs(){
+function saveLoadsFromInputs(after){
   var cur = (S.data["config"] || {}).config;
   if (!cur) return;
   var next = JSON.parse(JSON.stringify(cur));
@@ -1582,9 +1582,35 @@ function saveLoadsFromInputs(){
     });
   });
   if (bad){ render(); return; }
-  if (!changed){ S.toast = "no load number was changed"; render();
-                 setTimeout(function(){ S.toast = ""; render(); }, 1400); return; }
-  putConfig(next, "load numbers edited", "in:load:");
+  if (!changed){
+    if (after){ dropTyped("in:load:"); after(); return; }
+    S.toast = "no load number was changed"; render();
+    setTimeout(function(){ S.toast = ""; render(); }, 1400); return;
+  }
+  putConfig(next, "load numbers edited", "in:load:", after);
+}
+/* "Build plan": typing that was never saved must not be dropped on the way out. Load numbers
+   are saved first (the one box set a user edits and then walks away from); any other unsaved
+   box is named and the move refused -- guessing whether "5G" was meant is not ours to do. */
+function buildPlan(){
+  var typed = Object.keys(S.sel).filter(function(k){
+    return k.indexOf("in:") === 0 && S.sel[k] !== undefined && S.sel[k] !== null;
+  });
+  var other = typed.filter(function(k){ return k.indexOf("in:load:") !== 0; });
+  if (other.length){
+    var names = { "in:fmax": "highest frequency", "in:vset": "codes",
+                  "in:vsetparam": "code var", "in:roledc": "role DC value" };
+    S.toast = "not saved yet: " + other.map(function(k){ return names[k] || k.slice(3); })
+      .join(", ") + " -- press Set (or Enter) first";
+    render(); setTimeout(function(){ S.toast = ""; render(); }, 4000);
+    return;
+  }
+  if (typed.length){
+    // a bad number stays on New with its own message; only a landed save moves on
+    saveLoadsFromInputs(function(){ go("plan"); });
+    return;
+  }
+  go("plan");
 }
 function putConfig(cfg, note, typedKey, after){
   api("/api/p/" + P() + "/config", { method:"PUT", body:{ config: cfg, note: note } })
@@ -2191,6 +2217,16 @@ function curveBlock(row){
     return '<div class="callout warn" style="margin-top:12px">' + ICON.warn + " <b>" + esc(block)
          + "</b> has no curve: the measurement behind it was never run"
          + ((row.notes || []).length ? " -- " + esc(row.notes[0]) : "") + ".</div>";
+  }
+  // Only spectra and temperature laws have one curve against one axis (server CURVE_OBSERVABLE);
+  // a transient block such as load_en is judged by its droop and lives in the report. Asking
+  // the server anyway only produced a 400 banner that outlived the next click.
+  if (["zout", "psrr", "noise", "dc", "yout", "idc"].indexOf(block) < 0){
+    return '<div class="callout" style="margin-top:12px">' + ICON.warn + " <b>" + esc(block)
+         + "</b> is a transient block: it is judged by its droop, not by a curve, so there is"
+         + " nothing to plot here. Its numbers are in report.md."
+         + ' <button class="btn sm" data-act="' + regAction(function(){ openReport(); })
+         + '">Open report</button></div>';
   }
   var cell = row.cell_key || S.sel.cell || "";
   var key = "curve:" + S.sel.port + cell + block;

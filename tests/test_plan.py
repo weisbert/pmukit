@@ -253,6 +253,18 @@ def test_per_ldo_codes_tied_to_one_variable_all_follow_it():
                 in " ".join(r.netlist_text.split()))
 
 
+def test_the_netlists_own_code_is_the_nominal_one():
+    """Codes typed as 1,3 on a bench exported at VSET=3: 3 is the code every non-swept run
+    and the model default use, not whichever was typed first."""
+    nl = Netlist(DEMO, "tb/input.scs")
+    cfg = ProjectConfig.from_dict({**CFG, "vset_codes": [1, 3]})
+    der = derive(cfg, nl.scan("PMU_TOP", ports=cfg.ports))
+    assert der.vset["codes"] == [3, 1]
+    # a netlist value that is not among the codes changes nothing
+    cfg = ProjectConfig.from_dict({**CFG, "vset_codes": [1, 2]})
+    assert derive(cfg, nl.scan("PMU_TOP", ports=cfg.ports)).vset["codes"] == [1, 2]
+
+
 def test_several_codes_on_an_undeclared_variable_are_refused():
     """Declaring it would run -- and every code would simulate the same circuit."""
     nl = Netlist(DEMO, "tb/input.scs")
