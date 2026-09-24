@@ -415,7 +415,9 @@ def fit_bank(dataset, port: str, cell: dict, derived=None, *, zout_by_load=None,
         def g(p, f=f, zp=zp, params=params):
             q = dict(params, white=p[0], flicker=p[1], amp_i=list(p[2:]))
             return sv_model(q, f, zp, c_ft)
-        gate = ident.gate(g, names, vals)
+        fe = ident.envelope_grid(f, ident.envelope_band(derived, "noise"))
+        gate = ident.gate(g, names, vals, envelope=lambda p, fe=fe, g=g: g(p, f=fe),
+                          off=names)
         notes = list(notes_common)
         notes.append("decoupled in SYNTHESIS, not in physics: a Zout error leaks identically "
                      "into this block, so the score above is end-to-end against the measured Sv")

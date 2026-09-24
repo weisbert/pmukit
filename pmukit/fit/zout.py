@@ -465,10 +465,12 @@ def fit(dataset, port: str, cell: dict, derived=None) -> BlockFit:
 
     keys = ["Ra", "La", "Rpl", "Rb", "Lb", "Cout", "esr"]
 
-    def g(p):
+    def g(p, f=f):
         return zmodel(f, p[0], p[1], p[2], p[3], p[4], extra=extra, cout=p[5], esr=p[6],
                       c_ft=c_ft)
-    gate = ident.gate(g, keys, [params[k] for k in keys])
+    fe = ident.envelope_grid(f, ident.envelope_band(derived, "freq"))
+    gate = ident.gate(g, keys, [params[k] for k in keys], envelope=lambda p: g(p, fe),
+                      bounds={"Rpl": (None, 1e9), "Rb": (None, RB_OFF)})
     notes += ident.describe(gate)
     return BlockFit(port=port, block="zout", cell=cell, params=params, score=float(rms),
                     metric="|Zout| dB RMS", n_points=int(f.size), identifiability=gate,

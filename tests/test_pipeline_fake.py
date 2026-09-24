@@ -117,3 +117,24 @@ def test_no_cell_is_written_twice_by_a_plain_fake_run(fitted):
     assert fitted is not None
     twice = [n for n in IMPORT_NOTES if "already filled" in n]
     assert not twice, twice
+
+
+def test_no_small_signal_or_bias_block_is_held_on_the_fake_dut(fitted):
+    """The fake DUT sits inside the model's own form and the AC / noise sweeps cover the whole
+    band the model is used in, so nothing the data leaves free can move a prediction there.
+    Before the identifiability hold asked whether the freedom MATTERS, every Zout, PSRR, noise
+    and bias-idc cell of this demo was held at yellow (Rpl, G0, amp_i[k], the absent knee) and
+    no cell could ever read OK.  `load_en` is excluded: its own score is the yellow."""
+    from pmukit.verify import grades
+
+    held = []
+    for bf in fitted:
+        if bf.missing or bf.block in ("load_en",):
+            continue
+        v = grades.block_verdict(bf)
+        if v["held"]:
+            held.append((bf.port, bf.block, v["held_by"]))
+        # the gate still NAMES what it cannot see; only the grade stopped holding on it
+        infl = (bf.identifiability or {}).get("influence_db") or {}
+        assert all(x <= 1.0 for x in infl.values()), (bf.port, bf.block, infl)
+    assert not held, held
