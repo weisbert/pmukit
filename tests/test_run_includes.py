@@ -209,3 +209,78 @@ def test_the_web_shell_plan_uses_the_original_directory(exported, tmp_path):
     rc = (bench / "pdk" / "rc.scs").as_posix()
     tt = [r for r in plan.runs() if r.run.process == "tt"]
     assert tt and all(f'include "{rc}" section=typ' in r.netlist_text for r in tt)
+
+
+# --------------------------------------------------------------------------- the recipe
+def _recipe_is_the_diff(base: str, deck: str, recipe: str) -> list[str]:
+    """The `[edits]` of a recipe, checked to be EXACTLY the line diff base -> deck: every `~`
+    names a line that left the base and the one that replaced it, every `-` a stripped analysis,
+    every `+` an added line -- nothing more (no no-op, no statement twice), nothing less."""
+    import collections
+    from pmukit.netlist import STRIP_MARKER
+    edits = recipe.split("[edits]\n", 1)[1].split("\n[", 1)[0].splitlines()
+    b = collections.Counter(ln.strip() for ln in base.splitlines() if ln.strip())
+    d = collections.Counter(ln.strip() for ln in deck.splitlines() if ln.strip())
+    removed, added = b - d, d - b
+    was, new = collections.Counter(), collections.Counter()
+    for e in edits:
+        kind, _, body = e.partition(" ")
+        if kind == "~":
+            line, _, old = body.partition("        // was: ")
+            assert line != old, f"no-op edit in the recipe: {e}"
+            new[line] += 1
+            was[old] += 1
+        elif kind == "-":
+            was[body] += 1
+            new[(STRIP_MARKER + body).strip()] += 1
+        elif kind == "+":
+            new[body] += 1
+    assert was == removed, (was, removed)
+    assert new == added, (new, added)
+    return edits
+
+
+def test_the_recipe_is_exactly_the_diff_no_noop_no_statement_twice(exported):
+    """QA: the recipe showed `section=tt` rewritten to `tt`, and the toplevel include twice (the
+    corner's edit, then the absolute path)."""
+    bench, copy = exported
+    nl = _copy_netlist(copy)
+    plan = _plan(nl, corners=("tt", "ss"))
+    top = (bench / "pdk" / "toplevel.scs").as_posix()
+    for r in plan.runs():
+        edits = _recipe_is_the_diff(nl.render(), r.netlist_text, r.run.recipe)
+        tops = [e for e in edits if "toplevel.scs" in e]
+        assert len(tops) == 1, tops
+        assert tops[0] == (f'~ include "{top}" section={r.run.process}        '
+                           f'// was: include "pdk/toplevel.scs" section=tt')
+        assert not any(e.startswith("~ parameters VSET=3 ") for e in edits)   # VSET=3 already
+
+
+def test_the_recipe_of_ades_three_includes_is_one_line_per_include(exported):
+    bench, copy = exported
+    text = copy.read_text(encoding="utf-8").replace(
+        'include "pdk/toplevel.scs" section=tt',
+        'include "pdk/toplevel.scs" section=tt\n'
+        'include "pdk/toplevel.scs" section=ff\n'
+        'include "pdk/toplevel.scs" section=ss')
+    nl = _copy_netlist(copy, text)
+    top = (bench / "pdk" / "toplevel.scs").as_posix()
+    for corner in ("tt", "ss"):
+        run = _plan(nl, corners=(corner,)).runs()[0]
+        edits = _recipe_is_the_diff(nl.render(), run.netlist_text, run.run.recipe)
+        tops = [e for e in edits if "toplevel.scs" in e]
+        assert tops == [
+            f'~ include "{top}" section={corner}        // was: include "pdk/toplevel.scs" section=tt',
+            f'~ include "{top}" section=ff        // was: include "pdk/toplevel.scs" section=ff',
+            f'~ include "{top}" section=ss        // was: include "pdk/toplevel.scs" section=ss'], tops
+
+
+def test_an_edit_undone_by_a_later_one_leaves_no_line():
+    nl = Netlist("simulator lang=spectre\nparameters VSET=3\nV1 (a 0) vsource dc=1\n")
+    nl.set_param("VSET", 5).set_param("VSET", 3)
+    assert nl.recipe_edits() == []
+    nl.set_dc("V1", 2).set_dc("V1", 4)
+    assert nl.recipe_edits() == ["~ V1 (a 0) vsource dc=4        // was: V1 (a 0) vsource dc=1"]
+    nl.append("V2 (b 0) vsource dc=1")
+    nl.set_dc("V2", 3)
+    assert nl.recipe_edits()[-1] == "+ V2 (b 0) vsource dc=3"

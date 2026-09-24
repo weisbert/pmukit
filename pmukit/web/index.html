@@ -199,7 +199,8 @@ var S = {
   help: null,
   note: null,        /* {title, lines}: an explanation popover, not a dialog    */
   palette: false,
-  job: null,         /* {job, status, message, progress, title}             */
+  job: null,         /* {job, status, message, progress, title, screen}     */
+  progress: {},      /* step -> true when done on disk (GET /api/state)      */
   undoable: "",
   toast: "",
   prev: "home"       /* the screen Settings goes back to                    */
@@ -219,6 +220,11 @@ var ICON = {
 
 var STEPS = [["0","Home","home"],["1","New","new"],["2","Plan","plan"],["3","Run","run"],
              ["4","Model","model"],["5","Deliver","deliver"]];
+/* The Settings fields each engine actually reads (site.py); an engine not listed reads none. */
+var SITE_FIELDS = {
+  donau_alps: ["simulator", "queue", "cpus", "accounts"],
+  spectre_ssh: ["ssh_host", "remote_workdir", "spectre_cmd"]
+};
 
 /* ------------------------------------------------------------- helpers --- */
 function esc(s){
@@ -252,8 +258,11 @@ function ago(iso){
   if (s < 172800) return Math.round(s/3600) + " h ago";
   return Math.round(s/86400) + " days ago";
 }
-function copy(text){
-  var ok = function(){ S.toast = "copied"; render(); setTimeout(function(){ S.toast=""; render(); }, 1400); };
+function copy(text, label, then){
+  var ok = function(){
+    S.toast = label || "copied"; if (then) then(true); render();
+    setTimeout(function(){ S.toast=""; render(); }, 1400);
+  };
   try {
     if (navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(ok, fallback); return; }
   } catch(e){ /* fall through */ }
@@ -261,9 +270,12 @@ function copy(text){
   function fallback(){
     var ta = document.createElement("textarea");
     ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
-    document.body.appendChild(ta); ta.select();
-    try { document.execCommand("copy"); ok(); } catch(e2){ S.toast = "press Ctrl C"; render(); }
+    document.body.appendChild(ta); if (ta.select) ta.select();
+    var done = false;
+    try { done = document.execCommand("copy") !== false; } catch(e2){ done = false; }
     document.body.removeChild(ta);
+    if (done) ok();
+    else { S.toast = "press Ctrl C"; if (then) then(false); render(); }
   }
 }
 /* A file the browser saves (Downloads), built in the page: no round trip, no clipboard. */
@@ -394,6 +406,7 @@ function need(key, path, screen){
     delete S.failed[key];
     if (S.errs[screen] && S.errs[screen].key === key) delete S.errs[screen];
     render();
+    scheduleCli();      /* the strip is built from this data (a reload has none until now) */
   }, function(e){
     clearTimeout(timer);
     S.loading[key] = false; S.slow[key] = false;
@@ -423,23 +436,37 @@ function forget(prefix){
 function P(){ return encodeURIComponent(S.project); }
 
 /* ---------------------------------------------------------------- jobs --- */
+/* A job strip belongs to the screen that started it (after onStart, which may move to the screen
+   that watches it -- Submit goes to Run). While it works it shows everywhere; once finished it
+   shows only there, and a success clears itself after JOB_DONE_MS. */
+var JOB_DONE_MS = 4000;
 function startJob(promise, title, onDone, onStart){
   promise.then(function(d){
     if (!d || !d.job){ if (onDone) onDone(d); render(); return; }
     S.job = { job: d.job, status: "running", progress: 0, message: "starting", title: title };
     if (onStart) onStart(d);
+    S.job.screen = S.screen;
     render();
     poll(d.job, onDone);
   }, function(e){ showErr(e); });
 }
 function poll(id, onDone){
   api("/api/jobs/" + encodeURIComponent(id)).then(function(j){
+    var owner = (S.job && S.job.job === id && S.job.screen) || S.screen;
     S.job = { job: j.job, status: j.status, progress: j.progress, message: j.message,
-              title: j.title, error: j.error, not_landed: j.not_landed, result: j.result };
+              title: j.title, error: j.error, not_landed: j.not_landed, result: j.result,
+              screen: owner };
     render();
     if (j.status === "running" || j.status === "queued"){ setTimeout(function(){ poll(id, onDone); }, 700); return; }
     if (j.status === "failed"){
-      S.errs[S.screen] = { status: 501, error: j.error, retry: function(){ S.job = null; render(); } };
+      /* the error is shown ONCE, as the four-part banner of the screen that started the job */
+      S.errs[owner] = { status: 501, error: j.error, retry: function(){ S.job = null; render(); } };
+    }
+    loadProgress();
+    if (j.status === "done"){
+      setTimeout(function(){
+        if (S.job && S.job.job === id && S.job.status === "done"){ S.job = null; render(); }
+      }, JOB_DONE_MS);
     }
     if (onDone) onDone(j);
     render();
@@ -552,9 +579,9 @@ var VERBS = {
     { id:"reci", label:"Copy the recipe", run:function(c){ copy(c.row.recipe || ""); } },
     { id:"cid", label:"Copy run id", key:"id", run:function(c){ copy(c.row.run_id); } },
     { sep:true },
-    { id:"bundle", label:"Copy failure bundle for the desk",
+    { id:"bundle", label:"Copy failure bundle for the desk", common:true,
       when:function(c){ return c.row.status === "failed"; },
-      run:function(c){ go("digest"); } }
+      run:function(c){ failureBundle(c.row.run_id); } }
   ],
   cell: [
     { id:"curves", label:"Show the curves", common:true,
@@ -661,13 +688,32 @@ function go(screen){
   if (S.project && !S.demo && screen !== "settings"){
     api("/api/state/" + P(), { method:"PUT", body:{ screen: screen } }).then(function(){}, function(){});
   }
+  /* the address says where the page is, so a reload comes back to this project and screen */
+  try {
+    if (S.project && window.history && window.history.replaceState){
+      window.history.replaceState(null, "", "?project=" + P() + "&screen=" + encodeURIComponent(screen));
+    }
+  } catch(e){ /* a sandboxed page: the server-side state still remembers */ }
   render();
   refreshCli();
 }
 function openProject(name, screen){
   S.project = name;
-  S.data = {}; S.loading = {}; S.failed = {}; S.errs = {}; S.sel = {};
+  S.data = {}; S.loading = {}; S.failed = {}; S.errs = {}; S.sel = {}; S.progress = {};
   go(screen || "new");
+  loadProgress();
+}
+/* The steps this project has DONE (GET /api/state: config, ledger rows, results, a fit, a
+   deliverable), for the nav circles -- read from the server, so a reload shows them again. */
+function loadProgress(then){
+  if (!S.project) return;
+  var p = S.project;
+  api("/api/state/" + P()).then(function(st){
+    if (p !== S.project) return;
+    S.progress = (st && st.progress) || {};
+    if (then) then(st || {});
+    render();
+  }, function(){});
 }
 /* New project: the name field in the Home footer. This fills and focuses it; Enter or the
    button creates the folder. A refusal (bad name, already there) is shown next to the field. */
@@ -726,7 +772,7 @@ function renderNav(){
   var steps = STEPS.map(function(s, i){
     var cur = S.screen === s[2];
     var idx = STEPS.map(function(x){ return x[2]; }).indexOf(S.screen);
-    var cls = cur ? "step cur" : (idx > i ? "step done" : "step");
+    var cls = cur ? "step cur" : (idx > i || (S.progress || {})[s[2]] ? "step done" : "step");
     /* the accessible name is the screen's name; the digit is the shortcut, said in the title */
     return '<button class="' + cls + '" data-go="' + s[2] + '" aria-label="' + s[1] + '"'
          + (cur ? ' aria-current="page"' : "") + ' title="' + s[1] + " (key " + s[0] + ')">'
@@ -950,14 +996,19 @@ function doAction(text, e){
 function jobBlock(){
   if (!S.job) return "";
   var j = S.job, pct = Math.round((j.progress || 0) * 100);
+  var working = j.status === "running" || j.status === "queued";
+  if (!working && j.screen && j.screen !== S.screen) return "";
   var cls = j.status === "failed" ? "bad" : j.status === "partial" ? "warn" : "";
   var id = regAction(function(){ S.job = null; render(); });
+  /* a failure's what/why/do/where is the banner above; the strip does not say it a second time */
+  var msg = j.status === "failed" ? (S.errs[S.screen] ? "failed — see the error above" : "failed")
+          : (j.message || j.status);
   return '<div class="prog" style="' + (cls === "bad" ? "border-color:var(--bad-line);background:var(--bad-bg)"
         : cls === "warn" ? "border-color:var(--warn-line);background:var(--warn-bg)" : "") + '">'
        + "<b>" + esc(j.title || j.job) + "</b>"
        + '<div class="bar"><div class="seg" style="background:var(--acc);width:' + pct + '%"></div></div>'
-       + '<span class="hint">' + esc(j.message || j.status) + "</span>"
-       + (j.status === "running" ? "" : '<button class="btn sm" data-act="' + id + '">Dismiss</button>')
+       + '<span class="hint">' + esc(msg) + "</span>"
+       + (working ? "" : '<button class="btn sm" data-act="' + id + '">Dismiss</button>')
        + "</div>";
 }
 /* "Why this run exists", "What is this block": a small panel on the page, never a browser
@@ -972,6 +1023,11 @@ function explain(title, lines){
 function cliState(){
   var sc = SCREENS[S.screen];
   return sc && sc.cli ? sc.cli() : {};
+}
+var CLI_TIMER = 0;
+function scheduleCli(){
+  if (CLI_TIMER) return;
+  CLI_TIMER = setTimeout(function(){ CLI_TIMER = 0; refreshCli(); }, 60) || 0;
 }
 function refreshCli(){
   var st = cliState();
@@ -1143,7 +1199,7 @@ SCREENS.new = {
     var left;
     if (noNetlist && !pins){
       left = panel("Netlist", "step 1 &middot; load the testbench netlist",
-        (src.source ? '<div class="kv" style="margin-bottom:12px">' + netlistSourceKv(src) + "</div>"
+        (src.source || src.attempt ? '<div class="kv" style="margin-bottom:12px">' + netlistSourceKv(src) + "</div>"
          : '<div class="hint" style="margin-bottom:10px">This project has no netlist yet. Export the '
            + "testbench from ADE (one file, at the nominal corner) and load it here; everything "
            + "else on this screen is read from it.</div>")
@@ -1152,7 +1208,7 @@ SCREENS.new = {
       /* The pins could not be read: say where the file came from, so the fixed bench is one
          click away, and keep every way of loading another one open. */
       left = panel("Netlist", "one file, exported at the nominal corner",
-        (src && src.source ? '<div class="kv" style="margin-bottom:12px">' + netlistSourceKv(src) + "</div>" : "")
+        (src && (src.source || src.attempt) ? '<div class="kv" style="margin-bottom:12px">' + netlistSourceKv(src) + "</div>" : "")
         + dropZone(src), { style:"flex:1" });
     } else if (S.loading["pins"] || pins === undefined){
       left = panel("Netlist", "one file, exported at the nominal corner",
@@ -1217,10 +1273,11 @@ function dropZone(info){
    and exported to the same path is "Re-read", not a second trip through the file picker. */
 function netlistSourceKv(info){
   var s = (info && info.source) || null, cp = (info && info.copy) || null;
+  if (!s && !cp && info && info.attempt) return attemptKv(info);     /* nothing good loaded yet */
   var other = regAction(function(){ S.sel.loadAnother = !S.sel.loadAnother; render(); });
   var where, btns = "";
   if (s && s.path){
-    var again = regAction(function(){ loadNetlist({ reread: true }); });
+    var again = regAction(function(){ loadNetlist({ reread: true, which: "source" }); });
     where = '<span class="mono">' + esc(s.path) + "</span>"
       + (s.typed && s.typed !== s.path ? ' <span class="hint">typed as <span class="mono">' + esc(s.typed) + "</span></span>" : "")
       + (s.on_disk === "changed" ? ' <span class="badge b-warn">changed on disk since the last read</span>'
@@ -1242,7 +1299,25 @@ function netlistSourceKv(info){
         + (s.loaded_at ? " &middot; " + esc(ago(s.loaded_at)) : "") + "</span>" : "")
     + "</span>"
     + (cp ? '<span class="k">Working copy</span><span class="mono">' + esc(cp.path) + " &middot; "
-        + Math.round((cp.bytes || 0) / 1024) + " KB &middot; sha " + esc((cp.sha || "").slice(0, 8)) + "</span>" : "");
+        + Math.round((cp.bytes || 0) / 1024) + " KB &middot; sha " + esc((cp.sha || "").slice(0, 8)) + "</span>" : "")
+    + attemptKv(info);
+}
+/* The last load the scan refused: staged, never the working copy. Shown until a load succeeds,
+   with the one click that reads the (fixed) file again. */
+function attemptKv(info){
+  var a = info && info.attempt;
+  if (!a) return "";
+  var er = a.error || {};
+  var again = a.path ? regAction(function(){ loadNetlist({ reread: true, which: "attempt" }); }) : "";
+  return '<span class="k">Refused</span><span style="display:flex;flex-direction:column;gap:5px">'
+    + '<span><span class="mono">' + esc(a.path || a.name || "input.scs") + '</span> <span class="badge b-bad">not loaded</span>'
+    + (a.loaded_at ? ' <span class="hint">' + esc(ago(a.loaded_at)) + "</span>" : "") + "</span>"
+    + '<span class="hint">' + esc(er.what || "the scan refused it") + (er.where ? " &middot; " : "")
+    + '<span class="mono">' + esc(er.where || "") + "</span></span>"
+    + '<span class="rowflex">' + (again ? '<button class="btn sm" data-act="' + again + '">' + ICON.retry
+        + " Re-read " + esc(a.name || "it") + "</button>" : "")
+    + '<span class="hint">' + (info.copy ? "the working copy and every answer are the last good ones"
+        : "nothing was loaded") + "</span></span></span>";
 }
 function instOptions(cands, cur){
   var list = (cands || []).slice();
@@ -1974,11 +2049,19 @@ SCREENS.run = {
             : inQueue ? "wait: " + inQueue + " run" + (inQueue > 1 ? "s are" : " is")
                         + " still in the queue (or fit early with what is done on Model)" : "";
     var fid = regAction(function(){ doFit(); });
+    /* the selected failed run: its own bundle, copied here; otherwise every failure is one
+       block of the digest */
+    var selRun = S.sel.run ? (S.data["run:" + S.sel.run] || {}).run : null;
+    var one = selRun && selRun.status === "failed";
+    var bid = regAction(function(){ if (one) failureBundle(selRun.run_id); else go("digest"); });
     return '<span class="hint">Runs are written to <span class="mono">runs.sqlite</span>. '
          + "Closing this page does not stop the queue.</span>"
-         + '<div class="rowflex"><button class="btn" title="The failure logs and the netlist diff '
-         + 'are one block of the digest" data-act="' + regAction(function(){ go("digest"); })
-         + '">' + ICON.copy + " Failure bundle for the desk " + ICON.arrow + "</button>"
+         + '<div class="rowflex"><button class="btn" title="'
+         + (one ? "Deck, submit command, log tails, ledger row and version of this run, copied (key c)"
+                : "The failure logs and the netlist diff of every failed run are one block of the digest")
+         + '" data-act="' + bid + '">' + ICON.copy
+         + (one ? " Copy failure bundle of " + esc(selRun.run_id.slice(0, 8)) + "</button>"
+                : " Failures in the digest " + ICON.arrow + "</button>")
          + (why ? '<span class="hint">' + esc(why) + "</span>" : "")
          + '<button class="btn pri" data-act="' + fid + '"' + (why ? ' disabled title="' + esc(why) + '"' : "")
          + ">Fit model " + ICON.arrow + "</button></div>";
@@ -2004,6 +2087,7 @@ function runDetail(){
     + '<span class="k">Netlist</span><span class="mono">' + esc(r.netlist_path || "-") + "</span>"
     + '<span class="k">PSF</span><span class="mono">' + esc(r.psf_path || "-") + "</span></div>"
     + '<div class="rowflex" style="margin-bottom:10px">' + verbButtons("run", CTXS[ctx]) + "</div>"
+    + bundleBlock(r.run_id)
     + '<div class="lbl" style="margin-bottom:6px">How it ran</div>'
     + '<div class="code" style="max-height:170px">' + esc(r.recipe || "(no recipe)") + "</div>"
     + '<div class="lbl" style="margin:10px 0 6px">Log tail</div>'
@@ -2016,6 +2100,37 @@ function runDetail(){
    selected run) are re-read in place every RUN_REFRESH_MS -- no skeleton flash, one request at a
    time, and nothing at all once the queue is quiet. */
 var RUN_REFRESH_MS = 4000;
+/* "Copy failure bundle": one bounded text blob for the desk (the deck as submitted, the submit
+   command, the log tails, the ledger row, the version), built by the server, copied here and
+   offered as <run_id>_bundle.txt. */
+function failureBundle(runId){
+  S.sel.bundle = { run_id: runId, busy: true };
+  if (S.sel.run !== runId){ S.sel.run = runId; forget("run:"); }
+  render();
+  api("/api/p/" + P() + "/runs/" + encodeURIComponent(runId) + "/bundle").then(function(b){
+    S.sel.bundle = { run_id: runId, name: b.name || runId + "_bundle.txt", text: b.text || "",
+                     bytes: b.bytes || 0, copied: null };
+    copy(S.sel.bundle.text, "failure bundle copied", function(ok){
+      if (S.sel.bundle && S.sel.bundle.run_id === runId) S.sel.bundle.copied = ok;
+    });
+    render();
+  }, function(e){ S.sel.bundle = null; showErr(e); });
+}
+function bundleBlock(runId){
+  var b = S.sel.bundle;
+  if (!b || b.run_id !== runId) return "";
+  if (b.busy) return '<div class="hint" style="margin-bottom:10px">collecting the failure bundle&hellip;</div>';
+  var dl = regAction(function(){ download(b.name, b.text); });
+  var again = regAction(function(){ copy(b.text, "failure bundle copied",
+    function(ok){ b.copied = ok; }); });
+  var kb = Math.max(1, Math.round((b.bytes || b.text.length) / 1024));
+  return '<div class="callout' + (b.copied === false ? " warn" : "") + '" style="margin-bottom:10px"><div class="rowflex">'
+    + (b.copied === false ? ICON.warn + " <b>The browser refused the clipboard</b>"
+       : ICON.ok + " <b>Failure bundle " + (b.copied ? "copied to the clipboard" : "ready") + "</b>")
+    + '<span class="hint">' + kb + " KB &middot; deck, submit command, log tails, ledger row, version</span>"
+    + '<button class="btn sm" data-act="' + dl + '">Download ' + esc(b.name) + "</button>"
+    + '<button class="btn sm" data-act="' + again + '">' + ICON.copy + " Copy again</button></div></div>";
+}
 function runLive(){
   if (S.job && (S.job.status === "running" || S.job.status === "queued")) return true;
   var led = S.data["ledger:" + (S.sel.runFilter || "all")];
@@ -2746,8 +2861,12 @@ SCREENS.digest = {
 SCREENS.settings = {
   cli: function(){
     var st = (S.data["site"] || {}).stored || {};
-    return { engine: st.engine || "", simulator: st.simulator || "", queue: st.queue || "",
-             cpus: st.cpus || "", account: st.project_account || "" };
+    var out = { engine: st.engine || "" };
+    (SITE_FIELDS[st.engine] || []).forEach(function(k){
+      if (k === "accounts") out.account = st.project_account || "";
+      else out[k] = st[k] === undefined || st[k] === null ? "" : st[k];
+    });
+    return out;
   },
   main: function(){
     var s = need("site", "/api/site", "settings");
@@ -2779,24 +2898,36 @@ SCREENS.settings = {
       return '<span class="k">' + label + "</span><span>" + ctl
            + (hint ? ' <span class="hint">' + hint + "</span>" : "") + "</span>";
     };
+    var textField = function(key, id, width, label, hint){
+      return field(label, '<input class="inp mono" id="' + id + '" data-keepfocus="1" style="width:' + width
+        + 'px" value="' + esc(st[key] !== undefined ? st[key] : s[key]) + '" data-change="'
+        + regAction(function(v){ var b = {}; b[key] = v; saveSite(b); }) + '">', hint);
+    };
+    /* Only the fields the chosen engine reads: Donau takes the simulator, queue, CPUs and the
+       accounts; spectre_ssh the host, its work directory and the spectre command; dry_run and
+       fake take none of them. */
+    var fields = SITE_FIELDS[chosen] || [];
+    var kv = fields.map(function(k){
+      if (k === "simulator") return field("Simulator", '<select class="inp" data-change="'
+          + regAction(function(v){ saveSite({ simulator: v }); }) + '">' + sims + "</select>",
+          "what a Donau job runs; Spectre licences are scarce");
+      if (k === "queue") return textField("queue", "setqueue", 140, "Queue", "the Donau queue, e.g. short");
+      if (k === "cpus") return textField("cpus", "setcpus", 70, "CPUs per job", "the -mt / queue slot count");
+      if (k === "ssh_host") return textField("ssh_host", "setssh", 160, "SSH host", "the alias in your ~/.ssh/config");
+      if (k === "remote_workdir") return textField("remote_workdir", "setrwd", 220, "Remote work dir",
+          "where each run directory is shipped to on that host");
+      if (k === "spectre_cmd") return textField("spectre_cmd", "setspcmd", 160, "Spectre command",
+          "run by tcsh on that host after ~/.cshrc");
+      return "";
+    }).join("");
     var where = panel("Where runs go", "the engine Submit hands the plan to",
       '<table class="t" style="margin:-12px -13px 12px;width:calc(100% + 26px)"><tbody>' + engines + "</tbody></table>"
       + envNote("engine", s.engine)
-      + '<div class="kv" style="margin-top:10px;align-items:center">'
-      + field("Simulator", '<select class="inp" data-change="' + regAction(function(v){ saveSite({ simulator: v }); })
-          + '">' + sims + "</select>", "what a Donau job runs; Spectre licences are scarce")
-      + field("Queue", '<input class="inp mono" id="setqueue" data-keepfocus="1" style="width:140px" value="'
-          + esc(st.queue !== undefined ? st.queue : s.queue) + '" data-change="'
-          + regAction(function(v){ saveSite({ queue: v }); }) + '">', "the Donau queue, e.g. short")
-      + field("CPUs per job", '<input class="inp mono" id="setcpus" data-keepfocus="1" style="width:70px" value="'
-          + esc(st.cpus !== undefined ? st.cpus : s.cpus) + '" data-change="'
-          + regAction(function(v){ saveSite({ cpus: v }); }) + '">', "the -mt / queue slot count")
-      + (chosen === "spectre_ssh"
-          ? field("SSH host", '<input class="inp mono" id="setssh" data-keepfocus="1" style="width:160px" value="'
-              + esc(s.ssh_host || "") + '" data-change="' + regAction(function(v){ saveSite({ ssh_host: v }); })
-              + '">', "the alias in your ~/.ssh/config") : "")
-      + "</div>"
-      + envNote("simulator", s.simulator) + envNote("cpus", s.cpus),
+      + (kv ? '<div class="kv" style="margin-top:10px;align-items:center">' + kv + "</div>"
+            : '<div class="hint" style="margin-top:10px">' + esc(chosen)
+              + " needs nothing else from this machine: no simulator, queue, host or account is used.</div>")
+      + (fields.indexOf("simulator") >= 0 ? envNote("simulator", s.simulator) : "")
+      + (fields.indexOf("cpus") >= 0 ? envNote("cpus", s.cpus) : ""),
       { style: "flex:none" });
     var accRows = (s.accounts || []).map(function(a){
       var isDef = a.name === st.project_account;
@@ -2841,7 +2972,8 @@ SCREENS.settings = {
                   + "site setup before <span class=\"mono\">pmukit ui</span> to change them.</div>"),
       { style: "flex:none" });
     return '<div class="col grow">' + errBlock("settings") + where + "</div>"
-         + '<div class="col" style="flex:0 0 480px">' + accounts + env + "</div>";
+         + '<div class="col" style="flex:0 0 480px">'
+         + (fields.indexOf("accounts") >= 0 ? accounts : "") + env + "</div>";
   },
   foot: function(){
     var back = S.prev && S.prev !== "settings" && SCREENS[S.prev] ? S.prev : "home";
@@ -2971,6 +3103,11 @@ document.addEventListener("keydown", function(e){
   }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === "?"){ e.preventDefault(); openHelp(); return; }
+  if (e.key === "c" && S.screen === "run" && S.sel.run){
+    var rd = (S.data["run:" + S.sel.run] || {}).run;
+    if (rd && rd.status === "failed"){ e.preventDefault(); failureBundle(rd.run_id); }
+    return;
+  }
   if (e.key >= "0" && e.key <= "5"){
     var s = STEPS[Number(e.key)];
     if (s){ e.preventDefault(); go(s[2]); }
@@ -3036,14 +3173,15 @@ function boot(){
     var named = S.project || d.initial_project || "";
     if (named){
       S.project = named; S.sel.project = named;
-      if (!q.get("screen")){
-        api("/api/state/" + P()).then(function(st){
-          if (S.screen === "home" && st.screen && SCREENS[st.screen]) go(st.screen);
-        }, function(){});
-      }
+      /* the project's state: the screen it was left on (unless the URL names one) and the
+         steps already done, which fill the nav circles after a reload */
+      loadProgress(function(st){
+        if (!q.get("screen") && S.screen === "home" && st.screen && SCREENS[st.screen]) go(st.screen);
+      });
     } else if (d.projects && d.projects.length){
       S.sel.project = d.projects[0].name;
       S.project = d.projects[0].name;
+      loadProgress();
     }
     render();
     refreshCli();

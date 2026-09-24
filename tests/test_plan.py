@@ -249,8 +249,12 @@ def test_per_ldo_codes_tied_to_one_variable_all_follow_it():
     cfg = ProjectConfig.from_dict({**CFG, "vset_codes": [1, 3], "vset_param": "vsel"})
     pins = nl.scan("PMU_TOP", ports=cfg.ports)
     for r in compile_plan(cfg, derive(cfg, pins), nl, pins).runs(enabled_only=False):
+        # the exported code (3) leaves the statement byte-identical, continuation and all
         assert (f"parameters vsel={r.run.vset} ldo_a_sel=vsel ldo_b_sel=vsel trim=0"
-                in " ".join(r.netlist_text.split()))
+                in " ".join(r.netlist_text.replace("\\\n", " ").split()))
+        if r.run.vset == 3:
+            assert "parameters vsel=3 ldo_a_sel=vsel \\\n    ldo_b_sel=vsel trim=0" in r.netlist_text
+            assert "parameters" not in r.run.recipe.split("[analyses]")[0]
 
 
 def test_the_netlists_own_code_is_the_nominal_one():

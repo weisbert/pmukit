@@ -612,7 +612,9 @@ def cli_echo(screen: str, st, project: str = "") -> str:
     if scr == "settings":
         bits = ["pmukit site"]
         for key, flag in (("engine", "--engine"), ("simulator", "--simulator"),
-                          ("queue", "--queue"), ("cpus", "--cpus"), ("account", "--account")):
+                          ("queue", "--queue"), ("cpus", "--cpus"), ("account", "--account"),
+                          ("ssh_host", "--ssh-host"), ("remote_workdir", "--remote-workdir"),
+                          ("spectre_cmd", "--spectre-cmd")):
             if st.get(key) not in (None, ""):
                 bits.append(f"{flag} {st[key]}")
         return " ".join(bits)
@@ -674,6 +676,26 @@ class Project:
     # ---- ui state
     def state(self) -> UiState:
         return UiState.load(self.name, self._root)
+
+    def progress(self) -> dict:
+        """Which steps are DONE, read from what is on disk -- the nav's filled circles, so a
+        reload (or another browser) shows the same progress: New = a config seeded from a
+        netlist, Plan = runs in the ledger, Run = runs with results, Model = a fit, Deliver = a
+        deliverable written."""
+        out = {"new": self.config_path.is_file(), "plan": False, "run": False,
+               "model": self.fit_path.is_file(), "deliver": False}
+        if (self.dir / "runs.sqlite").is_file():
+            try:
+                from .ledger import HAVE_RESULTS
+                with self.ledger() as led:
+                    counts = led.counts_by_status()
+                out["plan"] = sum(counts.values()) > 0
+                out["run"] = any(counts.get(s, 0) for s in HAVE_RESULTS)
+            except Exception:                                          # pragma: no cover - db
+                pass
+        deliver = self.dir / "deliver"
+        out["deliver"] = deliver.is_dir() and any(d.is_dir() for d in deliver.iterdir())
+        return out
 
     # ---- config
     def config(self):
@@ -739,6 +761,37 @@ class Project:
 
     def save_netlist_source(self, meta: dict) -> None:
         jsonio.write(self.source_meta_path, meta)
+
+    # A load the scan refused is STAGED beside the working copy, never over it: attempt.json
+    # (where it came from + the four-part error) and attempt.scs (its text). The copy, source.json
+    # and the config stay the last good ones; the staged deck is what "Re-read" and the instance
+    # picker act on until a load succeeds.
+    @property
+    def attempt_meta_path(self) -> pathlib.Path:
+        return self.netlist_dir / "attempt.json"
+
+    @property
+    def attempt_text_path(self) -> pathlib.Path:
+        return self.netlist_dir / "attempt.scs"
+
+    def netlist_attempt(self) -> dict | None:
+        try:
+            d = jsonio.read(self.attempt_meta_path)
+        except (OSError, ValueError):
+            return None
+        return d if isinstance(d, dict) else None
+
+    def stage_netlist_attempt(self, meta: dict, text: str, err: PmuError) -> None:
+        self.netlist_dir.mkdir(parents=True, exist_ok=True)
+        self.attempt_text_path.write_text(text, encoding="utf-8", newline="\n")
+        jsonio.write(self.attempt_meta_path, dict(meta, error=err.to_dict()["error"]))
+
+    def clear_netlist_attempt(self) -> None:
+        for p in (self.attempt_meta_path, self.attempt_text_path):
+            try:
+                p.unlink()
+            except OSError:
+                pass
 
     def netlist(self):
         from .netlist import Netlist
@@ -930,7 +983,7 @@ def guess_pmu_inst(nl) -> str:
         do=["Pick the PMU instance from the list here" if cands else
             "Check that the testbench instantiates the PMU at the top level",
             "Or re-export the netlist with the PMU subckt in it"],
-        where=f"{nl.path or 'netlist'}: top-level instances",
+        where=f"{nl.where()}: top-level instances",
         extra={"candidates": cands})
 
 
@@ -960,7 +1013,7 @@ def _inst_gone(nl, inst: str) -> PmuError:
         do=["Pick the PMU instance from the list here" if cands else
             "Check that the testbench instantiates the PMU at the top level",
             f"Or rename the instance back to {inst} in the bench and re-read the netlist"],
-        where=f"{nl.path or 'netlist'}: top-level instances",
+        where=f"{nl.where()}: top-level instances",
         extra={"candidates": cands})
 
 
@@ -1514,6 +1567,7 @@ class Api:
         if self.demo:
             return {"engine": "donau_alps", "simulator": "alps", "simulator_source": "default",
                     "queue": "short", "cpus": 8, "ssh_host": "ewave-vm",
+                    "remote_workdir": "~/pmukit_work", "spectre_cmd": "spectre",
                     "accounts": [{"name": "ug_demo.smallClass", "note": "sims up to 512GB"},
                                  {"name": "ug_demo.bigClass", "note": "sims up to 2TB"}],
                     "account": "ug_demo.smallClass", "account_source": "site config",
@@ -1535,10 +1589,13 @@ class Api:
                for f in sitenv.facts(cfg) if f.name not in ("simulator", "account")]
         return {"engine": cfg.engine, "simulator": sim.value, "simulator_source": sim.source,
                 "queue": cfg.queue, "cpus": cfg.cpus, "ssh_host": cfg.ssh_host,
+                "remote_workdir": cfg.remote_workdir, "spectre_cmd": cfg.spectre_cmd,
                 "accounts": list(cfg.accounts), "account": acc.value,
                 "account_source": acc.source,
                 "stored": {"engine": stored.engine, "simulator": stored.simulator,
                            "queue": stored.queue, "cpus": stored.cpus,
+                           "ssh_host": stored.ssh_host, "remote_workdir": stored.remote_workdir,
+                           "spectre_cmd": stored.spectre_cmd,
                            "project_account": stored.project_account},
                 "overrides": overrides, "engines": engines, "simulators": list(SIMULATORS),
                 "environment": env, "path": str(path or SiteConfig.default_path())}
@@ -1693,6 +1750,19 @@ class Api:
         if self.demo:
             return _demo_pins()
         pr = Project(project, self.root)
+        att = pr.netlist_attempt()
+        try:
+            has_copy = bool(pr.netlist_path())
+        except PmuError:
+            has_copy = False
+        if att and isinstance(att.get("error"), dict) and not has_copy:
+            # nothing good was ever loaded: the refusal of the one deck tried is the answer
+            e = att["error"]
+            extra = {k: v for k, v in e.items() if k not in ("what", "why", "do", "where")}
+            raise PmuError(what=e.get("what") or "the netlist was refused.",
+                           why=e.get("why") or "The scan refused it.",
+                           do=e.get("do") or ["Fix the bench and re-read it"],
+                           where=e.get("where") or "", extra=extra)
         nl = pr.netlist()
         table = pr.pins(nl)
         d = table.to_dict()
@@ -1750,35 +1820,48 @@ class Api:
                 cands = pmu_candidates(pr.netlist())
             except PmuError:
                 cands = []
+        # the last load the scan refused (staged, never the working copy), with its error
+        att = pr.netlist_attempt()
         return {"source": src, "copy": copy, "pmu_inst": cfg.pmu_inst if cfg is not None else "",
-                "candidates": cands, "cwd": str(pathlib.Path.cwd())}
+                "candidates": cands, "cwd": str(pathlib.Path.cwd()), "attempt": att}
 
     def load_netlist(self, project: str, body: dict) -> dict:
-        """Copy the netlist into the project and parse it. Runs as a job (parse is the slow part
-        on a real deck, and the New screen wants a loading state with a real backing).
+        """Read a netlist and, when it scans cleanly, make it the project's working copy. Runs as
+        a job (parse is the slow part on a real deck, and the New screen wants a loading state
+        with a real backing).
 
         Three ways in: `text` (dropped or chosen in the browser, with its `name`), `path` on this
-        machine (`~` and `$VAR` expanded), or `reread` -- the path it was last loaded from, so a
-        bench fixed in Virtuoso and exported to the same place is one click. A re-read keeps
-        every config answer that still applies, drops those of vanished pins, and says so.
+        machine (`~` and `$VAR` expanded), or `reread` -- the file the last load came from (or
+        the one it was refused from, which is the one being fixed), so a bench fixed in Virtuoso
+        and exported to the same place is one click. A re-read keeps every config answer that
+        still applies, drops those of vanished pins, and says so.
+
+        The candidate is scanned FIRST. A deck the scan refuses (a decap on a rail, a source of
+        the wrong master, no PMU instance to be found) replaces nothing: the working copy,
+        source.json and the config stay the last good ones, and the refused deck is staged
+        (`Project.stage_netlist_attempt`) for the re-read and the instance picker.
         """
         where = f"POST /api/p/{project}/netlist"
         pr = Project(project, self.root).ensure()
         text = body.get("text")
         src = body.get("path")
         pmu_inst = str(body.get("pmu_inst") or "").strip()
-        target = pr.netlist_dir / "input.scs"
         prev = pr.netlist_source() or {}
         if body.get("reread"):
-            if not prev.get("path"):
+            # the refused deck by default (it is the one being fixed); `which` picks explicitly
+            which = str(body.get("which") or "")
+            att = {} if which == "source" else (pr.netlist_attempt() or {})
+            again = att.get("path") or ("" if which == "attempt" else prev.get("path"))
+            if not again:
+                via = att.get("via") or prev.get("via")
                 raise _err("there is no path to re-read the netlist from.",
                            "This project's netlist was " +
                            ("dropped into the browser, and a browser never tells the server "
-                            "where a file came from." if prev.get("via") == "upload" else
+                            "where a file came from." if via == "upload" else
                             "loaded before pmukit recorded where netlists come from."),
                            ["Type its path on this machine in the box on the New screen",
                             "Or drop the file again"], where)
-            src, text = prev["path"], None
+            src, text = again, None
         if isinstance(text, str) and text.strip():
             new_text = text.replace("\r\n", "\n")
             name = re.split(r"[\\/]", str(body.get("name") or "input.scs"))[-1] or "input.scs"
@@ -1801,64 +1884,83 @@ class Api:
                        "POST /api/p/<project>/netlist")
         data = new_text.encode("utf-8")
         meta.update(sha=jsonio.sha_bytes(data, 12), bytes=len(data), loaded_at=_now())
+
+        def work(job):
+            out = self._adopt_netlist(pr, new_text, meta, pmu_inst, job.say)
+            job.say("done", 1.0)
+            return out
+
+        return {"job": JOBS.submit("parse", project, f"read {meta['name']}", work).id,
+                "source": meta}
+
+    def _adopt_netlist(self, pr: "Project", new_text: str, meta: dict, pmu_inst: str,
+                       say=lambda msg, progress=None: None) -> dict:
+        """Scan `new_text`; only when that succeeds, write it as the working copy, record where
+        it came from and carry the config over. A refusal stages the deck and re-raises."""
+        from .netlist import Netlist
+        project = pr.name
+        target = pr.netlist_dir / "input.scs"
+        prev = pr.netlist_source() or {}
         copy_sha = jsonio.sha_file(target, 12) if target.is_file() else ""
         before = prev.get("sha") or copy_sha
         unchanged = bool(copy_sha) and before == meta["sha"]
         # Roles assigned on this screen are written into the COPY; a changed source replaces it.
         edited = bool(copy_sha and prev.get("sha") and copy_sha != prev["sha"])
+        cfg = pr.config_or_none()
 
-        def work(job):
-            from .netlist import Netlist
-            cfg = pr.config_or_none()
-            old = None
-            if cfg is not None and copy_sha and not unchanged:
-                job.say("reading the pins of the netlist loaded before", 0.1)
-                try:
-                    old = pr.pins()
-                except PmuError:
-                    old = None            # the previous copy did not scan either
-            if not unchanged:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(new_text, encoding="utf-8", newline="\n")
-            # Recorded before the scan: a deck the scan refuses can still be re-read once fixed.
-            pr.save_netlist_source(dict(meta, changes=None))
-            job.say(f"reading {meta['name']}", 0.3)
-            nl = Netlist.from_file(target)
-            nl.origin = meta["path"]
+        say(f"reading {meta['name']}", 0.2)
+        # The candidate is parsed where the copy will live (relative includes resolve against the
+        # ORIGINAL file first, then there), but nothing is written until it scans: its errors
+        # name the user's file and line, never pmukit's copy.
+        nl = Netlist(new_text, target)
+        nl.origin = meta["path"]
+        if not meta["path"]:
+            nl.label = f"{meta['name']} (dropped in the browser)"
+        try:
             inst = pmu_inst or (cfg.pmu_inst if cfg is not None else guess_pmu_inst(nl))
             if nl.find_instance(inst) is None:
                 raise _inst_gone(nl, inst)
-            job.say(f"resolving the pins of {inst}", 0.6)
+            say(f"resolving the pins of {inst}", 0.5)
             table = nl.scan(inst, ports=None)
-            if cfg is None:
-                pr.save_config(_seed_config(project, target, inst, table), "seeded from the netlist")
-                changes = {"first": True, "unchanged": False, "pmu_inst": inst,
-                           "text": f"read {meta['name']}: {inst}, {len(table.pins)} pins"}
-            elif unchanged and inst == cfg.pmu_inst:
-                changes = {"first": False, "unchanged": True, "pmu_inst": inst,
-                           "text": f"{meta['name']} is unchanged since the last read "
-                                   f"(byte-identical); every answer is kept"}
-            else:
-                new_cfg, changes = _carry_over(cfg, table, old, inst)
-                if edited:
-                    changes["text"] += ("; the role sources pmukit had written into the previous "
-                                        "copy are replaced by this file")
-                pr.save_config(new_cfg, "netlist re-read: " + changes["text"])
-            meta["changes"] = changes
-            pr.save_netlist_source(meta)
-            st = pr.state()
-            st.netlist = str(target)
-            st.go("new").note(f"netlist read: {changes['text']}", "new")
-            st.save()
-            with _CACHE_LOCK:
-                _PLAN_CACHE.pop(project, None)
-            job.say("done", 1.0)
-            out = self.pins(project)
-            out["changes"] = changes
-            return out
+        except PmuError as exc:
+            pr.stage_netlist_attempt(dict(meta, pmu_inst=pmu_inst), new_text, exc)
+            raise
 
-        return {"job": JOBS.submit("parse", project, f"read {meta['name']}", work).id,
-                "source": meta}
+        old = None
+        if cfg is not None and copy_sha and not unchanged:
+            say("reading the pins of the netlist loaded before", 0.7)
+            try:
+                old = pr.pins()
+            except PmuError:
+                old = None            # the previous copy did not scan either
+        if not unchanged:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(new_text, encoding="utf-8", newline="\n")
+        if cfg is None:
+            pr.save_config(_seed_config(project, target, inst, table), "seeded from the netlist")
+            changes = {"first": True, "unchanged": False, "pmu_inst": inst,
+                       "text": f"read {meta['name']}: {inst}, {len(table.pins)} pins"}
+        elif unchanged and inst == cfg.pmu_inst:
+            changes = {"first": False, "unchanged": True, "pmu_inst": inst,
+                       "text": f"{meta['name']} is unchanged since the last read "
+                               f"(byte-identical); every answer is kept"}
+        else:
+            new_cfg, changes = _carry_over(cfg, table, old, inst)
+            if edited:
+                changes["text"] += ("; the role sources pmukit had written into the previous "
+                                    "copy are replaced by this file")
+            pr.save_config(new_cfg, "netlist re-read: " + changes["text"])
+        pr.save_netlist_source(dict(meta, changes=changes))
+        pr.clear_netlist_attempt()
+        st = pr.state()
+        st.netlist = str(target)
+        st.go("new").note(f"netlist read: {changes['text']}", "new")
+        st.save()
+        with _CACHE_LOCK:
+            _PLAN_CACHE.pop(project, None)
+        out = self.pins(project)
+        out["changes"] = changes
+        return out
 
     def set_instance(self, project: str, body: dict) -> dict:
         """The PMU instance picker: re-scan with another instance.
@@ -1878,6 +1980,15 @@ class Api:
                        "The picker sends the name of a top-level instance of the netlist.",
                        ["Pick one in the PMU instance list on the New screen"], where)
         pr = Project(project, self.root)
+        att = pr.netlist_attempt()
+        if att is not None and pr.attempt_text_path.is_file():
+            # The picker answers the load that was refused for want of an instance: the staged
+            # deck is adopted with it (and only if it now scans), not the older working copy.
+            staged = pr.attempt_text_path.read_text(encoding="utf-8", errors="replace")
+            meta = {k: att.get(k) for k in ("path", "typed", "name", "via", "sha", "bytes")}
+            meta["loaded_at"] = _now()
+            out = self._adopt_netlist(pr, staged, meta, inst)
+            return {"pmu_inst": inst, "changes": out["changes"], "pins": self.pins(project)}
         nl = pr.netlist()
         if nl.find_instance(inst) is None:
             raise _inst_gone(nl, inst)
@@ -2334,6 +2445,59 @@ class Api:
         lines, nxt, done = _read_log(pr, run, offset, limit)
         return {"run_id": run_id, "lines": lines, "next_offset": nxt, "done": done,
                 "status": run.status}
+
+    def run_bundle(self, project: str, run_id: str) -> dict:
+        """The Run screen's "Copy failure bundle": one bounded, plain-text blob for the desk.
+
+        The deck as submitted, the submit command (the recipe's last line -- already on the Run
+        screen, account and all), the tail of the simulator log and of whatever the scheduler
+        left in the run directory, the ledger row and the pmukit version. Nothing else: no
+        environment, no site.json, no file this run did not write.
+        """
+        if self.demo:
+            row = next((r for r in _demo_ledger_rows() if r["run_id"] == run_id), None)
+            if row is None:
+                raise _err(f"no run {run_id!r} in the demo ledger.",
+                           "Demo mode serves a fixed set of twelve runs.",
+                           ["Pick a row from the ledger table"], "demo")
+            deck = "// demo: no deck is written in --demo\n"
+            sim_log, sched = [("demo log", _demo_log(row))], []
+            recipe = row.get("recipe") or ""
+        else:
+            pr = Project(project, self.root)
+            with pr.ledger() as led:
+                run = led.get(run_id)
+            if run is None:
+                raise _err(f"no run {run_id!r} in the ledger.",
+                           "A failure bundle is built from a run the ledger knows about.",
+                           ["Pick a row from the ledger table"], str(pr.dir / "runs.sqlite"))
+            row = run.to_dict()
+            recipe = run.recipe or ""
+            wd = paths.runs_dir(pr.name) / run.run_id
+            decks = [wd / "input.scs"]
+            if run.netlist_path:
+                p = pathlib.Path(run.netlist_path)
+                decks.append(p if p.is_absolute() else pr.dir / p)
+            deck = next((_read_text(p) for p in decks if p.is_file()), None)
+            if deck is None:
+                deck = f"// no deck on disk for {run.run_id} (looked in {wd})\n"
+            sim_log = [(str(c), _read_text(c)) for c in _log_candidates(pr, run) + [wd / "alps.log"]
+                       if c.is_file()][:1]
+            if not sim_log:
+                lines, _n, _d = _read_log(pr, run, 0, 400)
+                sim_log.append(("(no log file)", "\n".join(lines)))
+            sched = []
+            if wd.is_dir():
+                for pat in ("*.out", "*.err", "dsub*.log", "*.warn"):
+                    for p in sorted(wd.glob(pat))[:4]:
+                        sched.append((str(p), _read_text(p)))
+        submit = ""
+        if recipe:
+            from .ledger import Recipe
+            submit = Recipe.parse(recipe).submit
+        text = _bundle_text(run_id, row, deck, submit, sim_log, sched)
+        return {"run_id": run_id, "name": f"{run_id}_bundle.txt", "text": text,
+                "bytes": len(text.encode("utf-8"))}
 
     def run_action(self, project: str, run_id: str, action: str) -> dict:
         """retry / skip / kill.
@@ -3095,6 +3259,59 @@ def _read_log(pr: Project, run, offset: int, limit: int) -> tuple[list[str], int
     return lines[offset:offset + limit], len(lines), True
 
 
+#: Failure bundle bounds: the deck keeps its head and tail, each log its tail -- a bundle pasted
+#: to the desk must fit in one message, not carry a 40 MB log.
+BUNDLE_DECK_CHARS = 60_000
+BUNDLE_LOG_LINES = 200
+BUNDLE_SCHED_LINES = 60
+
+
+def _read_text(p: pathlib.Path) -> str:
+    try:
+        return p.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+    except OSError as exc:                                             # pragma: no cover - fs
+        return f"(could not read {p}: {exc})"
+
+
+def _tail(text: str, n: int) -> str:
+    lines = text.rstrip("\n").split("\n")
+    if len(lines) <= n:
+        return "\n".join(lines)
+    return f"... ({len(lines) - n} earlier lines cut)\n" + "\n".join(lines[-n:])
+
+
+def _clip_middle(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return (text[:half] + f"\n// ... ({len(text) - 2 * half} characters cut from the middle) ...\n"
+            + text[-half:])
+
+
+def _bundle_text(run_id: str, row: dict, deck: str, submit: str, sim_log, sched) -> str:
+    keep = {k: v for k, v in row.items() if k != "recipe"}      # the recipe is its own section
+    out = [f"pmukit failure bundle -- run {run_id}",
+           f"pmukit {_version()}, built {_now()}",
+           "",
+           "== ledger row ==",
+           json.dumps(_clean(keep), indent=1, ensure_ascii=False, default=str),
+           "",
+           "== submit command ==",
+           submit or "(none recorded)",
+           ""]
+    for name, text in sim_log:
+        out += [f"== simulator log (last {BUNDLE_LOG_LINES} lines): {name} ==",
+                _tail(text, BUNDLE_LOG_LINES), ""]
+    for name, text in sched:
+        out += [f"== scheduler output (last {BUNDLE_SCHED_LINES} lines): {name} ==",
+                _tail(text, BUNDLE_SCHED_LINES), ""]
+    if row.get("recipe"):
+        out += ["== recipe ==", str(row["recipe"]).rstrip("\n"), ""]
+    out += ["== deck as submitted (input.scs) ==", _clip_middle(deck, BUNDLE_DECK_CHARS).rstrip("\n"),
+            ""]
+    return "\n".join(out)
+
+
 def _file_kind(name: str) -> str:
     return {".scs": "Spectre library", ".va": "Verilog-A", ".md": "report",
             ".json": "metadata", ".txt": "text"}.get(pathlib.PurePath(name).suffix, "file")
@@ -3590,6 +3807,10 @@ def _split_complex(arr) -> dict:
 
 
 # ============================================================================== HTTP plumbing
+#: The browser went away mid-request (a reload, a closed tab, a poll cut short). Not a fault.
+CLIENT_GONE = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     server_version = "pmukit/" + _version()
     protocol_version = "HTTP/1.1"
@@ -3677,18 +3898,23 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._error(nl.error, 501)
         except PmuError as pe:
             self._error(pe, 400)
-        except BrokenPipeError:                                        # pragma: no cover - client
-            pass
+        except CLIENT_GONE:
+            # the browser dropped the connection (a reload, a tab closed mid-poll): nobody is
+            # left to answer, and it is not a server fault -- see PmuServer.handle_error
+            self.close_connection = True
         except Exception as exc:                                       # pragma: no cover - defence
-            tb = traceback.format_exc()
-            if self.server.verbose:
-                sys.stderr.write(tb)
-            self._error(_err(f"the server hit an unexpected {type(exc).__name__}: {exc}",
-                             "An exception escaped a route handler; this is a bug in pmukit, not "
-                             "in your data.",
-                             ["Reload the page and try again",
-                              "Copy the traceback from the server console to the desk"],
-                             f"{method} {self.path}"), 500)
+            # a real fault: the traceback goes to the console / server.log, where the error
+            # sent to the page tells the user to copy it from
+            sys.stderr.write(f"pmukit: {method} {self.path} failed\n{traceback.format_exc()}")
+            try:
+                self._error(_err(f"the server hit an unexpected {type(exc).__name__}: {exc}",
+                                 "An exception escaped a route handler; this is a bug in pmukit, "
+                                 "not in your data.",
+                                 ["Reload the page and try again",
+                                  "Copy the traceback from the server console to the desk"],
+                                 f"{method} {self.path}"), 500)
+            except CLIENT_GONE:
+                self.close_connection = True
 
     def _serve_page(self) -> None:
         if not PAGE.is_file():                                         # pragma: no cover - build
@@ -3726,7 +3952,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 time.sleep(0.4)
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):                # pragma: no cover - client
+        except CLIENT_GONE:                                            # pragma: no cover - client
             pass
 
 
@@ -3908,6 +4134,11 @@ def _r_run_log(api, h, a, q, b):
                        min(5000, int(_one(q, "limit", 500) or 500)))
 
 
+@route("GET", r"/api/p/<project>/runs/<run>/bundle")
+def _r_run_bundle(api, h, a, q, b):
+    return api.run_bundle(a["project"], _safe_name(a["run"], RUNID_RE, "run id", "run bundle"))
+
+
 @route("POST", r"/api/p/<project>/runs/<run>/<action>")
 def _r_run_action(api, h, a, q, b):
     return api.run_action(a["project"], _safe_name(a["run"], RUNID_RE, "run id", "run action"),
@@ -4005,11 +4236,15 @@ def _r_state(api, h, a, q, b):
     """Not in the table; the page's own bookmark so a reload lands on the same screen."""
     if api.demo:
         return {"project": a["project"], "screen": "home", "exists": True, "recent": [],
-                "plan_ticks": {}, "answers": {}, "demo": True}
-    st = Project(a["project"], api.root).state()
+                "plan_ticks": {}, "answers": {}, "demo": True,
+                "progress": {"new": True, "plan": True, "run": True, "model": True,
+                             "deliver": True}}
+    pr = Project(a["project"], api.root)
+    st = pr.state()
     return {"project": st.project, "screen": st.screen, "exists": st.exists,
             "recent": st.recent, "plan_ticks": st.plan_ticks, "answers": st.answers,
-            "netlist": st.netlist, "undoable": st.undoable(), "last_job": st.last_job}
+            "netlist": st.netlist, "undoable": st.undoable(), "last_job": st.last_job,
+            "progress": pr.progress()}
 
 
 @route("PUT", r"/api/state/<project>")
@@ -4044,6 +4279,18 @@ class PmuServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         self.api = api
         self.host = addr[0]
         self.verbose = verbose
+
+    def handle_error(self, request, client_address) -> None:
+        """A browser that drops its connection (reload, closed tab, a poll cut short) is not a
+        server fault: one short line with --verbose, nothing otherwise -- never the traceback
+        that used to fill server.log. Anything else keeps the full traceback."""
+        exc = sys.exc_info()[1]
+        if isinstance(exc, CLIENT_GONE):
+            if self.verbose:
+                sys.stderr.write(f"pmukit: {client_address[0]} dropped the connection "
+                                 f"({type(exc).__name__})\n")
+            return
+        super().handle_error(request, client_address)
 
 
 def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, *, demo: bool = False,

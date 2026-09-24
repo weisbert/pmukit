@@ -227,15 +227,79 @@ def test_reread_when_the_instance_was_renamed_offers_the_picker(api, bench):
 
 def test_a_refused_deck_can_be_fixed_and_reread(api, bench):
     """scan()'s own refusals (here: a decap on a rail) reach the error block, and the file is
-    remembered anyway -- so the fix in Virtuoso is followed by one click, not a new upload."""
+    remembered as the refused attempt -- so the fix in Virtuoso is followed by one click, not a
+    new upload -- without ever becoming the working copy."""
     src = bench / "input.scs"
     edit(src, "simOpts options", "Cdecap (VDD0P8_A 0) capacitor c=1u\nsimOpts options")
     job = wait(api.load_netlist("p", {"path": str(src)}))
     assert job.status == "failed" and job.error["what"].startswith("decap on a rail")
-    assert api.netlist_info("p")["source"]["path"] == str(src)
+    info = api.netlist_info("p")
+    assert info["source"] is None and info["copy"] is None      # nothing good was loaded
+    assert info["attempt"]["path"] == str(src)
+    assert info["attempt"]["error"]["what"].startswith("decap on a rail")
     edit(src, "Cdecap (VDD0P8_A 0) capacitor c=1u\n", "")
     out = load_ok(api, {"reread": True})
     assert out["pmu_inst"] == "PMU_TOP" and out["changes"]["first"] is True
+    assert api.netlist_info("p")["attempt"] is None
+
+
+def _line(path: pathlib.Path, needle: str) -> int:
+    return next(i for i, ln in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+                if needle in ln)
+
+
+def test_a_refused_load_keeps_the_good_copy_and_names_the_users_file_and_line(api, bench,
+                                                                               tmp_path):
+    """QA: loading a bench with a decap on a rail made the broken file the project's working
+    copy, and the error's Where named `<data>/<proj>/netlists/input.scs` with no line."""
+    load_ok(api, {"path": str(bench / "input.scs")})
+    pr = server.Project("p", api.root)
+    copy = pr.netlist_dir / "input.scs"
+    good_copy = copy.read_bytes()
+    good_src = pr.source_meta_path.read_bytes()
+    good_cfg = pr.config_path.read_bytes()
+    n_hist = len(history(api))
+
+    other = tmp_path / "other"
+    shutil.copytree(bench, other)
+    bad = other / "input.scs"
+    edit(bad, "simOpts options", "Cdecap (VDD0P8_A 0) capacitor c=1u\nsimOpts options")
+    job = wait(api.load_netlist("p", {"path": str(bad)}))
+    assert job.status == "failed"
+    where = job.error["where"]
+    assert where.startswith(f"{bad}:{_line(bad, 'Cdecap')}:"), where
+    assert "netlists" not in where and "Cdecap" in where
+    assert f"line {_line(bad, 'Cdecap')}" in job.error["what"]
+    # nothing was replaced: the copy, source.json, the config and its history are the good ones
+    assert copy.read_bytes() == good_copy
+    assert pr.source_meta_path.read_bytes() == good_src
+    assert pr.config_path.read_bytes() == good_cfg
+    assert len(history(api)) == n_hist
+    assert api.pins("p")["pmu_inst"] == "PMU_TOP"
+    info = api.netlist_info("p")
+    assert info["source"]["path"] == str(bench / "input.scs")
+    assert info["attempt"]["path"] == str(bad)
+
+    # a source of the wrong master names its own line too
+    edit(bad, "Cdecap (VDD0P8_A 0) capacitor c=1u\n", "")
+    edit(bad, "IL_VDD0P8_B (VDD0P8_B 0) isource", "IL_VDD0P8_B (VDD0P8_B 0) vsource")
+    job = wait(api.load_netlist("p", {"reread": True}))       # re-reads the file being fixed
+    assert job.status == "failed" and "IL_VDD0P8_B" in job.error["what"]
+    assert job.error["where"].startswith(f"{bad}:{_line(bad, 'IL_VDD0P8_B (')}:")
+    assert copy.read_bytes() == good_copy
+
+    # dropped in the browser: named as such, never as pmukit's copy
+    job = wait(api.load_netlist("p", {"text": bad.read_text(encoding="utf-8"),
+                                      "name": "bench.scs"}))
+    assert job.status == "failed"
+    assert job.error["where"].startswith("bench.scs (dropped in the browser):")
+    assert copy.read_bytes() == good_copy
+
+    # fixed: the re-read adopts it and the staged attempt is gone
+    edit(bad, "IL_VDD0P8_B (VDD0P8_B 0) vsource", "IL_VDD0P8_B (VDD0P8_B 0) isource")
+    load_ok(api, {"path": str(bad)})
+    assert api.netlist_info("p")["attempt"] is None
+    assert api.netlist_info("p")["source"]["path"] == str(bad)
 
 
 def test_reread_of_a_dropped_file_explains_there_is_no_path(api, bench):

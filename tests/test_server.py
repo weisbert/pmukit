@@ -136,6 +136,7 @@ ROUTE_TABLE = [
     ("GET", "/api/p/demo_pmu/ledger?status=failed", None),
     ("GET", "/api/p/demo_pmu/runs/7c3e91a04bd2", None),
     ("GET", "/api/p/demo_pmu/runs/7c3e91a04bd2/log", None),
+    ("GET", "/api/p/demo_pmu/runs/7c3e91a04bd2/bundle", None),
     ("POST", "/api/p/demo_pmu/runs/7c3e91a04bd2/retry", {}),
     ("POST", "/api/p/demo_pmu/runs/7c3e91a04bd2/skip", {}),
     ("POST", "/api/p/demo_pmu/runs/b19f0c72e4a8/kill", {}),
@@ -826,3 +827,45 @@ def test_settings_echo_is_a_pmukit_site_command():
     cmd = server.cli_echo("settings", {"engine": "fake", "cpus": 4, "account": ""}, "p")
     assert cmd == "pmukit site --engine fake --cpus 4"
     assert server.cli_echo("deliver", {"file": "report.md"}, "p") == "pmukit report p"
+
+
+# --------------------------------------------------------------------------- server.log noise
+def _handle(srv, exc):
+    try:
+        raise exc
+    except Exception:
+        srv.handle_error(None, ("127.0.0.1", 50000))
+
+
+def test_a_dropped_connection_logs_no_traceback(capsys):
+    """QA: server.log filled with ConnectionResetError / BrokenPipeError tracebacks whenever the
+    browser dropped a connection. Those are not faults; a real exception still is."""
+    srv = server.make_server("127.0.0.1", 0, demo=True, tries=1)
+    try:
+        for exc in (ConnectionResetError(10054, "reset by peer"), BrokenPipeError(32, "pipe"),
+                    ConnectionAbortedError(10053, "aborted")):
+            _handle(srv, exc)
+        assert capsys.readouterr().err == ""
+        srv.verbose = True
+        _handle(srv, ConnectionResetError(10054, "reset by peer"))
+        err = capsys.readouterr().err
+        assert "Traceback" not in err and len(err.strip().splitlines()) == 1, err
+        assert "dropped the connection" in err
+        _handle(srv, ValueError("a real bug"))
+        err = capsys.readouterr().err
+        assert "Traceback" in err and "a real bug" in err
+    finally:
+        srv.server_close()
+
+
+def test_a_route_whose_client_went_away_is_not_a_500(monkeypatch, capsys):
+    def gone(self):
+        raise ConnectionResetError(10054, "reset by peer")
+    monkeypatch.setattr(server.Api, "projects", gone)
+    c = Client(demo=True)
+    try:
+        with pytest.raises(Exception):
+            c.call("GET", "/api/projects")              # nothing is answered: the client is gone
+    finally:
+        c.close()
+    assert "Traceback" not in capsys.readouterr().err

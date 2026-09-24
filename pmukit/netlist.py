@@ -326,6 +326,9 @@ class Netlist:
         #: Where the user's file really lives, when `path` is a copy of it (the web shell copies
         #: the netlist into the project). Relative `include` lines resolve against it first.
         self.origin = ""
+        #: How an error names the file when it is neither a path nor a copy of one (a netlist
+        #: dropped into the browser: "input.scs (dropped in the browser)").
+        self.label = ""
         self.edits: list[str] = []
         self._inc_texts: dict[str, tuple[str, str] | None] = {}
 
@@ -344,11 +347,30 @@ class Netlist:
     def copy(self) -> "Netlist":
         n = Netlist(self.text, self.path)
         n.origin = self.origin
+        n.label = self.label
         n.edits = list(self.edits)
         return n
 
     def sha(self, n: int = 12) -> str:
         return sha_bytes(self.render().encode("utf-8"), n)
+
+    # ---- where an error points
+    def where(self, line: int | None = None) -> str:
+        """The USER's file -- the exported netlist, not pmukit's copy of it -- and, when the
+        statement is known, `:<line>` in it (the copy is that file's text, so the lines agree)."""
+        f = self.label or self.origin or self.path or "(netlist text)"
+        return f"{f}:{line}" if line else f
+
+    def line_of(self, name: str) -> int | None:
+        """1-based line of the top-level instance statement `name` (its first physical line)."""
+        n = 1
+        for logical, phys, depth in _scoped_logical_lines(self.text):
+            if depth == 0:
+                inst = _parse_instance(logical)
+                if inst and inst[0] == name:
+                    return n
+            n += len(phys)
+        return None
 
     # ---- reading
     def instances(self, depth: int | None = 0):
@@ -431,7 +453,7 @@ class Netlist:
                 do=[f"Set `pmu_inst` to one of: "
                     f"{', '.join(candidates[:8]) or '(no subcircuit instances found)'}.",
                     "Or rename the instance in your testbench to match the config."],
-                where=self.path or "(netlist text)")
+                where=self.where())
         _name, nodes, master, _rest = inst
 
         home = self.subckt_home(master)
@@ -460,7 +482,7 @@ class Netlist:
                     "otherwise every pin-to-net mapping is off by the difference.",
                 do=["Re-export the netlist from ADE.",
                     f"Or fix the `{master}` port list / the `{pmu_inst}` instance line by hand."],
-                where=self.path or "(netlist text)")
+                where=f"{self.where(self.line_of(pmu_inst))}: instance {pmu_inst}")
 
         by_net = self._sources_by_net()
         for i, (pin, net) in enumerate(zip(port_names, nodes)):
@@ -485,7 +507,7 @@ class Netlist:
                     why="A pin's role is read from the ONE source the convention puts on it; with "
                         "two, the role and the dc value are both ambiguous.",
                     do=[f"Keep one of {', '.join(names)} and rename or remove the others."],
-                    where=f"{self.path or 'netlist'}: net {net}")
+                    where=f"{self.where(self.line_of(names[0]))}: net {net}")
             for src_name, _snodes, src_master, rest, pos in candidates:
                 role = next((r for pre, r in PREFIX_ROLE.items() if src_name.startswith(pre)), None)
                 if role is None:
@@ -504,7 +526,7 @@ class Netlist:
                             f"{'an' if ROLE_MASTER[role][0] in 'aeiou' else 'a'} "
                             f"{ROLE_MASTER[role]}.",
                             f"Or rename it if it is not the {role} source for this pin."],
-                        where=f"{self.path or 'netlist'}: instance {src_name}")
+                        where=f"{self.where(self.line_of(src_name))}: instance {src_name}")
                 p.role, p.src, p.src_master = role, src_name, src_master
                 p.src_reversed = pos != 0
                 if p.src_reversed:
@@ -554,14 +576,15 @@ class Netlist:
         if caps:
             raise PmuError(
                 what="decap on a rail: " + ", ".join(
-                    f"{n} ({m}) on rail {p.name} (net {p.net})" for n, m, p in caps) + ".",
+                    f"{n} ({m}) on rail {p.name} (net {p.net}, line {self.line_of(n)})"
+                    for n, m, p in caps) + ".",
                 why="Rails are characterized without any decap and the delivered model contains "
                     "none. A decap in this bench is fitted into the model's Zout, and the one in "
                     "your system bench then counts a second time.",
                 do=[f"Remove {', '.join(n for n, _m, _p in caps)} from the bench and re-export; "
                     "put the decap in the system bench that uses the model."],
-                where=f"{self.path or 'netlist'}: rail net(s) "
-                      f"{', '.join(sorted({p.net for _n, _m, p in caps}))}")
+                where=f"{self.where(self.line_of(caps[0][0]))}: instance {caps[0][0]} on rail "
+                      f"net(s) {', '.join(sorted({p.net for _n, _m, p in caps}))}")
         for n, m, p in others:
             table.notes.append(
                 f"{n} ({m}) also hangs on rail {p.name} (net {p.net}): it is part of what gets "
@@ -722,22 +745,57 @@ class Netlist:
 
     # ---------------------------------------------------------------------- rewriting
     def _rewrite_statement(self, match, transform, *, kind: str = "~") -> bool:
-        """Replace the first top-level logical statement for which `match(logical)` is true."""
+        """Replace the first top-level logical statement for which `match(logical)` is true.
+
+        True when a statement matched, whether or not the transform changed it: a statement that
+        already says what is asked (`section=tt` asked of `section=tt`) is left byte-identical and
+        records no recipe line -- the recipe is exactly the diff between the exported netlist and
+        the run deck, never a list of no-ops.
+        """
         out, done = [], False
         for logical, phys, depth in _scoped_logical_lines(self.text):
             if not done and depth == 0 and match(logical):
+                done = True
                 # A single-line statement is rewritten on the RAW line, so its indent and the exact
                 # spacing before a trailing comment survive. A continued statement has no single raw
                 # line to keep, so it collapses to one clean line (never a live dangling backslash).
-                new = transform(phys[0] if len(phys) == 1 else logical)
+                old = phys[0] if len(phys) == 1 else logical
+                new = transform(old)
+                if new == old or (len(phys) > 1 and new.strip() == logical.strip()):
+                    out.extend(phys)
+                    continue
                 out.append(new)
-                self.edits.append(f"{kind} {new.strip()}        // was: {logical.strip()}")
-                done = True
+                self._record_edit(kind, new.strip(), logical.strip())
             else:
                 out.extend(phys)
         if done:
             self.text = "\n".join(out)
         return done
+
+    _WAS = "        // was: "
+
+    def _record_edit(self, kind: str, new: str, was: str) -> None:
+        """One recipe line per statement, from the ORIGINAL text to the final one.
+
+        A statement edited twice (the corner's section=, then the include made absolute) is one
+        line `~ <final> // was: <as exported>`, not two -- and when the second edit undoes the
+        first, the line goes. A statement pmukit added itself (`+`) and then edits stays one `+`
+        line carrying its final text.
+        """
+        prefix = f"{kind} {was}{self._WAS}"
+        for i in range(len(self.edits) - 1, -1, -1):
+            e = self.edits[i]
+            if e.startswith(prefix):
+                original = e[len(prefix):]
+                if new == original:
+                    del self.edits[i]
+                else:
+                    self.edits[i] = f"{kind} {new}{self._WAS}{original}"
+                return
+            if e == f"+ {was}":
+                self.edits[i] = f"+ {new}"
+                return
+        self.edits.append(f"{kind} {new}{self._WAS}{was}")
 
     @staticmethod
     def _named_source(src_name: str):
@@ -755,7 +813,7 @@ class Netlist:
                 "same name inside a subcircuit can never be hit by accident.",
             do=[f"Check the convention source name in the testbench (expected '{src_name}').",
                 "Re-parse the netlist on the New screen to refresh the pin table."],
-            where=self.path or "(netlist text)")
+            where=self.where())
 
     def set_mag(self, src_name: str, mag: str | float) -> "Netlist":
         """AC superposition: exactly one source is hot (mag=1), the rest stay 0."""
@@ -843,7 +901,7 @@ class Netlist:
                     "netlist must carry a section= on the include the corner names refer to.",
                 do=[f"Include lines that do carry a section: {', '.join(have) or '(none)'}.",
                     "Add `section=<nominal>` to the PDK include in your testbench and re-export."],
-                where=self.path or "(netlist text)")
+                where=self.where())
         return self
 
     # Cache of {resolved include path: set of section names}. A PDK toplevel is read once per
