@@ -169,6 +169,12 @@ class Job:
         self.events: list[dict] = []
         self.result = None
         self.error = None                 # the four-part dict
+        # What KIND of failure `error` is, with the status the same failure gets as a route
+        # answer: "refused" (a PmuError: the input was refused, 400), "not_landed" (a module
+        # is missing, 501), "crashed" (an unexpected exception, 500). The page shows the chip
+        # from here -- a refused netlist is not "not implemented".
+        self.error_kind = ""
+        self.error_status = 0
         self.not_landed = ""
         self.started_at = _now()
         self.finished_at = ""
@@ -191,6 +197,7 @@ class Job:
                 "message": self.message, "started_at": self.started_at,
                 "finished_at": self.finished_at, "result": self.result, "error": self.error,
                 "not_landed": self.not_landed,
+                "error_kind": self.error_kind, "error_status": self.error_status,
                 "events": self.events[since:], "n_events": len(self.events),
             })
 
@@ -225,14 +232,17 @@ class Jobs:
             except NotLanded as nl:
                 job.status = "failed"
                 job.error = nl.error.to_dict()["error"]
+                job.error_kind, job.error_status = "not_landed", 501
                 job.not_landed = nl.module
                 job.say(nl.error.what, 1.0)
             except PmuError as pe:
                 job.status = "failed"
                 job.error = pe.to_dict()["error"]
+                job.error_kind, job.error_status = "refused", 400
                 job.say(pe.what, 1.0)
             except Exception as exc:                                   # pragma: no cover - defence
                 job.status = "failed"
+                job.error_kind, job.error_status = "crashed", 500
                 job.error = _err(f"{kind} crashed: {type(exc).__name__}: {exc}",
                                  "An unexpected exception escaped the worker; the traceback is in "
                                  "the job events.",
@@ -2360,6 +2370,7 @@ class Api:
             except NotLanded as nl:
                 job.status = "partial"
                 job.error = nl.error.to_dict()["error"]
+                job.error_kind, job.error_status = "not_landed", 501
                 job.not_landed = nl.module
                 job.say("plan committed; no runner to submit with", 1.0)
                 return out
@@ -3537,7 +3548,8 @@ def _envelope_text(env: dict) -> dict:
     if env.get("corners"):
         out["corners"] = ", ".join(str(c) for c in env["corners"])
     if env.get("vset_codes"):
-        out["VSET"] = ", ".join(str(v) for v in env["vset_codes"])
+        from .deliverable import vset_text
+        out["VSET"] = vset_text(env["vset_codes"])
     return out
 
 
@@ -3796,6 +3808,14 @@ def _grade_grid(fit: dict, ver: dict, stale: str = "") -> dict:
             "why": why, "ungraded": ungraded}
 
 
+def _one_period(text: str) -> str:
+    """A sentence appended after one that already ended in a period ("... and re-run.. Every
+    large-signal term") reads as a typo. verify's HB note is assembled that way (a reason that
+    ends in "." + ". Every ..."); the join is repaired here, where it is shaped for display. An
+    ellipsis ("...") is left alone."""
+    return re.sub(r"(?<!\.)\.\.(?=\s|$)", ".", str(text or ""))
+
+
 def _hb_summary(hbr) -> dict | None:
     """verify.json's `hb_check` as the HB tile: {status, ran, ok, detail, note, ...}.
 
@@ -3825,7 +3845,7 @@ def _hb_summary(hbr) -> dict | None:
                 + ("; opt-in only: " + ", ".join(failing) if failing else "")
                 + ". Each term toggled one at a time in a driven HB on " + (engine or "?") + ".")
     return {"status": status, "ran": status != "not_run", "ok": status == "pass",
-            "detail": detail, "note": note, "engine": engine, "ls_default_on": on,
+            "detail": detail, "note": _one_period(note), "engine": engine, "ls_default_on": on,
             "corner": hbr.get("corner", "")}
 
 
@@ -4077,7 +4097,8 @@ def _valid_from_derived(der) -> dict:
         out["corners"] = ", ".join(str(c) for c in corners)
     codes = (der.vset or {}).get("codes") or []
     if codes:
-        out["VSET"] = ", ".join(str(v) for v in codes)
+        from .deliverable import vset_text
+        out["VSET"] = vset_text(codes)
     return out
 
 

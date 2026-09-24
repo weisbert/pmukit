@@ -118,6 +118,29 @@ def ratio(x: float) -> str:
     return f"{mant}e{int(exp)}"
 
 
+def vset_text(codes, nominal=None) -> str:
+    """VSET codes as a person reads them: ascending, with the nominal one named.
+
+    `derived.vset.codes` (and the envelope copied from it) keeps the NOMINAL code FIRST on
+    purpose -- it drives every non-swept run and is the model's default `vset` -- so printed
+    as stored, a sweep of 1 and 3 read "3, 1". The stored order stays; only the text sorts.
+    `nominal` defaults to that first code. "(none)" for no code at all."""
+    seen: list = []
+    for c in codes or []:
+        try:
+            c = int(c)
+        except (TypeError, ValueError):
+            c = str(c)
+        if c not in seen:
+            seen.append(c)
+    if not seen:
+        return "(none)"
+    nom = seen[0] if nominal is None else nominal
+    ordered = sorted(seen, key=lambda v: (0, v, "") if isinstance(v, int) else (1, 0, v))
+    text = ", ".join(str(v) for v in ordered)
+    return text + (f" (nominal {nom})" if len(seen) > 1 else "")
+
+
 def _stamp_now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
 
@@ -221,7 +244,7 @@ class Envelope:
             else:
                 if code not in self.vset_codes:
                     why.append(f"VSET code {code} was not characterized (characterized: "
-                               f"{', '.join(str(v) for v in self.vset_codes) or '(none)'})")
+                               f"{vset_text(self.vset_codes)})")
 
         return (not why), why
 
@@ -535,7 +558,7 @@ def _fixed_paragraph(project: str, envelope: Envelope, not_run: list[str],
     valid = (f"load per rail {loads}; temperature {temp}; "
              f"frequency up to {_eng(envelope.freq_max_hz, 'Hz')}; "
              f"corners {', '.join(envelope.corners) or '(none)'}; "
-             f"VSET codes {', '.join(str(v) for v in envelope.vset_codes) or '(none)'}.")
+             f"VSET codes {vset_text(envelope.vset_codes)}.")
     # The "en" tier (usable, not signed off) has no dedicated field in the envelope dataclass,
     # so it travels in `notes` -- one line per item, the way report.md prints them.
     usable = " ".join(envelope.notes) if envelope.notes else "nothing in this tier."

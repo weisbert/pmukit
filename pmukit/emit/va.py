@@ -91,6 +91,7 @@ import re
 from collections.abc import Mapping
 
 from ..config import DerivedConfig
+from ..deliverable import vset_text
 from ..errors import PmuError
 from .primitives import C_NOM, GM_SOFT, OFF_OHM, Netlist, balanced_gain, biquad_from_doublet, num
 
@@ -1018,8 +1019,7 @@ def build_va(port_fits, derived, corner: str, *, provenance=None, hb_robust: boo
     vrf = _supply_tracker(nl, supply, by_pin.get(supply, grounds[0]), f_start)
     if vset_codes != [None]:
         nl.parameter("vset", float(vset_codes[0]),
-                     "output code; characterized codes: "
-                     + ", ".join(str(c) for c in vset_codes))
+                     "output code; characterized codes: " + vset_text(vset_codes))
 
     ls_ports: list[str] = []
     for p in rails:

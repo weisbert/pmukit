@@ -155,7 +155,7 @@ def test_the_valid_range_keeps_freq_and_vset_after_verify(proj):
     _verify(d)
     v = api.model_summary("p1")["valid"]
     assert v["freq"] == "<= 1 GHz"
-    assert v["VSET"] == "3, 4"
+    assert v["VSET"] == "3, 4 (nominal 3)"
     assert v["temp"] == "-40 - 125 C (continuous)"
     assert v[f"load {RAIL}"] == "2 uA - 1 mA"
 

@@ -12,7 +12,7 @@ only section <x>, so one definition is live and the instance's master never chan
 """
 from __future__ import annotations
 
-from ..deliverable import eng as _eng
+from ..deliverable import eng as _eng, vset_text
 
 __all__ = ["extra_lines", "instance_template", "instance_line", "usage"]
 
@@ -74,7 +74,7 @@ def extra_lines(modules: dict, *, library: str = "PMU_<project>",
             f"// valid: {loads or 'no rail characterized'} | "
             f"{envelope.temp_c[0]:g}..{envelope.temp_c[1]:g} C | up to "
             f"{_eng(envelope.freq_max_hz, 'Hz')} | VSET "
-            f"{', '.join(str(v) for v in envelope.vset_codes) or '(none)'} "
+            f"{vset_text(envelope.vset_codes)} "
             f"-- see envelope.json and report.md")
     shared += [str(x) for x in common]
     out["*"] = shared
