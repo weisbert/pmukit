@@ -32,6 +32,17 @@ ENGINES = ("donau_alps", "spectre_ssh", "dry_run", "fake")
 spectre_ssh: run Spectre on a Linux host over ssh (the desk). dry_run: write the netlists, submit
 nothing. fake: synthesize results for tests."""
 
+ENGINE_NOTES = {
+    "donau_alps": "submit to the Donau queue; runs the site simulator (the box, default)",
+    "spectre_ssh": "run Spectre over ssh on another machine (the desk)",
+    "fake": "analytic stand-in, no simulator -- for smoke tests only",
+    "dry_run": "write the decks and the recipes, run nothing",
+}
+"""One line per engine: what `pmukit site` prints and the Settings screen shows."""
+
+ENV_OVERRIDES = {"engine": "PMUKIT_ENGINE", "ssh_host": "PMUKIT_SSH_HOST", "cpus": "PMUKIT_CPUS"}
+"""Setting -> the environment variable `load()` lets win over site.json."""
+
 SIMULATORS = ("alps", "spectre")
 
 SITE_FILE = "site.json"
@@ -148,9 +159,11 @@ class SiteConfig:
         return data_root() / SITE_FILE
 
     @classmethod
-    def load(cls, path=None) -> "SiteConfig":
+    def load(cls, path=None, *, env: bool = True) -> "SiteConfig":
         """Read `$PMUKIT_DATA/site.json` (or `path`); a missing file means the defaults.
-        `PMUKIT_ENGINE` / `PMUKIT_SSH_HOST` / `PMUKIT_CPUS` override whatever was read."""
+        `PMUKIT_ENGINE` / `PMUKIT_SSH_HOST` / `PMUKIT_CPUS` override whatever was read -- unless
+        `env=False`: what a change is saved on top of, so an override exported for one shell is
+        never written into the file."""
         p = pathlib.Path(path) if path is not None else cls.default_path()
         if p.is_file():
             try:
@@ -163,9 +176,15 @@ class SiteConfig:
             cfg = cls.from_dict(d, where=str(p))
         else:
             cfg = cls()
-        cfg._apply_env(str(p))
+        if env:
+            cfg._apply_env(str(p))
         cfg.validate(str(p))
         return cfg
+
+    @staticmethod
+    def env_overrides() -> dict:
+        """{setting: "$VAR"} for every override set in this process's environment."""
+        return {k: f"${v}" for k, v in ENV_OVERRIDES.items() if os.environ.get(v)}
 
     def save(self, path=None) -> pathlib.Path:
         p = pathlib.Path(path) if path is not None else self.default_path()

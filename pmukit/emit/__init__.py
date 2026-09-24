@@ -31,7 +31,7 @@ from . import lint, primitives, scs
 from .primitives import FORBIDDEN, WHITELIST, Netlist
 from .va import build_va, emit_va, module_name
 
-__all__ = ["deliver", "emit_va", "build_va", "module_name", "lint", "primitives", "scs",
+__all__ = ["deliver", "verify_inputs", "emit_va", "build_va", "module_name", "lint", "primitives", "scs",
            "Netlist", "WHITELIST", "FORBIDDEN", "HB_CHECK_NAME"]
 
 #: Where the full conditioning report lands inside the deliverable (report.md links to it).
@@ -53,6 +53,28 @@ def _load_derived(project: str, derived, root) -> DerivedConfig:
                 "or pass derived=<DerivedConfig> to deliver()"],
             where=str(p))
     return DerivedConfig.load(p)
+
+
+def verify_inputs(verify) -> dict:
+    """What `pmukit verify` decided (verify.json), as keyword arguments for `deliver()`.
+
+    Without this the report says "nothing was graded" even when verify.json is sitting right
+    next to it, and every large-signal term stays off because nothing told deliver() which ones
+    cleared the HB check.  `pmukit deliver` and the Deliver screen both go through here.
+    """
+    kw: dict = {}
+    if not isinstance(verify, dict):
+        return kw
+    grades = [Grade(port=g["port"], corner=g["corner"], block=g["block"], grade=g["grade"],
+                    detail=g.get("detail", ""), score=g.get("score"))
+              for g in (verify.get("grades") or []) if g.get("port") and g.get("block")]
+    if grades:
+        kw["grades"] = grades
+    if verify.get("ls_default_on"):
+        kw["ls_default_on"] = list(verify["ls_default_on"])
+    if verify.get("not_run"):
+        kw["not_run"] = [str(x) for x in verify["not_run"]]
+    return kw
 
 
 def _resolve_fit(project: str, derived: DerivedConfig, fit, root):

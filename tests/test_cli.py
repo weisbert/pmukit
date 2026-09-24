@@ -337,3 +337,28 @@ def test_site_is_not_part_of_a_project(workspace, capsys):
     a = DerivedConfig.from_dict({**der, "site": {"engine": "spectre_ssh"}})
     b = DerivedConfig.from_dict({**der, "site": {"engine": "donau_alps"}})
     assert a.sha() == b.sha()
+
+
+# ------------------------------------------------- `pmukit open`: the page opens on the project
+def test_open_hands_the_project_to_the_server(workspace, monkeypatch):
+    """`pmukit open p` starts the web shell with p as the page's initial project (the server
+    prints the URL with ?project=p and serves it as `initial_project` for a bare URL)."""
+    from pmukit import server
+    tmp, _nl = workspace
+    (tmp / "data" / "fresh_pmu").mkdir(parents=True)      # made from Home: no config.json yet
+    seen = {}
+    monkeypatch.setattr(server, "main", lambda **kw: seen.update(kw) or 0)
+    run(["open", "fresh_pmu", "--port", "9123"])
+    assert seen["project"] == "fresh_pmu"
+    assert seen["open_browser"] is True and seen["demo"] is False and seen["port"] == 9123
+
+
+def test_open_refuses_a_project_that_is_not_there(workspace, monkeypatch, capsys):
+    from pmukit import server
+    tmp, _nl = workspace
+    (tmp / "data" / "other_pmu").mkdir(parents=True)
+    monkeypatch.setattr(server, "main", lambda **kw: pytest.fail("the server must not start"))
+    assert cli.main(["--json", "open", "nope"]) == 2
+    err = json.loads(capsys.readouterr().err)["error"]
+    assert set(err) == {"what", "why", "do", "where"}
+    assert "nope" in err["what"] and "other_pmu" in " ".join(err["do"])

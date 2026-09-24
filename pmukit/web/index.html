@@ -191,7 +191,8 @@ var S = {
   palette: false,
   job: null,         /* {job, status, message, progress, title}             */
   undoable: "",
-  toast: ""
+  toast: "",
+  prev: "home"       /* the screen Settings goes back to                    */
 };
 
 var ICON = {
@@ -328,10 +329,11 @@ function forget(prefix){
 function P(){ return encodeURIComponent(S.project); }
 
 /* ---------------------------------------------------------------- jobs --- */
-function startJob(promise, title, onDone){
+function startJob(promise, title, onDone, onStart){
   promise.then(function(d){
     if (!d || !d.job){ if (onDone) onDone(d); render(); return; }
     S.job = { job: d.job, status: "running", progress: 0, message: "starting", title: title };
+    if (onStart) onStart(d);
     render();
     poll(d.job, onDone);
   }, function(e){ showErr(e); });
@@ -364,8 +366,8 @@ var VERBS = {
   project: [
     { id:"open",    label:function(c){ return "Open at " + (c.row.screen || "new"); }, common:true,
       run:function(c){ openProject(c.row.name, c.row.screen); } },
-    { id:"report",  label:"Open report", when:function(c){ return c.row.step >= 4; },
-      run:function(c){ openProject(c.row.name, "deliver"); } },
+    { id:"report",  label:"Open report", when:function(c){ return c.row.step >= 4 || c.row.deliverables > 0; },
+      run:function(c){ openReport(c.row.name); } },
     { id:"folder",  label:"Copy data folder path",
       run:function(c){ copy((c.root || "") + "/" + c.row.name); } },
     { sep:true },
@@ -546,9 +548,12 @@ function regCtx(obj){ var id = "c" + (++CTXN); CTXS[id] = obj; return id; }
 
 /* ------------------------------------------------------------ navigation - */
 function go(screen){
+  /* Settings is the machine's, not a step of the project: it remembers where it was opened
+     from, and it is never written into the project's state.json. */
+  if (screen === "settings" && S.screen !== "settings") S.prev = S.screen;
   S.screen = screen;
   delete S.errs[screen];
-  if (S.project && !S.demo){
+  if (S.project && !S.demo && screen !== "settings"){
     api("/api/state/" + P(), { method:"PUT", body:{ screen: screen } }).then(function(){}, function(){});
   }
   render();
@@ -559,17 +564,48 @@ function openProject(name, screen){
   S.data = {}; S.loading = {}; S.errs = {}; S.sel = {};
   go(screen || "new");
 }
+/* New project: the name field in the Home footer. This fills and focuses it; Enter or the
+   button creates the folder. A refusal (bad name, already there) is shown next to the field. */
 function newProject(suggested){
-  var name = window.prompt("New project name (a directory under PMUKIT_DATA):", suggested || "");
-  if (!name) return;
+  if (S.screen !== "home") go("home");
+  if (suggested) S.sel.newName = suggested;
+  S.sel.newErr = null;
+  render();
+  var n = el("newname");
+  if (n && n.focus){ n.focus(); if (n.select) n.select(); }
+}
+function createProject(){
+  var n = el("newname");
+  var name = String(n ? n.value : (S.sel.newName || "")).trim();
+  S.sel.newName = name;
+  if (!name){
+    S.sel.newErr = { what: "type a name for the project first.",
+      why: "A project is a folder under PMUKIT_DATA; the name is the folder's name.",
+      do: ["Use a name like demo_pmu"], where: "Home > new project name" };
+    render(); return;
+  }
   api("/api/projects", { method:"POST", body:{ name: name } }).then(function(d){
+    S.sel.newName = ""; S.sel.newErr = null;
     forget("projects");
     openProject(d.project, "new");
-  }, showErr);
+  }, function(e){ S.sel.newErr = e.error; render(); });
+}
+/* Open the latest deliverable's report.md. With nothing delivered yet the Deliver screen says
+   so and offers to deliver. */
+function openReport(name){
+  if (name && name !== S.project) openProject(name, "deliver"); else go("deliver");
+  S.sel.deliv = 0; S.sel.file = "report.md"; S.sel.wantReport = true;
+  forget("deliverables"); forget("dfile:");
+  render(); refreshCli();
 }
 
 /* ------------------------------------------------------------- rendering - */
 function render(){
+  /* A field marked data-keepfocus keeps the cursor across a re-render (a job poll or a probe
+     landing must not steal the name being typed). */
+  var ae = document.activeElement;
+  var keep = ae && ae.getAttribute && ae.getAttribute("data-keepfocus") ? ae.id : "";
+  var caret = keep ? ae.selectionStart : 0;
   ACTS = {}; CTXS = {};
   renderNav();
   var sc = SCREENS[S.screen] || SCREENS.home;
@@ -578,6 +614,8 @@ function render(){
   renderCli();
   renderOverlays();
   wire();
+  var kn = keep ? el(keep) : null;
+  if (kn && kn.focus){ kn.focus(); try { kn.setSelectionRange(caret, caret); } catch(e){ /* not a text field */ } }
 }
 function renderNav(){
   var steps = STEPS.map(function(s, i){
@@ -590,6 +628,7 @@ function renderNav(){
   var extra = "";
   if (S.screen === "digest") extra = '<span class="badge b-acc">4b Copy for desk</span>';
   if (S.screen === "states") extra = '<span class="badge b-mute">reference sheet</span>';
+  if (S.screen === "settings") extra = '<span class="badge b-mute">this machine, every project</span>';
   el("nav").innerHTML =
       '<button class="brand" data-go="home" title="Home: every project (key 0)">pmukit</button>'
     + '<span class="proj">' + esc(S.project || "no project") + (S.demo ? " &middot; demo" : "") + "</span>"
@@ -597,6 +636,8 @@ function renderNav(){
     + '<div class="navr">' + extra
     + (S.toast ? '<span class="badge b-ok">' + esc(S.toast) + "</span>" : "")
     + '<span class="hint">' + (S.undoable ? "Ctrl Z undoes: " + esc(S.undoable) : "") + "</span>"
+    + '<button class="btn sm' + (S.screen === "settings" ? " pri" : "") + '" data-go="settings" '
+    + 'title="Where runs go: engine, simulator, queue, CPUs and the Donau accounts of this machine">Settings</button>'
     + '<button class="btn sm" data-help="1" title="Help and keyboard shortcuts (?)">? Help</button>'
     + "</div>";
 }
@@ -680,6 +721,17 @@ function wire(){
   document.querySelectorAll("[data-change]").forEach(function(n){
     n.onchange = function(){ var f = ACTS[n.getAttribute("data-change")]; if (f) f(n.value); };
   });
+  /* data-input="<S.sel key>" keeps what is typed; data-enter="<action>" is the field's Enter. */
+  document.querySelectorAll("[data-input]").forEach(function(n){
+    n.oninput = function(){ S.sel[n.getAttribute("data-input")] = n.value; };
+  });
+  document.querySelectorAll("[data-enter]").forEach(function(n){
+    n.onkeydown = function(e){
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      var f = ACTS[n.getAttribute("data-enter")]; if (f) f(n.value);
+    };
+  });
   document.querySelectorAll("[data-go]").forEach(function(n){
     n.onclick = function(){ go(n.getAttribute("data-go")); };
   });
@@ -761,6 +813,7 @@ function doAction(text, e){
   if (/run screen/i.test(t)) return go("run");
   if (/model screen/i.test(t)) return go("model");
   if (/\bhome\b/i.test(t)) return go("home");
+  if (/\bsettings\b/i.test(t)) return go("settings");
   if (/reload/i.test(t)) return window.location.reload();
   if (/try again|retry/i.test(t)){ if (e && e.retry) return e.retry(); }
   copy(t);
@@ -864,8 +917,10 @@ SCREENS.home = {
         + '<span class="k">data</span><span class="mono">' + esc(md.data_root) + "</span>"
         + '<span class="k">pmukit</span><span class="mono">' + esc(md.pmukit) + " &middot; python "
         + esc(md.python) + "</span></div>"
-        + '<div style="margin-top:10px"><button class="btn sm" data-act="' + reid + '">'
-        + ICON.retry + " Probe again</button></div>", { style: "flex:none" });
+        + '<div class="rowflex" style="margin-top:10px"><button class="btn sm" data-act="' + reid + '">'
+        + ICON.retry + " Probe again</button>"
+        + '<button class="btn sm" data-go="settings" title="engine, simulator, queue, CPUs, Donau accounts">'
+        + "Settings</button></div>", { style: "flex:none" });
     }
     var selp = (pd && pd.projects || []).filter(function(p){ return p.name === S.sel.project; })[0];
     var sel = panel("Selected", selp ? esc(selp.name) : "nothing selected",
@@ -898,10 +953,18 @@ SCREENS.home = {
          + panel("Recent activity", "", recentActivity(), { style: "flex:1" }) + "</div>";
   },
   foot: function(){
-    var id = regAction(function(){ newProject(""); });
+    var id = regAction(function(){ createProject(); });
+    var ne = S.sel.newErr;
+    var err = ne ? '<span style="color:var(--bad)" title="' + esc((ne.why || "") + (ne.where ? " (" + ne.where + ")" : ""))
+      + '">' + ICON.x + " " + esc(ne.what || "") + "</span>"
+      + ((ne.do || [])[0] ? '<span class="hint">' + esc(ne.do[0]) + "</span>" : "") : "";
     return '<span class="hint">Home lists every project under PMUKIT_DATA. A project is a folder; '
          + "delete the folder and it is gone from here.</span>"
-         + '<button class="btn pri" data-act="' + id + '">+ New project</button>';
+         + '<div class="rowflex">' + err
+         + '<input class="inp mono" id="newname" data-keepfocus="1" data-input="newName" data-enter="' + id
+         + '" style="width:230px" placeholder="new project name, e.g. demo_pmu" value="'
+         + esc(S.sel.newName || "") + '" title="letters, digits, _ . - ; Enter creates it">'
+         + '<button class="btn pri" data-act="' + id + '">+ Create project</button></div>';
   }
 };
 function recentActivity(){
@@ -1294,16 +1357,19 @@ SCREENS.plan = {
     var pl = S.data["plan"] || {};
     var n = (pl.cost || {}).runs || 0;
     var sid = regAction(function(){ doSubmit(); });
+    var block = submitBlocker(S.data["site"]);
     return '<span class="hint">Resume: runs already in the ledger are skipped. Nothing is '
          + "submitted until you press this.</span>"
-         + '<div class="rowflex">' + accountPicker() + '<button class="btn" data-act="' + regAction(function(){
+         + '<div class="rowflex">' + runDestination() + '<button class="btn" data-act="' + regAction(function(){
              copy(((S.data["plan"] || {}).groups || []).map(function(g){
                return [g.id, g.analysis, g.runs, g.cpu_hours].join(","); }).join("\n"));
            }) + '">Export plan (CSV)</button>'
          + '<button class="btn" title="Write every run into the ledger without submitting one: '
          + 'the netlists and recipes exist, nothing is queued." data-act="'
          + regAction(function(){ doSubmit(true); }) + '">Dry run</button>'
-         + '<button class="btn pri" data-act="' + sid + '"' + (n ? "" : " disabled") + ">"
+         + (block ? '<span class="hint" style="color:var(--warn)">' + ICON.warn + " " + esc(block) + "</span>" : "")
+         + '<button class="btn pri" data-act="' + sid + '"' + (n && !block ? "" : " disabled")
+         + (block ? ' title="' + esc(block) + '"' : "") + ">"
          + ICON.play + " Submit " + n + " runs</button></div>";
   }
 };
@@ -1409,17 +1475,37 @@ function setTicksAll(fn){
       render(); refreshCli();
     }, showErr);
 }
+/* Where Submit sends the runs, from the site config: "-> Donau . ALPS . queue short" plus the
+   account list, or "-> fake (synthetic results)". Changed on the Settings screen. */
+function engineLabel(s){
+  var sim = s.simulator === "spectre" ? "Spectre" : "ALPS";
+  return s.engine === "donau_alps" ? "Donau \u00b7 " + sim + " \u00b7 queue " + (s.queue || "-")
+       : s.engine === "spectre_ssh" ? "Spectre over ssh \u00b7 " + (s.ssh_host || "-")
+       : s.engine === "dry_run" ? "dry run (netlists written, nothing simulated)"
+       : s.engine === "fake" ? "fake (synthetic results)" : String(s.engine || "-");
+}
+function runDestination(){
+  var s = need("site", "/api/site", "plan");
+  if (!s) return "";
+  return '<span class="hint">Runs go</span><span class="mono" title="'
+       + esc(((s.engines || []).filter(function(e){ return e.name === s.engine; })[0] || {}).note || "")
+       + '">&rarr; ' + esc(engineLabel(s)) + "</span>" + accountPicker()
+       + '<button class="btn sm" data-go="settings" title="Change the engine, the queue or the Donau accounts">'
+       + "Settings</button>";
+}
+/* Why Submit is disabled, or "" -- the server refuses the same thing, this just says it first. */
+function submitBlocker(s){
+  if (!s || s.engine !== "donau_alps" || s.account) return "";
+  return (s.accounts || []).length ? "Choose a Donau account to submit"
+                                   : "Add a Donau account in Settings to submit";
+}
 /* The Donau account runs are charged to. The list lives in the box's site.json (never in the
-   repo): `pmukit site --add-account <name>=<note>`. The pick is remembered there too. */
+   repo), edited on the Settings screen. The pick is remembered there too. */
 function accountPicker(){
   var s = need("site", "/api/site", "plan");
   if (!s || s.engine !== "donau_alps") return "";
   var accs = s.accounts || [];
-  if (!accs.length){
-    return '<span class="hint" title="Add them once in a terminal: pmukit site --add-account '
-         + '&lt;name&gt;=&lt;note&gt;">No Donau account set &middot; <span class="mono">pmukit site '
-         + "--add-account</span></span>";
-  }
+  if (!accs.length) return '<span class="hint">&middot; no Donau account yet</span>';
   var cur = s.account || "";
   var opts = (cur && !accs.some(function(a){ return a.name === cur; }))
     ? '<option value="' + esc(cur) + '" selected>' + esc(cur) + "</option>" : "";
@@ -1428,12 +1514,8 @@ function accountPicker(){
     return '<option value="' + esc(a.name) + '"' + (a.name === cur ? " selected" : "") + ">"
          + esc(a.name) + (a.note ? " — " + esc(a.note) : "") + "</option>";
   }).join("");
-  var id = regAction(function(v){
-    api("/api/site", { method:"PUT", body:{ account: v } }).then(function(d){
-      S.data["site"] = d; render();
-    }, showErr);
-  });
-  return '<span class="hint">Account</span><select class="inp mono" data-change="' + id
+  var id = regAction(function(v){ saveSite({ account: v }); });
+  return '<span class="hint">&middot; account</span><select class="inp mono" data-change="' + id
        + '" title="dsub -A: the Donau account these runs are charged to">' + opts + "</select>";
 }
 function doSubmit(commitOnly){
@@ -1442,14 +1524,16 @@ function doSubmit(commitOnly){
     showErr({ error: { what: "no Donau account is selected.",
       why: "dsub -A names the account a job is charged to; Donau rejects a submit without one.",
       do: ["Pick one in the Account list next to Submit",
-           "Or add them in a terminal: pmukit site --add-account <name>=<note>"],
+           "Or add one in Settings"],
       where: "Plan > Account" } });
     return;
   }
+  /* Straight to Run as soon as the job exists: the ledger there refreshes while it works. */
   startJob(api("/api/p/" + P() + "/submit", { method:"POST",
       body:{ commit_only: !!commitOnly, account: s.account || "" } }),
     commitOnly ? "writing the ledger (nothing submitted)" : "submitting the plan",
-    function(){ forget("ledger"); go("run"); });
+    function(){ if (S.screen === "run") refreshRun(); },
+    function(){ forget("ledger"); forget("run:"); go("run"); });
 }
 
 /* ----------------------------------------------------------------- Run -- */
@@ -1482,7 +1566,9 @@ SCREENS.run = {
       + stat(c.failed || 0, "failed") + stat(c.skipped_cached || 0, "cached")
       + stat(num(led.cpu_hours, 1), "CPU-h used") + stat(led.not_run, "not run")
       + '<div style="margin-left:auto;align-self:center" class="rowflex">'
-      + '<button class="btn sm" data-act="' + regAction(function(){ forget("ledger:"); render(); })
+      + (runLive() ? '<span class="badge b-acc" title="the ledger is re-read every '
+          + (RUN_REFRESH_MS / 1000) + ' s while runs are in flight">live</span>' : "")
+      + '<button class="btn sm" data-act="' + regAction(function(){ refreshRun(); })
       + '">' + ICON.retry + " Refresh</button></div></div>"
       + '<div class="bar"><div class="seg" style="background:var(--ok);width:' + pct("done") + '%"></div>'
       + '<div class="seg" style="background:var(--acc);width:' + pct("running") + '%"></div>'
@@ -1555,6 +1641,29 @@ function runDetail(){
     + (r.error ? '<div class="callout bad" style="margin-top:10px">' + esc(r.error) + "</div>" : "")
     + (d.why ? '<div class="hint" style="margin-top:8px">' + esc(d.why) + "</div>" : ""),
     { style: "flex:1", right: '<span class="badge ' + bcls + '">' + esc(r.status) + "</span>" });
+}
+/* Live Run screen: while a job is working or runs are submitted / running, the ledger (and the
+   selected run) are re-read in place every RUN_REFRESH_MS -- no skeleton flash, one request at a
+   time, and nothing at all once the queue is quiet. */
+var RUN_REFRESH_MS = 4000;
+function runLive(){
+  if (S.job && (S.job.status === "running" || S.job.status === "queued")) return true;
+  var led = S.data["ledger:" + (S.sel.runFilter || "all")];
+  var c = (led && led.counts) || {};
+  return (c.running || 0) + (c.submitted || 0) > 0;
+}
+function refreshQuiet(key, path){
+  if (S.loading[key]) return;
+  S.loading[key] = true;
+  api(path).then(function(d){ S.loading[key] = false; S.data[key] = d; render(); },
+                 function(e){ S.loading[key] = false; if (S.data[key] === undefined) showErr(e); });
+}
+function refreshRun(){
+  if (!S.project) return;
+  var f = S.sel.runFilter || "all";
+  Object.keys(S.data).forEach(function(k){ if (k.indexOf("ledger:") === 0 && k !== "ledger:" + f) delete S.data[k]; });
+  refreshQuiet("ledger:" + f, "/api/p/" + P() + "/ledger" + (f === "all" ? "" : "?status=" + f));
+  if (S.sel.run) refreshQuiet("run:" + S.sel.run, "/api/p/" + P() + "/runs/" + encodeURIComponent(S.sel.run));
 }
 function runAction(id, action){
   api("/api/p/" + P() + "/runs/" + encodeURIComponent(id) + "/" + action, { method:"POST", body:{} })
@@ -1631,6 +1740,8 @@ SCREENS.model = {
          + '<div class="rowflex"><button class="btn" data-act="' + regAction(function(){ go("digest"); })
          + '">' + ICON.copy + " Copy for desk</button>"
          + '<button class="btn" data-act="' + regAction(function(){ doVerify(); }) + '">Verify (HB health)</button>'
+         + '<button class="btn" data-act="' + regAction(function(){ openReport(); })
+         + '" title="report.md of the latest deliverable">' + ICON.file + " Open report</button>"
          + '<button class="btn pri" data-act="' + regAction(function(){ doDeliver(); }) + '">Deliver '
          + ICON.arrow + "</button></div>";
   }
@@ -1911,14 +2022,22 @@ SCREENS.deliver = {
     if (d === undefined) return '<div class="col grow">' + panel("Deliverable", "",
       loadingBlock("deliverables", "listing the stamped deliverable folders")) + "</div>";
     if (!d.deliverables.length){
-      return '<div class="col grow">' + jobBlock() + panel("Deliverable", "",
-        emptyBlock("Nothing delivered yet",
-          "Deliver writes one stamped folder: a .scs library with one section per corner, one .va "
-          + "per corner, the validity envelope, the report and the provenance.",
-          "Go to Model", "model")) + "</div>";
+      return '<div class="col grow">' + errBlock("deliver") + jobBlock() + panel("Deliverable", "",
+        '<div class="empty"><span style="color:var(--ink3)">' + ICON.file + "</span>"
+        + '<div class="t">' + (S.sel.wantReport ? "No report yet: nothing has been delivered"
+                                                : "Nothing delivered yet") + "</div>"
+        + "<div>" + (S.sel.wantReport ? "report.md is written by Deliver, together with the model "
+            + "library, the validity envelope and the provenance. "
+          : "Deliver writes one stamped folder: a .scs library with one section per corner, one .va "
+            + "per corner, the validity envelope, the report and the provenance. ")
+        + "It needs a fitted model.</div>"
+        + '<div class="rowflex" style="margin-top:6px"><button class="btn pri" data-act="'
+        + regAction(function(){ doDeliver(); }) + '">Deliver</button>'
+        + '<button class="btn" data-go="model">Go to Model</button></div></div>') + "</div>";
     }
-    var dv = d.deliverables[S.sel.deliv || 0];
+    var dv = d.deliverables[S.sel.deliv || 0] || d.deliverables[0];
     var file = S.sel.file || (dv.files[0] || {}).name;
+    if (file && !dv.files.some(function(f){ return f.name === file; })) file = (dv.files[0] || {}).name;
     var rows = dv.files.map(function(f){
       var ctx = regCtx({ row: f, stampPath: dv.path });
       var id = regAction(function(){ S.sel.file = f.name; forget("dfile:"); render(); refreshCli(); });
@@ -1972,6 +2091,8 @@ SCREENS.deliver = {
     return '<span class="hint">Nothing in this folder enters git. report.md carries numbers only.</span>'
          + '<div class="rowflex"><button class="btn" data-act="' + regAction(function(){ go("digest"); })
          + '">' + ICON.copy + " Copy for desk</button>"
+         + '<button class="btn" data-act="' + regAction(function(){ openReport(); })
+         + '" title="report.md of the latest deliverable">' + ICON.file + " Open report</button>"
          + '<button class="btn pri" data-act="' + regAction(function(){ doDeliver(); })
          + '">Deliver again</button></div>';
   }
@@ -2093,6 +2214,127 @@ SCREENS.digest = {
   }
 };
 
+/* ------------------------------------------------------------ Settings -- */
+/* The machine's site config (site.json under PMUKIT_DATA), not a step of any project. Every
+   change is saved at once through PUT /api/site, with the same refusals as `pmukit site`. */
+SCREENS.settings = {
+  cli: function(){
+    var st = (S.data["site"] || {}).stored || {};
+    return { engine: st.engine || "", simulator: st.simulator || "", queue: st.queue || "",
+             cpus: st.cpus || "", account: st.project_account || "" };
+  },
+  main: function(){
+    var s = need("site", "/api/site", "settings");
+    if (s === undefined && S.errs.settings) return '<div class="col grow">' + errBlock("settings") + "</div>";
+    if (s === undefined) return '<div class="col grow">' + panel("Where runs go", "",
+      loadingBlock("site", "reading site.json and the environment")) + "</div>";
+    var st = s.stored || {}, ov = s.overrides || {};
+    var chosen = st.engine || s.engine;
+    var engines = (s.engines || []).map(function(e){
+      var on = e.name === chosen;
+      var id = regAction(function(){ if (!on) saveSite({ engine: e.name }); });
+      return '<tr class="click' + (on ? " sel" : "") + '" data-act="' + id + '">'
+        + '<td style="width:26px"><input type="radio" name="engine"' + (on ? " checked" : "") + "></td>"
+        + '<td class="mono" style="font-weight:600;white-space:nowrap">' + esc(e.name) + "</td>"
+        + "<td>" + esc(e.note)
+        + (ov.engine && e.name === s.engine ? ' <span class="badge b-warn">in effect</span>' : "") + "</td></tr>";
+    }).join("");
+    var envNote = function(key, what){
+      return ov[key] ? '<div class="callout warn" style="margin-top:6px">' + ICON.warn + " In effect: <b class=\"mono\">"
+        + esc(what) + "</b>, set by <span class=\"mono\">" + esc(ov[key]) + "</span> in the environment "
+        + "<span class=\"mono\">pmukit ui</span> was started from. What you pick here is saved to "
+        + "site.json and takes over once that variable is unset.</div>" : "";
+    };
+    var sims = (s.simulators || ["alps", "spectre"]).map(function(x){
+      return '<option value="' + esc(x) + '"' + (x === (st.simulator || s.simulator) ? " selected" : "") + ">"
+           + esc(x === "alps" ? "ALPS (default)" : x === "spectre" ? "Spectre" : x) + "</option>";
+    }).join("");
+    var field = function(label, ctl, hint){
+      return '<span class="k">' + label + "</span><span>" + ctl
+           + (hint ? ' <span class="hint">' + hint + "</span>" : "") + "</span>";
+    };
+    var where = panel("Where runs go", "the engine Submit hands the plan to",
+      '<table class="t" style="margin:-12px -13px 12px;width:calc(100% + 26px)"><tbody>' + engines + "</tbody></table>"
+      + envNote("engine", s.engine)
+      + '<div class="kv" style="margin-top:10px;align-items:center">'
+      + field("Simulator", '<select class="inp" data-change="' + regAction(function(v){ saveSite({ simulator: v }); })
+          + '">' + sims + "</select>", "what a Donau job runs; Spectre licences are scarce")
+      + field("Queue", '<input class="inp mono" id="setqueue" data-keepfocus="1" style="width:140px" value="'
+          + esc(st.queue !== undefined ? st.queue : s.queue) + '" data-change="'
+          + regAction(function(v){ saveSite({ queue: v }); }) + '">', "the Donau queue, e.g. short")
+      + field("CPUs per job", '<input class="inp mono" id="setcpus" data-keepfocus="1" style="width:70px" value="'
+          + esc(st.cpus !== undefined ? st.cpus : s.cpus) + '" data-change="'
+          + regAction(function(v){ saveSite({ cpus: v }); }) + '">', "the -mt / queue slot count")
+      + (chosen === "spectre_ssh"
+          ? field("SSH host", '<input class="inp mono" id="setssh" data-keepfocus="1" style="width:160px" value="'
+              + esc(s.ssh_host || "") + '" data-change="' + regAction(function(v){ saveSite({ ssh_host: v }); })
+              + '">', "the alias in your ~/.ssh/config") : "")
+      + "</div>"
+      + envNote("simulator", s.simulator) + envNote("cpus", s.cpus),
+      { style: "flex:none" });
+    var accRows = (s.accounts || []).map(function(a){
+      var isDef = a.name === st.project_account;
+      var mk = regAction(function(){ saveSite({ account: a.name }); });
+      var rm = regAction(function(){ saveSite({ remove_account: a.name }); });
+      return '<tr><td class="mono">' + esc(a.name) + '</td><td class="hint">' + esc(a.note || "") + "</td><td>"
+        + (isDef ? '<span class="badge b-ok">' + ICON.ok + " default</span>"
+                 : '<button class="btn sm" data-act="' + mk + '" title="charge runs to this account">Make default</button>')
+        + '</td><td><button class="btn sm" data-act="' + rm + '" title="drop it from the list">Remove</button></td></tr>';
+    }).join("");
+    var add = regAction(function(){
+      var n = el("acctname"), t = el("acctnote");
+      var name = String(n ? n.value : (S.sel.acctName || "")).trim();
+      var body = { add_account: { name: name, note: String(t ? t.value : (S.sel.acctNote || "")).trim() } };
+      if (name && !st.project_account) body.account = name;       /* the first one becomes the default */
+      saveSite(body, function(){ S.sel.acctName = ""; S.sel.acctNote = ""; });
+    });
+    var accounts = panel("Donau accounts", "dsub -A: what runs are charged to",
+      ((s.accounts || []).length
+        ? '<table class="t" style="margin:-12px -13px 12px;width:calc(100% + 26px)"><thead><tr><th>Account</th>'
+          + "<th>Note</th><th></th><th></th></tr></thead><tbody>" + accRows + "</tbody></table>"
+        : '<div class="hint" style="margin-bottom:10px">No account yet. Add the ones your site gave you; '
+          + "the first one becomes the default. They stay in site.json on this machine.</div>")
+      + '<div class="rowflex">'
+      + '<input class="inp mono" id="acctname" data-keepfocus="1" data-input="acctName" data-enter="' + add
+      + '" style="width:190px" placeholder="account name" value="' + esc(S.sel.acctName || "") + '">'
+      + '<input class="inp" id="acctnote" data-keepfocus="1" data-input="acctNote" data-enter="' + add
+      + '" style="flex:1;min-width:140px" placeholder="note, e.g. sims up to 1TB" value="' + esc(S.sel.acctNote || "") + '">'
+      + '<button class="btn" data-act="' + add + '">Add account</button></div>'
+      + envNote("account", s.account),
+      { style: "flex:none" });
+    var envRows = (s.environment || []).map(function(f){
+      return '<span class="k">' + esc(f.name) + '</span><span><span class="mono">'
+           + (f.value ? esc(f.value) : '<span style="color:var(--ink3)">(not found)</span>') + "</span>"
+           + (f.source ? ' <span class="hint">from ' + esc(f.source) + "</span>" : "") + "</span>";
+    }).join("");
+    var env = panel("Read from this machine", "read-only &middot; from the environment",
+      '<div class="kv">' + envRows
+      + '<span class="k">site.json</span><span class="mono">' + esc(s.path || "-") + "</span></div>"
+      + (s.demo ? '<div class="hint" style="margin-top:8px">Demo mode: nothing is read or saved.</div>'
+                : '<div class="hint" style="margin-top:8px">Set by the login scripts, not here: source the '
+                  + "site setup before <span class=\"mono\">pmukit ui</span> to change them.</div>"),
+      { style: "flex:none" });
+    return '<div class="col grow">' + errBlock("settings") + where + "</div>"
+         + '<div class="col" style="flex:0 0 480px">' + accounts + env + "</div>";
+  },
+  foot: function(){
+    var back = S.prev && S.prev !== "settings" && SCREENS[S.prev] ? S.prev : "home";
+    var name = (STEPS.filter(function(x){ return x[2] === back; })[0] || [0, back])[1];
+    return '<span class="hint">Settings of this machine, shared by every project; they live in '
+         + '<span class="mono">site.json</span> under PMUKIT_DATA.</span>'
+         + '<button class="btn pri" data-go="' + esc(back) + '">Back to ' + esc(name) + " " + ICON.arrow + "</button>";
+  }
+};
+function saveSite(body, after){
+  api("/api/site", { method:"PUT", body: body }).then(function(d){
+    S.data["site"] = d; delete S.errs.settings;
+    if (after) after(d);
+    S.toast = d.demo ? "demo: not saved" : "saved";
+    render(); refreshCli();
+    setTimeout(function(){ S.toast = ""; render(); }, 1400);
+  }, showErr);
+}
+
 /* -------------------------------------------------------------- States -- */
 SCREENS.states = {
   cli: function(){ return {}; },
@@ -2163,7 +2405,10 @@ function paletteCommands(){
     cmds.push({ label: "Verify (HB health check)", hint: S.project, run: function(){ doVerify(); } });
     cmds.push({ label: "Write the deliverable", hint: S.project, run: function(){ doDeliver(); } });
     cmds.push({ label: "Submit the plan", hint: S.project, run: function(){ doSubmit(); } });
+    cmds.push({ label: "Open report", hint: "report.md of the latest deliverable", run: function(){ openReport(); } });
   }
+  cmds.push({ label: "Settings: engine, queue, Donau accounts", hint: "this machine", run: function(){ go("settings"); } });
+  cmds.push({ label: "New project", hint: "Home", run: function(){ newProject(""); } });
   var q = (S.paletteQ || "").trim();
   if (/^[0-9a-f]{6,}$/i.test(q)){
     cmds.unshift({ label: "Open run " + q, hint: "run id", run: function(){
@@ -2213,7 +2458,7 @@ function primary(){
     var t = S.data["digesttext"];
     if (t) return copy(t.text);
   }
-  if (S.screen === "home") return newProject("");
+  if (S.screen === "home") return S.sel.newName ? createProject() : newProject("");
 }
 document.addEventListener("click", function(){ if (S.menu){ S.menu = null; render(); } });
 document.addEventListener("contextmenu", function(e){
@@ -2241,6 +2486,9 @@ document.addEventListener("drop", function(e){
 });
 
 /* ---------------------------------------------------------------- boot -- */
+/* The project to open on: ?project= in the URL, else the one `pmukit open <project>` handed the
+   server (so a bare URL still lands there). A named project opens at the screen it was left on,
+   unless ?screen= says otherwise; with none named, Home selects the first row. */
 function boot(){
   var q = new URLSearchParams(window.location.search);
   if (q.get("project")) S.project = q.get("project");
@@ -2250,7 +2498,15 @@ function boot(){
   api("/api/projects").then(function(d){
     S.demo = !!d.demo;
     S.data["projects"] = d;
-    if (!S.project && d.projects && d.projects.length){
+    var named = S.project || d.initial_project || "";
+    if (named){
+      S.project = named; S.sel.project = named;
+      if (!q.get("screen")){
+        api("/api/state/" + P()).then(function(st){
+          if (S.screen === "home" && st.screen && SCREENS[st.screen]) go(st.screen);
+        }, function(){});
+      }
+    } else if (d.projects && d.projects.length){
       S.sel.project = d.projects[0].name;
       S.project = d.projects[0].name;
     }
@@ -2258,8 +2514,8 @@ function boot(){
     refreshCli();
   }, function(){ render(); });
   setInterval(function(){
-    if (S.screen === "run" && !S.job){ forget("ledger:"); render(); }
-  }, 6000);
+    if (S.screen === "run" && runLive()) refreshRun();
+  }, RUN_REFRESH_MS);
 }
 boot();
 </script>

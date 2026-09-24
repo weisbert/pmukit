@@ -420,6 +420,7 @@ def test_page_renders_every_screen_without_throwing(tmp_path, demo):
         "deliver": {"deliverables": g("/api/p/demo_pmu/deliverables")},
         "digest": {"digest": g("/api/p/demo_pmu/digest/blocks")},
         "states": {},
+        "settings": {"site": g("/api/site")},
     }
     page_js = tmp_path / "page.js"
     blocks = re.findall(r"<script[^>]*>([\s\S]*?)</script>", PAGE.read_text(encoding="utf-8"))
@@ -432,7 +433,8 @@ def test_page_renders_every_screen_without_throwing(tmp_path, demo):
     p = subprocess.run([node_exe, str(check_js), str(page_js), str(fix_json)],
                        capture_output=True, text=True)
     assert p.returncode == 0, p.stdout + p.stderr
-    for screen in ("home", "new", "plan", "run", "model", "deliver", "digest", "states"):
+    for screen in ("home", "new", "plan", "run", "model", "deliver", "digest", "states",
+                   "settings"):
         assert f"{screen:<9}" in p.stdout, f"{screen} was not rendered:\n{p.stdout}"
 
 
@@ -686,3 +688,138 @@ def test_main_accepts_both_call_styles(monkeypatch):
     # the shape pmukit.cli calls it with
     server.main(host="127.0.0.1", port=8765, demo=False, open_browser=False, project="demo_pmu")
     assert seen["project"] == "demo_pmu" and seen["demo"] is False
+
+
+# --------------------------------------------------------------------------- `pmukit open`
+def test_the_initial_project_reaches_the_page(tmp_path, monkeypatch):
+    """`pmukit open <p>`: the URL names p, and /api/projects hands p to a page opened on the bare
+    URL too -- the page then opens p at the screen it was left on."""
+    monkeypatch.setenv("PMUKIT_DATA", str(tmp_path))
+    srv = server.make_server("127.0.0.1", 0, tries=1, project="opened_pmu")
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{srv.server_address[1]}/api/projects",
+                                    timeout=20) as r:
+            assert json.loads(r.read())["initial_project"] == "opened_pmu"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert server.Api(demo=True, project="demo_pmu").projects()["initial_project"] == "demo_pmu"
+    assert server.Api(project="../etc").initial_project == ""          # never a path
+    assert server.Api().projects()["initial_project"] == ""
+
+
+def test_serve_prints_the_url_with_the_project(monkeypatch, capsys):
+    def stop(self):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(server.PmuServer, "serve_forever", stop)
+    server.serve("127.0.0.1", 0, demo=True, project="demo_pmu")
+    out = capsys.readouterr().out
+    assert re.search(r"http://127\.0\.0\.1:\d+/\?project=demo_pmu", out), out
+
+
+def test_page_reads_the_initial_project():
+    text = PAGE.read_text(encoding="utf-8")
+    assert "d.initial_project" in text and 'q.get("project")' in text
+
+
+# --------------------------------------------------------------------------- Settings (site)
+@pytest.fixture
+def site_live(tmp_path, monkeypatch):
+    for v in ("PMUKIT_ENGINE", "PMUKIT_SSH_HOST", "PMUKIT_CPUS", "PMUKIT_SIMULATOR",
+              "PMUKIT_CLUSTER_ENGINE", "PMUKIT_DONAU_ACCOUNT"):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv("PMUKIT_DATA", str(tmp_path))
+    c = Client(demo=False)
+    c.site_json = tmp_path / "site.json"
+    yield c
+    c.close()
+
+
+def test_settings_add_choose_and_remove_accounts(site_live):
+    c = site_live
+    status, s = c.call("GET", "/api/site")
+    assert status == 200 and s["accounts"] == [] and s["account"] == ""
+    assert {e["name"] for e in s["engines"]} == {"donau_alps", "spectre_ssh", "dry_run", "fake"}
+    assert all(e["note"] for e in s["engines"])
+    assert s["simulators"] == ["alps", "spectre"] and isinstance(s["environment"], list)
+
+    status, s = c.call("PUT", "/api/site", {"add_account": {"name": "acct_a", "note": "small"}})
+    assert status == 200 and s["accounts"] == [{"name": "acct_a", "note": "small"}]
+    assert s["account"] == ""                              # adding does not choose
+    # the CLI spelling and a list both work
+    status, s = c.call("PUT", "/api/site", {"add_account": ["acct_b=big", {"name": "acct_c"}]})
+    assert [a["name"] for a in s["accounts"]] == ["acct_a", "acct_b", "acct_c"]
+    status, s = c.call("PUT", "/api/site", {"account": "acct_b"})
+    assert s["account"] == "acct_b" and s["stored"]["project_account"] == "acct_b"
+    status, s = c.call("PUT", "/api/site", {"remove_account": "acct_b"})
+    assert [a["name"] for a in s["accounts"]] == ["acct_a", "acct_c"]
+    assert s["account"] == ""                              # removing the default clears it
+    on_disk = json.loads(c.site_json.read_text(encoding="utf-8"))
+    assert [a["name"] for a in on_disk["accounts"]] == ["acct_a", "acct_c"]
+    assert on_disk["project_account"] == ""
+
+
+def test_settings_change_the_engine_simulator_queue_and_cpus(site_live):
+    c = site_live
+    status, s = c.call("PUT", "/api/site", {"engine": "fake"})
+    assert status == 200 and s["engine"] == "fake"
+    status, s = c.call("PUT", "/api/site", {"simulator": "spectre", "queue": "long",
+                                            "cpus": "4"})       # a form field sends text
+    assert (s["simulator"], s["queue"], s["cpus"]) == ("spectre", "long", 4)
+    on_disk = json.loads(c.site_json.read_text(encoding="utf-8"))
+    assert on_disk["engine"] == "fake" and on_disk["cpus"] == 4
+
+
+@pytest.mark.parametrize("body", [
+    {},
+    {"engines": "fake"},                                   # a typo is not silently ignored
+    {"engine": "slurm"},
+    {"engine": 3},
+    {"simulator": "hspice"},
+    {"cpus": 0},
+    {"cpus": "eight"},
+    {"cpus": True},
+    {"engine": "donau_alps", "queue": ""},
+    {"account": ""},
+    {"add_account": {"note": "no name"}},
+    {"add_account": "=only a note"},
+    {"add_account": {"name": "two words"}},
+    {"remove_account": 5},
+], ids=lambda b: json.dumps(b))
+def test_settings_refusals_are_four_part_and_write_nothing(site_live, body):
+    c = site_live
+    c.call("PUT", "/api/site", {"add_account": {"name": "acct_a"}})
+    before = c.site_json.read_bytes()
+    status, payload = c.call("PUT", "/api/site", body)
+    assert status == 400, payload
+    four_part(payload)
+    assert c.site_json.read_bytes() == before
+
+
+def test_settings_never_write_an_environment_override(site_live, monkeypatch):
+    """PMUKIT_ENGINE exported for the `pmukit ui` shell wins while it is set, is reported as the
+    override, and is never written into site.json by an unrelated change."""
+    c = site_live
+    monkeypatch.setenv("PMUKIT_ENGINE", "dry_run")
+    status, s = c.call("PUT", "/api/site", {"cpus": 2})
+    assert status == 200
+    assert s["engine"] == "dry_run" and s["overrides"]["engine"] == "$PMUKIT_ENGINE"
+    assert s["stored"]["engine"] == "donau_alps"
+    on_disk = json.loads(c.site_json.read_text(encoding="utf-8"))
+    assert on_disk["engine"] == "donau_alps" and on_disk["cpus"] == 2
+
+
+def test_demo_settings_validate_but_save_nothing(demo):
+    status, s = demo.call("PUT", "/api/site", {"engine": "fake"})
+    assert status == 200 and s["demo"] is True and s["engine"] == "donau_alps"
+    status, payload = demo.call("PUT", "/api/site", {"engine": "slurm"})
+    assert status == 400
+    four_part(payload)
+
+
+def test_settings_echo_is_a_pmukit_site_command():
+    cmd = server.cli_echo("settings", {"engine": "fake", "cpus": 4, "account": ""}, "p")
+    assert cmd == "pmukit site --engine fake --cpus 4"
+    assert server.cli_echo("deliver", {"file": "report.md"}, "p") == "pmukit report p"

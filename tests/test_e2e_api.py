@@ -507,7 +507,7 @@ def test_23_every_screen_has_a_command_that_really_names_this_project(api):
     for screen in helptext.SCREENS:
         d = api.need("GET", f"/api/cli?screen={screen}&project={PROJECT}")
         assert d["cli"].startswith("pmukit ")
-        if screen not in ("home", "states"):
+        if screen not in ("home", "states", "settings"):       # settings are the machine's
             assert PROJECT in d["cli"], f"the {screen} echo does not name the project"
 
 

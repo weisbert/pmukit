@@ -562,6 +562,8 @@ def cli_echo(screen: str, st, project: str = "") -> str:
             bits.append(f"--block {st['block']}")
         return " ".join(bits)
     if scr == "deliver":
+        if st.get("file") == "report.md":
+            return f"pmukit report {p}"
         cmd = f"pmukit deliver {p}"
         if st.get("file"):
             cmd += f" && pmukit show {p} {st['file']}"
@@ -575,6 +577,13 @@ def cli_echo(screen: str, st, project: str = "") -> str:
         return " ".join(bits) + f" > digest_{p}.txt"
     if scr == "states":
         return "pmukit help states"
+    if scr == "settings":
+        bits = ["pmukit site"]
+        for key, flag in (("engine", "--engine"), ("simulator", "--simulator"),
+                          ("queue", "--queue"), ("cpus", "--cpus"), ("account", "--account")):
+            if st.get(key) not in (None, ""):
+                bits.append(f"{flag} {st[key]}")
+        return " ".join(bits)
     return f"pmukit help {scr or 'home'}"
 
 
@@ -1222,44 +1231,160 @@ def site_path(root=None):
     return (pathlib.Path(root) / "site.json") if root is not None else None
 
 
+def _site_cpus(val, where: str) -> int:
+    """cpus from a JSON body: an integer, or the text of one (a form field sends text)."""
+    if isinstance(val, str) and val.strip().isdigit():
+        val = int(val.strip())
+    if isinstance(val, bool) or not isinstance(val, int) or val < 1:
+        raise _err(f"site cpus is not a positive integer ({val!r}).",
+                   "cpus becomes the -mt / queue slot count on every submitted job.",
+                   ['Send {"cpus": 8} -- a whole number, 1 or more'], where)
+    return val
+
+
+def _site_names(val, where: str) -> list:
+    """One account name or a list of them."""
+    if val is None:
+        return []
+    items = val if isinstance(val, list) else [val]
+    if not all(isinstance(x, str) and x.strip() for x in items):
+        raise _err(f"remove_account is not an account name or a list of them ({val!r}).",
+                   "An account is named by its Donau -A name.",
+                   ['Send {"remove_account": "<name>"}'], where)
+    return [x.strip() for x in items]
+
+
+def _site_accounts(val, where: str) -> list:
+    """add_account as {"name", "note"}, as "name=note" (the CLI spelling), or a list of either."""
+    if val is None:
+        return []
+    out = []
+    for x in (val if isinstance(val, list) else [val]):
+        if isinstance(x, str):
+            name, _, note = x.partition("=")
+        elif isinstance(x, dict) and isinstance(x.get("note", ""), str):
+            name, note = x.get("name"), x.get("note", "")
+        else:
+            name, note = None, ""
+        if not isinstance(name, str) or not name.strip():
+            raise _err("an account to add has no name.",
+                       "The account list is what the Plan screen offers for dsub -A; an entry "
+                       "needs the Donau account name, the note is optional.",
+                       ['Send {"add_account": {"name": "<account>", "note": "sims up to 1TB"}}'],
+                       where)
+        if any(c.isspace() for c in name.strip()):
+            raise _err(f"account name {name.strip()!r} contains a space.",
+                       "It is passed to dsub -A as one word; a space would split it.",
+                       ["Type the Donau account name exactly as the site gave it",
+                        "Put any description in the note instead"], where)
+        out.append((name.strip(), note.strip()))
+    return out
+
+
 # ============================================================================== the handler
 class Api:
     """Route implementations. Kept out of the HTTP class so they are easy to call from tests."""
 
-    def __init__(self, *, demo: bool = False, root=None) -> None:
+    def __init__(self, *, demo: bool = False, root=None, project: str | None = None) -> None:
         self.demo = bool(demo)
         self.root = root
+        #: `pmukit open <project>`: the project the page opens on when its URL names none.
+        self.initial_project = project if project and PROJECT_RE.match(str(project)) else ""
 
     # ---------------------------------------------------------------- site (install-wide)
     def site_get(self) -> dict:
-        """What the Plan screen's account dropdown needs: the list, the pick, the engine."""
+        """What the Plan footer and the Settings screen show: the engine in effect, the account
+        list and the pick, what the environment overrides, and what the box's environment
+        provides (read-only -- `pmukit site` prints the same table)."""
         from . import sitenv
-        from .site import SiteConfig
+        from .site import ENGINE_NOTES, ENGINES, SIMULATORS, SiteConfig
+        engines = [{"name": e, "note": ENGINE_NOTES.get(e, "")} for e in ENGINES]
         if self.demo:
-            return {"engine": "donau_alps", "simulator": "alps", "queue": "short",
+            return {"engine": "donau_alps", "simulator": "alps", "simulator_source": "default",
+                    "queue": "short", "cpus": 8, "ssh_host": "ewave-vm",
                     "accounts": [{"name": "ug_demo.smallClass", "note": "sims up to 512GB"},
                                  {"name": "ug_demo.bigClass", "note": "sims up to 2TB"}],
                     "account": "ug_demo.smallClass", "account_source": "site config",
-                    "demo": True}
-        cfg = SiteConfig.load(site_path(self.root))
-        acc = sitenv.account(cfg)
-        return {"engine": cfg.engine, "simulator": sitenv.simulator(cfg).value,
-                "queue": cfg.queue, "accounts": list(cfg.accounts), "account": acc.value,
-                "account_source": acc.source}
-
-    def site_put(self, body: dict) -> dict:
-        """Pick the Donau account (remembered in site.json, so the dropdown opens on it)."""
-        from .site import SiteConfig
-        if self.demo:
-            return self.site_get()
-        acc = str((body or {}).get("account") or "").strip()
-        if not acc:
-            raise _err("no account was given.",
-                       "PUT /api/site selects the Donau account runs are charged to.",
-                       ['Send {"account": "<one of the listed accounts>"}'], "PUT /api/site")
+                    "stored": {"engine": "donau_alps", "simulator": "alps", "queue": "short",
+                               "cpus": 8, "project_account": "ug_demo.smallClass"},
+                    "overrides": {}, "engines": engines, "simulators": list(SIMULATORS),
+                    "environment": [], "path": "(demo, nothing is written)", "demo": True}
         path = site_path(self.root)
         cfg = SiteConfig.load(path)
-        cfg.select_account(acc)
+        stored = SiteConfig.load(path, env=False)
+        acc = sitenv.account(cfg)
+        sim = sitenv.simulator(cfg)
+        overrides = SiteConfig.env_overrides()
+        if sim.source.startswith("$"):
+            overrides["simulator"] = sim.source
+        if acc.source.startswith("$"):
+            overrides["account"] = acc.source
+        env = [{"name": f.name, "value": f.value, "source": f.source}
+               for f in sitenv.facts(cfg) if f.name not in ("simulator", "account")]
+        return {"engine": cfg.engine, "simulator": sim.value, "simulator_source": sim.source,
+                "queue": cfg.queue, "cpus": cfg.cpus, "ssh_host": cfg.ssh_host,
+                "accounts": list(cfg.accounts), "account": acc.value,
+                "account_source": acc.source,
+                "stored": {"engine": stored.engine, "simulator": stored.simulator,
+                           "queue": stored.queue, "cpus": stored.cpus,
+                           "project_account": stored.project_account},
+                "overrides": overrides, "engines": engines, "simulators": list(SIMULATORS),
+                "environment": env, "path": str(path or SiteConfig.default_path())}
+
+    #: What PUT /api/site accepts -- the `pmukit site` flags, spelled as JSON keys.
+    SITE_KEYS = ("engine", "simulator", "queue", "cpus", "ssh_host", "remote_workdir",
+                 "spectre_cmd", "add_account", "remove_account", "account")
+
+    def site_put(self, body: dict) -> dict:
+        """Change the site config the way `pmukit site` does, and save it to site.json.
+
+        {"engine", "simulator", "queue", "cpus", "ssh_host", ...} set a value;
+        {"add_account": {"name", "note"}} (or "name=note", or a list of either) adds or re-notes
+        a Donau account; {"remove_account": "name"} (or a list) drops one; {"account": "name"}
+        makes it the one runs are charged to (joining the list if new).  Applied in that order,
+        validated as a whole, and written only when every part is valid.  The change is made on
+        top of what is STORED, so an environment override is never written into the file.
+        """
+        from .site import SiteConfig
+        where = "PUT /api/site"
+        body = body if isinstance(body, dict) else {}
+        unknown = sorted(set(body) - set(self.SITE_KEYS))
+        if unknown:
+            raise _err(f"PUT /api/site does not take {unknown}.",
+                       "The site config is closed: an unknown key is a typo that would be "
+                       "silently ignored.",
+                       [f"Send only these keys: {', '.join(self.SITE_KEYS)}"], where)
+        if not any(k in body for k in self.SITE_KEYS):
+            raise _err("nothing to change was given.",
+                       "PUT /api/site changes the site config: the engine, the simulator, the "
+                       "queue, the CPU count or the Donau account list.",
+                       ['Send e.g. {"account": "<one of the listed accounts>"}',
+                        'Or {"engine": "donau_alps"}'], where)
+        if "account" in body and not str(body.get("account") or "").strip():
+            raise _err("no account was given.",
+                       "PUT /api/site selects the Donau account runs are charged to.",
+                       ['Send {"account": "<one of the listed accounts>"}'], where)
+        path = site_path(self.root)
+        cfg = SiteConfig() if self.demo else SiteConfig.load(path, env=False)
+        for name in ("engine", "simulator", "queue", "ssh_host", "remote_workdir", "spectre_cmd"):
+            if name in body:
+                val = body[name]
+                if not isinstance(val, str):
+                    raise _err(f"site {name} is not a string ({val!r}).",
+                               f"{name} is stored as text in site.json.",
+                               [f'Send {{"{name}": "<text>"}}'], where)
+                setattr(cfg, name, val.strip())
+        if "cpus" in body:
+            cfg.cpus = _site_cpus(body["cpus"], where)
+        for name, note in _site_accounts(body.get("add_account"), where):
+            cfg.add_account(name, note)
+        for name in _site_names(body.get("remove_account"), where):
+            cfg.remove_account(name)
+        if "account" in body:
+            cfg.select_account(str(body["account"]))
+        if self.demo:
+            cfg.validate(where)                      # the same refusals, nothing written
+            return self.site_get()
         cfg.save(path)
         return self.site_get()
 
@@ -1267,7 +1392,7 @@ class Api:
     def projects(self) -> dict:
         if self.demo:
             return {"projects": _demo_project_rows(), "data_root": "~/pmukit_data (demo)",
-                    "demo": True}
+                    "demo": True, "initial_project": self.initial_project}
         rows = []
         for entry in state_dir_projects(self.root):
             if not PROJECT_RE.match(entry["name"]):
@@ -1299,7 +1424,8 @@ class Api:
                                   ("config saved" if cfg is not None else
                                    "netlist loaded, plan not built" if st.netlist else
                                    "empty project"))})
-        return {"projects": rows, "data_root": str(paths.data_root()), "demo": False}
+        return {"projects": rows, "data_root": str(paths.data_root()), "demo": False,
+                "initial_project": self.initial_project}
 
     def new_project(self, body: dict) -> dict:
         if self.demo:
@@ -2258,24 +2384,23 @@ class Api:
 
         def work(job):
             emit = _lazy("pmukit.emit", "Writing the deliverable")
-            fn = getattr(emit, "emit_project", None) or getattr(emit, "build_deliverable", None)
-            if fn is None:
-                raise NotLanded("pmukit.emit.emit_project", "Writing the deliverable",
-                                "neither emit_project nor build_deliverable is defined")
+            fn = _attr(emit, "deliver", "Writing the deliverable")
             fit = pr.fit_result()
             if fit is None:
                 raise _err(f"{project} has no fitted model to deliver.",
                            "The deliverable is the emitted model: there is nothing to emit until "
                            "the fit has run.",
                            ["Run the fit from the Run screen"], str(pr.fit_path))
-            job.say("emitting one .va per corner", 0.3)
-            out = fn(pr.name, fit, pr.derived(), verify=pr.verify_result(),
-                     root=(pathlib.Path(self.root) if self.root is not None else None))
-            job.say("writing report.md and envelope.json", 0.8)
+            # The same call as `pmukit deliver`: the emitter fits the dataset itself and takes
+            # verify.json's grades, so the two deliverables cannot differ.
+            job.say("emitting one .va per corner, report.md and envelope.json", 0.3)
+            kw = _attr(emit, "verify_inputs", "Writing the deliverable")(pr.verify_result())
+            out = fn(pr.name, root=(pathlib.Path(self.root) if self.root is not None
+                                    else paths.data_root()), derived=pr.derived(), **kw)
             st = pr.state()
             st.go("deliver").note("deliverable written", "model")
             st.save()
-            return {"deliverable": _clean(out)}
+            return {"deliverable": {"path": str(out), "stamp": pathlib.Path(out).name}}
 
         return {"job": JOBS.submit("deliver", project, "write the deliverable", work).id}
 
@@ -3283,9 +3408,11 @@ class PmuServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, *, demo: bool = False,
-                root=None, verbose: bool = False, tries: int = PORT_TRIES) -> PmuServer:
-    """Bind, auto-incrementing the port while it is busy. Loopback unless `host` says otherwise."""
-    api = Api(demo=demo, root=root)
+                root=None, verbose: bool = False, tries: int = PORT_TRIES,
+                project: str | None = None) -> PmuServer:
+    """Bind, auto-incrementing the port while it is busy. Loopback unless `host` says otherwise.
+    `project` is the one the page opens on when its URL names none (`pmukit open`)."""
+    api = Api(demo=demo, root=root, project=project)
     last = None
     for i in range(max(1, tries)):
         try:
@@ -3302,7 +3429,7 @@ def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, *, demo: boo
 def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, *, demo: bool = False,
           open_browser: bool = False, root=None, verbose: bool = False,
           project: str | None = None) -> None:
-    srv = make_server(host, port, demo=demo, root=root, verbose=verbose)
+    srv = make_server(host, port, demo=demo, root=root, verbose=verbose, project=project)
     shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
     url = f"http://{shown}:{srv.server_address[1]}/"
     if project:

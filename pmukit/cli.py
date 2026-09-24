@@ -305,10 +305,8 @@ def cmd_site(a) -> int:
                  ["fact", "value", "from"]))
     print()
     print(f"  engines: {', '.join(smod.ENGINES)}")
-    print("    donau_alps   submit to the Donau queue; runs the site simulator (the box, default)")
-    print("    spectre_ssh  run Spectre over ssh on another machine (the desk)")
-    print("    fake         analytic stand-in, no simulator -- for smoke tests only")
-    print("    dry_run      write the decks and the recipes, run nothing")
+    for name in ("donau_alps", "spectre_ssh", "fake", "dry_run"):
+        print(f"    {name:<12} {smod.ENGINE_NOTES[name]}")
     print("  simulators: alps (default) | spectre   -- what a Donau job runs")
     print(f"\n  Change it:  {PROG} site --account <Donau account>   |   {PROG} site --simulator spectre")
     print(f"  Or per run: {PROG} run <project> --engine dry_run")
@@ -616,24 +614,12 @@ def cmd_report(a) -> int:
 def cmd_deliver(a) -> int:
     cfg, der, d = _load(a.project)
     emod = _need("emit", "deliver")
-    dmod = _need("deliverable", "deliver")
-    # Pick up whatever `pmukit verify` already decided. Without this the report says "nothing was
-    # graded" even when verify.json is sitting right next to it, and every large-signal term stays
-    # off because nothing told deliver() which ones cleared the HB check.
+    # Pick up whatever `pmukit verify` already decided (emit.verify_inputs says why it matters).
     kw: dict = {}
     vpath = d / "verify.json"
     if vpath.exists():
-        v = jsonio.read(vpath)
-        grades = [dmod.Grade(port=g["port"], corner=g["corner"], block=g["block"],
-                             grade=g["grade"], detail=g.get("detail", ""), score=g.get("score"))
-                  for g in (v.get("grades") or []) if g.get("port") and g.get("block")]
-        if grades:
-            kw["grades"] = grades
-        if v.get("ls_default_on"):
-            kw["ls_default_on"] = list(v["ls_default_on"])
-        if v.get("not_run"):
-            kw["not_run"] = [str(x) for x in v["not_run"]]
-        print(f"using the grades from {vpath} ({len(grades)} rows)")
+        kw = emod.verify_inputs(jsonio.read(vpath))
+        print(f"using the grades from {vpath} ({len(kw.get('grades', []))} rows)")
     else:
         print(f"no {vpath} yet -- the report will say nothing was graded.")
         print(f"  Run `{PROG} verify {a.project}` first to fill it in.")
@@ -728,6 +714,24 @@ def cmd_reproduce(a) -> int:
 
 
 def cmd_open(a) -> int:
+    """`pmukit ui` with the page opened on one project, at the screen it was left on.
+
+    Refused up front when there is no such folder: a page opened on a project that does not
+    exist would only show empty screens. A folder without config.json (created from Home, no
+    netlist yet) is still a project -- it opens on New.
+    """
+    d = paths.project_dir(a.project)
+    if not d.is_dir():
+        known = sorted(p.name for p in paths.data_root().iterdir()
+                       if p.is_dir()) if paths.data_root().exists() else []
+        raise PmuError(
+            what=f"no project named '{a.project}'.",
+            why=f"A project is a directory under {paths.data_root()}; there is none with that "
+                "name, so there is nothing to open.",
+            do=[f"Projects here: {', '.join(known) or '(none yet)'}.",
+                f"Start the page without one ({PROG} ui) and use + New project on Home",
+                f"Or create it: {PROG} new {a.project} --netlist <file> --pmu-inst <name>"],
+            where=str(d))
     a.demo = False
     a.open = True
     return cmd_ui(a)

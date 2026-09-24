@@ -10,7 +10,7 @@ question -- can I trust this model in my simulation?
 """
 from __future__ import annotations
 
-SCREENS = ("home", "new", "plan", "run", "model", "deliver", "digest", "states")
+SCREENS = ("home", "new", "plan", "run", "model", "deliver", "digest", "states", "settings")
 
 GLOBAL_KEYS = (
     ("?", "this help panel"),
@@ -130,6 +130,20 @@ HELP: dict[str, dict] = {
         ],
         "keys": (),
         "cli": "",
+    },
+    "settings": {
+        "title": "Settings -- how this machine runs simulations",
+        "lines": [
+            "The engine decides where Submit sends the runs: the Donau queue on the box, Spectre "
+            "over ssh at the desk, a dry run that only writes the netlists, or fake results for a "
+            "smoke test.",
+            "The Donau accounts are the list the Plan screen offers for dsub -A; the default is "
+            "the one runs are charged to until you pick another.",
+            "These are machine settings, not project ones: they live in site.json under "
+            "PMUKIT_DATA, and a PMUKIT_* variable in the environment wins over them.",
+        ],
+        "keys": (),
+        "cli": "pmukit site",
     },
 }
 
