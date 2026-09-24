@@ -239,6 +239,20 @@ def test_the_code_variable_is_whatever_the_designer_named_it():
     assert seen == {2, 5}
 
 
+def test_per_ldo_codes_tied_to_one_variable_all_follow_it():
+    """A real PMU has one code per LDO; the bench ties them to ONE variable and pmukit rewrites
+    only that one -- the per-LDO variables are expressions of it and must be left alone, also
+    when ADE continues the declaration over several lines."""
+    text = DEMO.replace("parameters VSET=3",
+                        "parameters vsel=3 ldo_a_sel=vsel \\\n    ldo_b_sel=vsel trim=0")
+    nl = Netlist(text, "tb/input.scs")
+    cfg = ProjectConfig.from_dict({**CFG, "vset_codes": [1, 3], "vset_param": "vsel"})
+    pins = nl.scan("PMU_TOP", ports=cfg.ports)
+    for r in compile_plan(cfg, derive(cfg, pins), nl, pins).runs(enabled_only=False):
+        assert (f"parameters vsel={r.run.vset} ldo_a_sel=vsel ldo_b_sel=vsel trim=0"
+                in " ".join(r.netlist_text.split()))
+
+
 def test_several_codes_on_an_undeclared_variable_are_refused():
     """Declaring it would run -- and every code would simulate the same circuit."""
     nl = Netlist(DEMO, "tb/input.scs")
