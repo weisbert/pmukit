@@ -12,12 +12,22 @@ Four rules shape it, and each one is a scar:
    and "nobody measured this" are different sentences to the user: one says fix the model, the
    other says run the sweep.
 
-2. **A block flagged by `identifiability` is capped at `yellow` however good its residual is.**
-   A tight fit to a parameter the data cannot determine is the classic false green: the curve
-   goes through the points and the number underneath it is arbitrary.  The cap has one
-   documented exception, `_inert()` below -- a parameter that is switched OFF carries no
-   transfer, so it cannot make anything falsely green, and flagging it would paint every block
-   yellow and teach the user to ignore the colour.
+2. **A block flagged by `identifiability` is capped at `yellow` however good its residual is --
+   when the flagged parameter can MOVE THE PREDICTION where the model is used.**  A tight fit
+   to a parameter the data cannot determine is the classic false green when that parameter
+   still steers the answer somewhere the data did not look: the curve goes through the points
+   and the number underneath it decides what the model says past them.  Two exceptions, both
+   parameters that cannot make anything falsely green:
+     * `_inert()` -- a parameter that is switched OFF carries no transfer at all;
+     * `_harmless()` -- the fitter measured the flagged parameter's INFLUENCE over the
+       envelope (`identifiability.influence_db`: the most any move the data cannot rule out
+       changes the prediction anywhere in the band the consumer uses) and it is inside this
+       metric's green limit.  A damping resistor above a resonant peak, a feedthrough 140 dB
+       down, a Lorentzian buried under the flicker term: free, and powerless.
+   Without either, the flag holds -- including every fit that carries no influence
+   measurement, so an older fit or a block that does not measure it keeps the strict rule.
+   Flagging the harmless kind painted every cell of the demo PMU yellow, which teaches the
+   user to ignore the colour.
 
 3. **A roll-up is `max()` over blocks, and over the cells inside a block.**  Which means
    ADDING COVERAGE CAN ONLY LOWER A ROLL-UP.  A grade that got worse after more corners, more
@@ -198,7 +208,10 @@ def explain_limits() -> str:
     out += ["Two rules sit on top of the table:",
             "  * a block whose measurement never ran is `not_run`, never `red`;",
             "  * a block the identifiability gate flags is capped at `yellow` however good its "
-            "residual is, because a tight fit to an undetermined parameter is a false green.",
+            "residual is, because a tight fit to an undetermined parameter is a false green --",
+            "    unless the parameter is switched off, or the fitter measured that no move the "
+            "data allows can shift the prediction past the green limit anywhere in the band "
+            "the model is used in.",
             "",
             "And one consequence, recorded so nobody reads it as a regression:",
             "  * a roll-up is max() over the blocks and cells it covers, so ADDING COVERAGE "
@@ -223,6 +236,8 @@ _OFF_HENRY = 1.0e-12
 #: A bank section this far below the loudest section of the same bank contributes under
 #: 0.01 dB to the total, so the data not seeing it is arithmetic, not ignorance.
 _QUIET_REL = 1.0e-3
+#: The bias compliance-knee shape parameters: they exist only when a knee was detected.
+_KNEE = ("vknee", "knee_p", "vhi")
 
 
 def _value(params: dict, name: str):
@@ -253,19 +268,23 @@ def _inert(name: str, params: dict) -> bool:
     at its infinity sentinel, a Lorentzian the bank did not need).  Counting those as evidence
     of a false green would paint every block yellow and teach the user to ignore the colour.
 
-    Four ways to be off, and nothing else counts:
+    Five ways to be off, and nothing else counts:
       1. the value is exactly zero;
       2. it is a series-branch resistance at or above the fitter's OFF sentinel, or the
          inductance that branch leaves behind;
       3. it is a bank section whose own gain is zero, or more than 60 dB below the loudest
          section of the same bank;
-      4. it is a companion (a pole frequency, a Q) of a gain that is itself off.
+      4. it is a companion (a pole frequency, a Q) of a gain that is itself off;
+      5. it shapes a bias compliance knee the fit did not detect (`knee_side == "none"`): the
+         gate is then identically 1 and the emitter does not even write these numbers.
     """
     base = name.partition("[")[0]
     val = _value(params, name)
     v = _num(val)
 
     if v == 0.0:
+        return True
+    if base in _KNEE and str(params.get("knee_side", "")) == "none":
         return True
     if base in ("Rb", "Rpl_b") and v >= _OFF_OHM:
         return True
@@ -289,16 +308,53 @@ def _inert(name: str, params: dict) -> bool:
     return False
 
 
+def _influence(name: str, bf):
+    """`(measured?, harmless?)` for one parameter, from `identifiability.influence_db`.
+
+    `influence_db[name]` is the largest change (dB, max over the envelope's points) of the
+    block's predicted magnitude among every move of that parameter the data cannot rule out
+    (see `pmukit.fit.identifiability`).  At or under this metric's green limit the freedom
+    cannot turn a green into a false one: wherever the consumer uses the model, the number
+    could sit anywhere the data allows and the grade would read the same.  Only a dB limit is
+    comparable with a dB influence, and a non-finite value is not a measurement of harmlessness.
+    """
+    infl = (dict(getattr(bf, "identifiability", None) or {}).get("influence_db") or {})
+    if name not in infl:
+        return False, False
+    x = _num(infl.get(name))
+    lim, _exact = limit_for(getattr(bf, "metric", ""))
+    if lim is None or lim.unit != "dB" or math.isnan(x):
+        return False, False
+    return True, bool(x <= lim.green)
+
+
 def flagged_parameters(bf) -> list[str]:
-    """The identifiability flags that actually matter for THIS block, inert ones removed."""
+    """The parameters that hold THIS block's green at yellow (rule 2 of the module docstring).
+
+    A parameter the gate flags counts unless it is inert or MEASURED harmless; a flag with no
+    measurement counts (the conservative reading).  And a parameter the gate did NOT flag
+    counts too when its measured influence is past the green limit: the fitter measures every
+    parameter when the envelope reaches past the data, and one that the band sees only faintly
+    but that decides the prediction outside it is exactly the unpinned-and-influential case.
+    """
     ident = dict(getattr(bf, "identifiability", None) or {})
     params = dict(getattr(bf, "params", None) or {})
     names: list[str] = []
     for key in ("unidentifiable", "poorly_determined"):
         for n in ident.get(key) or []:
             n = str(n)
-            if n not in names and not _inert(n, params):
+            if n in names or _inert(n, params):
+                continue
+            measured, harmless = _influence(n, bf)
+            if not (measured and harmless):
                 names.append(n)
+    for n in (ident.get("influence_db") or {}):
+        n = str(n)
+        if n in names or _inert(n, params):
+            continue
+        measured, harmless = _influence(n, bf)
+        if measured and not harmless:
+            names.append(n)
     return names
 
 

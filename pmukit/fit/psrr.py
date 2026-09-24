@@ -460,13 +460,15 @@ def fit(dataset, port: str, cell: dict, derived=None, *, zout_params=None) -> Bl
                  ["pc_gain", "pc_zero", "pc_w0", "pc_q"]
     flat_vals = [G[0]] + gains + poles_hz + [Q[0], Q[1], Q[2], Q[3]]
 
-    def g(p):
+    def g(p, f=f):
         Gv = [p[0]]
         for i in range(NPS):
             Gv += [p[1 + i], TWO_PI * p[1 + NPS + i]]
         Qv = (p[1 + 2 * NPS], p[2 + 2 * NPS], p[3 + 2 * NPS], p[4 + 2 * NPS])
         return psrr_model(f, zout_params, Gv, Qv, c_ft)
-    gate = ident.gate(g, flat_names, flat_vals)
+    fe = ident.envelope_grid(f, ident.envelope_band(derived, "freq"))
+    gate = ident.gate(g, flat_names, flat_vals, envelope=lambda p: g(p, fe),
+                      off=["G0", "pc_gain", "pc_zero"] + [f"G_i[{i}]" for i in range(NPS)])
     notes += ident.describe(gate)
     return BlockFit(port=port, block="psrr", cell=cell, params=params, score=float(score),
                     metric="PSRR dB RMS", n_points=int(f.size), identifiability=gate,

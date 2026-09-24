@@ -557,12 +557,16 @@ def fit_idc(dataset, port: str, cell: dict, derived=None) -> BlockFit:
     model = predict_iv(dict(params, idc=iv["idc"]), v, vc=vc, g0=g0)
     score = pct_rms(model, np.asarray(I, float), scale=iv["iplat"])
 
-    names = ["idc", "vknee", "knee_p", "vhi"]
+    # With no knee detected (`knee_side == "none"`) the gate is identically 1: vknee / knee_p /
+    # vhi are placeholders that neither `predict_iv` nor the emitter reads (va.py writes them
+    # only for a real knee).  Gating them flagged three numbers that are not in the model and
+    # held every knee-less reference at yellow; only a knee that exists is asked about.
+    names = ["idc"] + ([] if iv["knee_side"] == "none" else ["vknee", "knee_p", "vhi"])
 
     def g(p):
-        q = dict(params, idc=p[0], vknee=p[1], knee_p=p[2], vhi=p[3])
+        q = dict(params, idc=p[0], **dict(zip(names[1:], p[1:])))
         return predict_iv(q, v, vc=vc, g0=g0) + 0j
-    gate_res = ident.gate(g, names, [iv["idc"], iv["vknee"], iv["knee_p"], iv["vhi"]])
+    gate_res = ident.gate(g, names, [iv[n] for n in names])
     gate_res["sigma"]["ptat_slope"] = 0.0 if n_t > 1 else float("inf")
     if n_t <= 1:
         gate_res["unidentifiable"] = list(gate_res["unidentifiable"]) + ["ptat_slope"]
@@ -599,12 +603,13 @@ def fit_yout(dataset, port: str, cell: dict, derived=None) -> BlockFit:
     vals = [params["g0"], params["Cp"]] + ([] if af["wz"] is None
                                            else [params["wz"], params["wp"]])
 
-    def g(p):
+    def g(p, f=f):
         q = dict(params)
         for n, v in zip(names, p):
             q[n] = v
         return predict_y(q, f)
-    gate_res = ident.gate(g, names, vals)
+    fe = ident.envelope_grid(f, ident.envelope_band(derived, "freq"))
+    gate_res = ident.gate(g, names, vals, envelope=lambda p: g(p, fe))
     notes += ident.describe(gate_res)
     return BlockFit(port=port, block="yout", cell=bcell, params=params, score=float(score),
                     metric="|Y| dB RMS", n_points=int(f.size), identifiability=gate_res,
@@ -628,9 +633,11 @@ def fit_noise(dataset, port: str, cell: dict, derived=None) -> BlockFit:
              "them as independent sources -- a known ~3 dB error on phase noise, not an "
              "oversight"]
 
-    def g(p):
+    def g(p, f=f):
         return predict_noise({"white": p[0], "flicker": p[1]}, f) + 0j
-    gate_res = ident.gate(g, ["white", "flicker"], [params["white"], params["flicker"]])
+    fe = ident.envelope_grid(f, ident.envelope_band(derived, "noise"))
+    gate_res = ident.gate(g, ["white", "flicker"], [params["white"], params["flicker"]],
+                          envelope=lambda p: g(p, fe), off=["white", "flicker"])
     notes += ident.describe(gate_res)
     return BlockFit(port=port, block="noise", cell=bcell, params=params, score=float(score),
                     metric="In dB RMS", n_points=int(f.size), identifiability=gate_res,
@@ -663,12 +670,13 @@ def fit_psrr(dataset, port: str, cell: dict, derived=None) -> BlockFit:
     names = ["gdd"] + ([] if params["psrr_pole_hz"] is None else ["psrr_pole_hz"])         + ([] if not params["c_ft"] else ["c_ft"])
     vals = [params[n] for n in names]
 
-    def gfun(p):
+    def gfun(p, f=f):
         q = dict(params)
         for n, v in zip(names, p):
             q[n] = v
         return predict_psrr(q, f)
-    gate_res = ident.gate(gfun, names, vals)
+    fe = ident.envelope_grid(f, ident.envelope_band(derived, "freq"))
+    gate_res = ident.gate(gfun, names, vals, envelope=lambda p: gfun(p, fe))
     notes += ident.describe(gate_res)
     return BlockFit(port=port, block="psrr", cell=bcell, params=params, score=float(score),
                     metric="|gdd| dB RMS", n_points=int(f.size), identifiability=gate_res,
