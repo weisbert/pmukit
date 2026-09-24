@@ -34,8 +34,8 @@ from ..errors import PmuError
 from . import bias, dc, en, identifiability, load_en, noise, psrr, zout
 from ._base import BlockFit, T_REF_C, block_cell, missing_fit, var_layout
 
-__all__ = ["BlockFit", "FitResult", "fit_port", "fit_project", "MODULES", "T_REF_C",
-           "zout", "psrr", "noise", "dc", "bias", "load_en", "en", "identifiability"]
+__all__ = ["BlockFit", "FitResult", "fit_port", "fit_project", "MODULES", "LONG_BLOCKS",
+           "T_REF_C", "zout", "psrr", "noise", "dc", "bias", "load_en", "en", "identifiability"]
 
 #: which module fits which (port_type, block).  Public so the web shell and the emitter can
 #: read it instead of mirroring the table and drifting away from it.
@@ -173,8 +173,14 @@ def _zout_at(dataset, port, cell, derived, cache):
     return bf
 
 
+#: the blocks whose fit is a joint solve or an ODE replay rather than one small least-squares --
+#: the ones a (port, cell) step can spend seconds in -- with what a UI says while they run
+LONG_BLOCKS = {"noise": "the noise bank, jointly across every load",
+               "load_en": "the load-step replay (one ODE solve per candidate)"}
+
+
 def fit_port(dataset, port: str, port_type: str, cell: dict, derived=None,
-             tiers=("hb", "ls", "en"), cache=None) -> dict:
+             tiers=("hb", "ls", "en"), cache=None, on_block=None) -> dict:
     """Fit every block of one port at one cell -> `{block name: BlockFit}`.
 
     ORDER IS PHYSICS, not convenience: Zout is fitted first and handed to the PSRR, noise and
@@ -186,6 +192,9 @@ def fit_port(dataset, port: str, port_type: str, cell: dict, derived=None,
     cell REPEATS -- one with no load axis, seen once per load -- is fitted once.  The noise bank
     fills it for every load at once, because its corner frequencies are shared across the loads
     and the fit is therefore necessarily joint.
+
+    `on_block(port, block, cell)` is called right before a block is actually FITTED (never for
+    a cache hit), so a caller can say what a long step is busy with.
     """
     blocks = [b for b in spec.blocks_for(port_type) if b.tier in tiers]
     # The EN ramp is measured PER RAIL AND PER BIAS -- `tran_en.<rail>` is a curve of that RAIL
@@ -221,6 +230,8 @@ def fit_port(dataset, port: str, port_type: str, cell: dict, derived=None,
             out[blk.name] = bf
             continue
 
+        if on_block is not None:
+            on_block(port, blk.name, dict(bcell))
         if port_type == "rail" and blk.name == "zout":
             bf = _zout_at(dataset, port, cell, derived, cache)
             zparams = None if bf.missing else bf.params
@@ -295,7 +306,7 @@ def _axis(dataset, name, port=None, default=(None,)):
 
 
 def fit_project(dataset, derived=None, *, tiers=("hb", "ls", "en"), on_event=None,
-                ports=None, on_progress=None) -> FitResult:
+                ports=None, on_progress=None, on_block=None) -> FitResult:
     """Fit every block of every modeled port over every cell of the dataset.
 
     Each block is fitted ONCE per distinct cell OF ITS OWN granularity (`_base.block_cell`), so
@@ -306,6 +317,8 @@ def fit_project(dataset, derived=None, *, tiers=("hb", "ls", "en"), on_event=Non
     "metric", "missing"}`, so a UI can show progress without this module knowing about a UI.
     `on_progress(done, total, port, cell)` is called before every (port, cell) step, `total`
     being the number of steps the whole fit takes -- the fraction a progress bar needs.
+    `on_block(port, block, cell)` is called before every block that is actually fitted (see
+    `fit_port`) -- the sub-step a UI shows while one step is busy in a `LONG_BLOCKS` fit.
     """
     if not (hasattr(dataset, "variables") and hasattr(dataset, "axis")):
         raise PmuError(
@@ -357,7 +370,7 @@ def fit_project(dataset, derived=None, *, tiers=("hb", "ls", "en"), on_event=Non
                             cell["load_a"] = load
                         seen = set(res.fits)
                         fits = fit_port(dataset, port, ptype, cell, derived, tiers,
-                                        cache=res.fits)
+                                        cache=res.fits, on_block=on_block)
                         for bf in fits.values():
                             res.add(bf)
                         for key in [k for k in res.fits if k not in seen]:

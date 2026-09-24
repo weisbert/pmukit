@@ -2394,15 +2394,27 @@ class Api:
             def on_event(ev):
                 fitted["n"] += 1
 
+            step = {"n": 0, "total": 0}
+            long_blocks = getattr(fit_mod, "LONG_BLOCKS", {}) or {}
+
             def on_progress(done, total, port, cell):
                 # one line per (port, cell) step: the bar moves with the real work instead of
                 # sitting at one number for the minutes a full fit takes
+                step.update(n=done + 1, total=total)
                 job.say(f"fitting {port} at {_cell_label(cell)} -- step {done + 1} of {total}, "
                         f"{fitted['n']} blocks so far",
                         0.08 + 0.87 * (done / max(1, total)))
 
+            def on_block(port, block, cell):
+                # the sub-step of a step that can take seconds: say WHAT it is busy with, so a
+                # bar that sits still is visibly working rather than stuck
+                if block in long_blocks:
+                    job.say(f"fitting {port} at {_cell_label(cell)} -- step {step['n']} of "
+                            f"{step['total']}: {long_blocks[block]}")
+
             job.say("fitting every block, corner by corner", 0.08)
-            result = fn(ds, der, tiers=tiers, on_event=on_event, on_progress=on_progress)
+            result = fn(ds, der, tiers=tiers, on_event=on_event, on_progress=on_progress,
+                        on_block=on_block)
             job.say(f"fitted {fitted['n']} blocks; writing fit.json", 0.97)
             payload = _clean(result.to_dict() if hasattr(result, "to_dict") else result)
             jsonio.write(pr.fit_path, payload)

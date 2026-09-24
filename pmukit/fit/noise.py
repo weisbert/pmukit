@@ -113,6 +113,113 @@ def _equalize(f, y):
     return f, y, False
 
 
+#: the separation penalty's weight (a residual of 30 per unit of log-gap shortfall)
+SEP_WEIGHT = 30.0
+#: STALL GUARD: end a joint solve whose cost has improved by less than STALL_RTOL (relative)
+#: over the last STALL_WINDOW iterations.  The optimum of this problem often sits exactly ON the
+#: separation hinge (two corners one octave apart), where the Gauss-Newton model flips between
+#: "penalty on" and "penalty off" from step to step; trf then crawls along the kink for
+#: thousands of iterations, each improving the cost by ~1e-7 relative.  On the fake PMU at
+#: 125 C that was 8400 iterations and 60 s for a bank indistinguishable -- to 1e-3 dB in Sv --
+#: from the one it had after the first hundred; a normal solve converges in < 100 iterations
+#: and never reaches the guard.  1e-4 of the cost is 5e-5 of the RMS dB score.
+STALL_WINDOW = 50
+STALL_RTOL = 1e-4
+
+
+class _Stalled(Exception):
+    """Raised from inside the residual to end a solve that has stopped making progress."""
+
+
+class _Bank:
+    """The joint noise-bank problem, vectorized over every (load, frequency) sample at once.
+
+    The unknowns are the M SHARED log corner frequencies followed by, per load,
+    `[log white^2, log flicker^2, log amp_1^2 .. log amp_M^2]`.  One residual evaluation is a
+    handful of array operations instead of a Python loop over loads and sections -- it runs
+    `1 + n_params` times per iteration under the finite-difference Jacobian.
+
+    `resid` also carries the STALL GUARD: it keeps the best point seen and raises `_Stalled`
+    when the solve stops making progress (see STALL_WINDOW).  Only ITERATIONS count toward the
+    window, not the Jacobian's probe points: a probe differs from the last iterate in exactly
+    one coordinate, by a relative step of ~1.5e-8.
+    """
+
+    def __init__(self, targets, keys, M, mode):
+        self.M, self.mode, self.nL = M, mode, len(keys)
+        fs, goals, t2s, z2s, idx = [], [], [], [], []
+        self.slices = []
+        n = 0
+        for j, key in enumerate(keys):
+            f, goal, T2, Z2 = targets[key]
+            f = np.asarray(f, float)
+            fs.append(f)
+            goals.append(np.asarray(goal, float))
+            t2s.append(np.broadcast_to(np.asarray(T2, float), f.shape))
+            z2s.append(np.broadcast_to(np.asarray(Z2, float), f.shape))
+            idx.append(np.full(f.size, j))
+            self.slices.append(slice(n, n + f.size))
+            n += f.size
+        self.f = np.concatenate(fs)
+        self.inv_f = 1.0 / np.maximum(self.f, 1e-300)
+        self.T2 = np.concatenate(t2s)
+        self.Z2 = np.concatenate(z2s)
+        self.j = np.concatenate(idx)
+        self.log_goal = np.log(np.concatenate(goals) + 1e-80)
+        self.N = n
+        self.best = (np.inf, None)         # (cost, point) -- the lowest cost evaluated
+        self.iterations = 0                # evaluations that were not a Jacobian probe
+        self._ref = np.inf                 # the cost the stall window measures progress from
+        self._since = 0                    # iterations since the cost last beat _ref
+        self._base = None                  # the last iterate (a probe perturbs this one)
+
+    def model(self, p) -> np.ndarray:
+        """The modeled goal (In^2 or Sv^2) at every sample, loads concatenated."""
+        M = self.M
+        p = np.asarray(p, float)
+        fks = np.exp(p[:M])
+        rest = np.exp(p[M:].reshape(self.nL, M + 2))[self.j]      # (N, M+2)
+        lor = 1.0 / (1.0 + (self.f[:, None] / fks[None, :]) ** 2)  # (N, M)
+        bank = rest[:, 1] * self.inv_f + np.sum(rest[:, 2:] * lor, axis=1)
+        if self.mode == "hybrid":
+            return bank * self.T2 + rest[:, 0] * self.Z2
+        return rest[:, 0] + bank
+
+    def per_load(self, p) -> list:
+        m = self.model(p)
+        return [m[s] for s in self.slices]
+
+    def _is_probe(self, p) -> bool:
+        if self._base is None:
+            return False
+        d = np.nonzero(p != self._base)[0]
+        if d.size == 0:
+            return True
+        return d.size == 1 and abs(p[d[0]] - self._base[d[0]]) <= 1e-6 * max(
+            1.0, abs(self._base[d[0]]))
+
+    def resid(self, p):
+        p = np.array(p, float)
+        # SEPARATION penalty: two sections must not collapse onto one pole (which makes
+        # anti-correlated giant amplitudes and a huge inter-corner interpolation overshoot).
+        gaps = np.diff(np.sort(p[:self.M]))
+        r = np.concatenate((np.log(self.model(p) + 1e-80) - self.log_goal,
+                            SEP_WEIGHT * np.maximum(0.0, MIN_LOG_GAP - gaps)))
+        cost = 0.5 * float(r @ r)
+        if cost < self.best[0]:
+            self.best = (cost, p)
+        if not self._is_probe(p):
+            self._base = p
+            self.iterations += 1
+            if cost < self._ref * (1.0 - STALL_RTOL):
+                self._ref, self._since = cost, 0
+            else:
+                self._since += 1
+                if self._since >= STALL_WINDOW:
+                    raise _Stalled()
+        return r
+
+
 def _joint_fit(targets, keys, M, mode, fks_init=None):
     """One joint least_squares over the load points.
 
@@ -123,28 +230,7 @@ def _joint_fit(targets, keys, M, mode, fks_init=None):
     nL = len(keys)
     f0 = targets[keys[0]][0][0]
     f1 = targets[keys[0]][0][-1]
-
-    def model_row(fks, row, f, T2, Z2):
-        bank = np.exp(row[1]) / np.maximum(f, 1e-300)
-        for k in range(M):
-            bank = bank + np.exp(row[2 + k]) / (1.0 + (f / fks[k]) ** 2)
-        if mode == "hybrid":
-            return bank * T2 + np.exp(row[0]) * Z2
-        return np.exp(row[0]) + bank
-
-    def resid(p):
-        fks = np.exp(p[:M])
-        rest = p[M:].reshape(nL, M + 2)
-        r = []
-        for j, key in enumerate(keys):
-            f, goal, T2, Z2 = targets[key]
-            r.append(np.log(model_row(fks, rest[j], f, T2, Z2) + 1e-80)
-                     - np.log(goal + 1e-80))
-        # SEPARATION penalty: two sections must not collapse onto one pole (which makes
-        # anti-correlated giant amplitudes and a huge inter-corner interpolation overshoot).
-        gaps = np.diff(np.sort(p[:M]))
-        r.append(30.0 * np.maximum(0.0, MIN_LOG_GAP - gaps))
-        return np.concatenate(r)
+    prob = _Bank(targets, keys, M, mode)
 
     if fks_init is not None:
         fks0 = np.log(np.sort(np.asarray(fks_init, float)))
@@ -168,13 +254,16 @@ def _joint_fit(targets, keys, M, mode, fks_init=None):
             init += list(np.log(np.interp(np.exp(fks0), f, goal) + 1e-80))
         lob += [-200.0] * (M + 2)
         hib += [60.0] * (M + 2)
-    s = least_squares(resid, init, bounds=(lob, hib), method="trf", max_nfev=30000)
-    fks = np.exp(s.x[:M])
-    rest = s.x[M:].reshape(nL, M + 2)
+    try:
+        x = least_squares(prob.resid, init, bounds=(lob, hib), method="trf",
+                          max_nfev=30000).x
+    except _Stalled:
+        x = prob.best[1]              # the lowest cost evaluated: an iterate or one probe off
+    fks = np.exp(x[:M])
+    rest = x[M:].reshape(nL, M + 2)
     worst = 0.0
-    for j, key in enumerate(keys):
-        f, goal, T2, Z2 = targets[key]
-        m = model_row(fks, rest[j], f, T2, Z2)
+    for key, m in zip(keys, prob.per_load(x)):
+        goal = targets[key][1]
         # the goal is a SQUARED quantity, so its log ratio in 10*log10 IS the Sv dB error
         worst = max(worst, float(np.sqrt(np.mean(
             (10.0 * np.log10((m + 1e-80) / (goal + 1e-80))) ** 2))))

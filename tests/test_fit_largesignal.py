@@ -235,3 +235,29 @@ def test_en_cell_is_per_corner_and_temperature(tmp_path):
                           t=grid, final=VREG, start=0.0))
     bf = en.fit(ds, RAIL, dict(CELL_NOLOAD, temp_c=125.0), DERIVED)
     assert bf.cell == {"process": "tt", "temp_c": 125.0}
+
+
+# --------------------------------------------------------------------------- the replay's KCL
+
+
+@pytest.mark.parametrize("n_sections", [1, 3])
+def test_the_prefactored_ladder_holds_the_operating_point(n_sections):
+    """The internal-node KCL is factored once per replay instead of solved at every ODE step.
+    With no load step the network must sit exactly at its DC point -- every inductor carrying
+    the load, Vout = vreg - I*Ra -- which a wrong factorisation (a sign, a missing Ra, a
+    mis-indexed ladder coupling) would visibly drift away from."""
+    zp = zparams(Ra=0.3, La=2e-6, Rpl=40.0, Cout=1e-10, esr=0.2,
+                 La_i=[5e-7, 1e-7][:n_sections - 1], Rpl_i=[200.0, 900.0][:n_sections - 1])
+    secs = zout.sections_of(zp)
+    assert len(secs) == n_sections
+    i_dc = 2e-3
+    for disc in (None, {"ovVdz": 5e-3}):
+        sol = load_en.rail_trace(zp["Ra"], secs, zp["Cout"], i_dc, i_dc, 0.0, IAV, VREG,
+                                 T0, EDGE, 1e-6, discharge=disc)
+        assert sol.success
+        assert np.allclose(sol.y[len(secs)], VREG - i_dc * zp["Ra"], rtol=0.0, atol=1e-9)
+        assert np.allclose(sol.y[:len(secs)], -i_dc, rtol=1e-6, atol=0.0)
+    # and a real step still droops, by about I*|Z| on the way down
+    dip = load_en.predict_dip(zp["Ra"], secs, zp["Cout"], I_OFF, I_ON, t0=T0, edge=EDGE,
+                              tstop=1e-6)
+    assert dip > I_ON * zp["Ra"] * 1e3 * 0.5

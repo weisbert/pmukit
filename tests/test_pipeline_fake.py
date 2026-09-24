@@ -28,6 +28,9 @@ FIXTURE = pathlib.Path(__file__).resolve().parent / "fixtures" / "pmu_demo" / "i
 # gate fires on a regression rather than on ordinary numerical drift.
 LIMITS = {"zout": 0.5, "psrr": 0.5, "noise": 0.2, "dc": 1e-6}
 
+#: every importer note of the fixture's runs, filled by the `fitted` fixture
+IMPORT_NOTES: list = []
+
 
 def test_the_fake_dut_is_physically_self_consistent():
     """Zout(DC) finite, peaked, ESR floor above -- checked by the backend's own selftest."""
@@ -60,8 +63,10 @@ def fitted(tmp_path_factory):
             "vset": der.vset["codes"],
             "load_a": {r: der.loads[r]["points_a"] for r in der.rails}}
     ds = Dataset.create(root / "dataset", project=cfg.project, config_sha=cfg.sha(), dims=dims)
-    Runner(cfg.project, plan, led, SiteConfig(engine="fake"), dataset=ds, root=root,
-           backend=FakeBackend(SiteConfig(engine="fake"))).run_all()
+    runner = Runner(cfg.project, plan, led, SiteConfig(engine="fake"), dataset=ds, root=root,
+                    backend=FakeBackend(SiteConfig(engine="fake")))
+    runner.run_all()
+    IMPORT_NOTES[:] = [n for rep in runner.reports.values() for n in rep["notes"]]
     result = fitmod.fit_project(ds, der)
     ds.close()
     led.close()
@@ -102,3 +107,13 @@ def test_nothing_silently_went_missing(fitted):
     for bf in fitted:
         if bf.missing:
             assert bf.notes, f"{bf.port}.{bf.block} is missing with no reason given"
+
+
+def test_no_cell_is_written_twice_by_a_plain_fake_run(fitted):
+    """The supply injection walks every load state for the rails' PSRR; the bias PSRR has no
+    load axis, so only the nominal-state run may write it. Before the plan designated one writer
+    per cell, every load state overwrote the bias cell and the Run screen said the values
+    DIFFER -- on a plain run with nothing wrong in it."""
+    assert fitted is not None
+    twice = [n for n in IMPORT_NOTES if "already filled" in n]
+    assert not twice, twice

@@ -575,28 +575,53 @@ def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
         f = families.get(key)
         if f is None:
             f = families[key] = {"analysis": analysis, "stimulus": stim, "axes": set(),
-                                 "reads": [], "feeds": [], "observables": []}
+                                 "reads": [], "feeds": [], "observables": [],
+                                 "var_axes": {}, "var_feeds": {}}
             family_order.append(key)
         f["axes"].update(req.axes)
         var = spec.variable_name(obs, port)
         if var not in f["reads"]:
             f["reads"].append(var)
+        f["var_axes"].setdefault(var, set()).update(req.axes)
         if obs not in f["observables"]:
             f["observables"].append(obs)
         for block, param in req.consumers:
             f["feeds"].append((port, block, param))
+            f["var_feeds"].setdefault(var, []).append((port, block, param))
 
-    # 3) enumerate each family's cells and build one run per cell
+    # 3) enumerate each family's cells and build one run per cell.
+    #
+    #    Every run SAVES what the whole family reads -- the netlist, and so the run_id, is the
+    #    same whichever members a cell is for -- but it READS (writes into the dataset, and
+    #    claims to feed) only the members this cell is DESIGNATED for. A member stored without
+    #    an axis the family sweeps has ONE cell where the family has many: the bias PSRR rides
+    #    the supply injection, which walks every load state for the rails, but it has no load
+    #    axis. Read from every state, each run would overwrite the same bias cell and the last
+    #    writer would win; so it is read from the nominal load state (and the first VSET code,
+    #    the first temperature) only -- the point a family of that member alone would run at.
+    #    The same holds for a rail with a SHORTER load grid than another: the states that hold
+    #    its last point all land in one of its cells, and only the one nearest nominal writes.
+    #    A cell no member is designated for is not run at all -- it would measure nothing the
+    #    dataset can hold.
     groups: dict[str, Group] = {}
+    code0 = (list((derived.vset or {}).get("codes", [])) or [0])[0]
+    temp0 = (list((derived.temps_c or {}).get("points", [])) or [25.0])[0]
     for key in family_order:
         f = families[key]
-        feeds = tuple(dict.fromkeys(f["feeds"]))
+        writers = {v: _load_writers(v, f["var_axes"][v], f["axes"], states, nominal, derived)
+                   for v in f["reads"]}
         for corner, temp, code, state in _iterate_axes(f["axes"], f["analysis"], derived,
                                                        states, nominal):
+            own = [v for v in f["reads"]
+                   if state.key in writers[v]
+                   and _designated(f["var_axes"][v], f["axes"], temp, code, temp0, code0)]
+            if not own:                              # no member is measured at this cell
+                continue
             b = dict(f, corner=corner, temp=temp, code=code, state=state,
-                     load_axis=("load_a" in f["axes"]))
+                     load_axis=("load_a" in f["axes"]), own_reads=own)
             pr = _build_run(cfg, derived, netlist, b, site=site, pins=pins)
             pr.cost_s = cost(pr.run, derived)
+            feeds = tuple(dict.fromkeys(fd for v in own for fd in f["var_feeds"].get(v, [])))
             object.__setattr__(pr, "feeds", feeds)
             gid = _group_id(b)
             g = groups.get(gid)
@@ -610,6 +635,43 @@ def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
                 plan.groups.append(g)
             g.runs.append(pr)
     return plan
+
+
+def _load_writers(var: str, var_axes, family_axes, states: Sequence[LoadState],
+                  nominal: LoadState, derived: DerivedConfig) -> set:
+    """The load states whose run WRITES `var` -- one per dataset cell of it.
+
+    Without a load axis the variable has one cell and the nominal state writes it. With one,
+    its cell is the load on its OWN rail, and every state putting that rail on the same point
+    lands in the same cell (a rail with a shorter grid holds its last point); of those, the
+    state nearest the testbench's typical load is the writer.
+    """
+    if "load_a" not in set(family_axes) or "load_a" not in set(var_axes):
+        return {nominal.key}             # a family without the load axis runs nominal only
+    port = var.split(".", 1)[1] if "." in var else var
+    by_point: dict = {}
+    for s in states:
+        by_point.setdefault(s.of(port), []).append(s)
+    out = set()
+    for same in by_point.values():
+        out.add(nominal.key if nominal in same else nominal_state(same, derived).key)
+    return out
+
+
+def _designated(var_axes, family_axes, temp, code, temp0, code0) -> bool:
+    """Is this family cell's (temperature, VSET) the one that WRITES a member over `var_axes`?
+
+    A member without an axis the family sweeps has one dataset cell where the family has many
+    runs; exactly one of them writes it -- the first VSET code, the first temperature, i.e. the
+    cell `_iterate_axes` would pick for that member alone. (The load axis is `_load_writers`.)
+    """
+    var_axes, family_axes = set(var_axes), set(family_axes)
+    if "vset" in family_axes and "vset" not in var_axes and code != code0:
+        return False
+    if (family_axes & {"temp_c", "temp_cont"} and not var_axes & {"temp_c", "temp_cont"}
+            and temp is not None and temp != temp0):
+        return False
+    return True
 
 
 def _include_notes(netlist: Netlist, site) -> list[str]:
@@ -809,7 +871,8 @@ def _build_run(cfg: ProjectConfig, derived: DerivedConfig, base: Netlist, b: dic
     run = Run(run_id=run_id, process=b["corner"],
               temp_c=(float(b["temp"]) if b["temp"] is not None else float("nan")),
               vset=int(b["code"]), load_key=load_key, analysis=analysis, stimulus=stim,
-              reads=list(b["reads"]), netlist_sha=nl.sha(), recipe=recipe.text(),
+              reads=list(b.get("own_reads") or b["reads"]), netlist_sha=nl.sha(),
+              recipe=recipe.text(),
               engine=getattr(site, "engine", "") if site is not None else "")
     feeds = tuple(dict.fromkeys(b["feeds"]))
     return PlannedRun(run=run, netlist_text=netlist_text, feeds=feeds, group_id=_group_id(b))
