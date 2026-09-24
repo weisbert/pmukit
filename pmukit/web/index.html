@@ -618,11 +618,13 @@ var VERBS = {
   file: [
     { id:"preview", label:"Preview", common:true,
       run:function(c){ S.sel.file = c.row.name; forget("dfile:"); render(); } },
-    { id:"path", label:"Copy the path", run:function(c){ copy((c.stampPath || "") + "/" + c.row.name); } },
+    { id:"path", label:"Copy the path", run:function(c){ copy(joinPath(c.stampPath, c.row.name, c.sep)); } },
     { id:"inc", label:"Copy the include line", when:function(c){ return /\.scs$/.test(c.row.name); },
-      run:function(c){ copy('include "' + (c.stampPath || "") + "/" + c.row.name + '" section=tt'); } },
+      run:function(c){ copy(c.dv ? includeLine(c.dv, c.row.name)
+                                 : 'include "' + joinPath(c.stampPath, c.row.name, c.sep) + '" section=tt'); } },
     { sep:true },
-    { id:"diff", label:"Diff against the previous deliverable", run:function(){ go("home"); } }
+    { id:"diff", label:"Diff against the previous deliverable", when:function(c){ return !!c.hasPrev; },
+      run:function(){ S.sel.ddiff = true; render(); } }
   ],
   digest: [
     { id:"only", label:"Only this block (plus the fixed ones)", common:true,
@@ -2234,8 +2236,8 @@ SCREENS.model = {
          + '<button class="btn" data-act="' + regAction(function(){ doVerify(); }) + '">Verify (HB health)</button>'
          + '<button class="btn" data-act="' + regAction(function(){ openReport(); })
          + '" title="report.md of the latest deliverable">' + ICON.file + " Open report</button>"
-         + '<button class="btn pri" data-act="' + regAction(function(){ doDeliver(); }) + '">Deliver '
-         + ICON.arrow + "</button></div>";
+         + '<button class="btn pri" data-act="' + regAction(function(){ doDeliver(); }) + '"' + busyAttr()
+         + ">Deliver " + ICON.arrow + "</button></div>";
   }
 };
 function gradesGrid(gr){
@@ -2549,9 +2551,36 @@ function doVerify(){
   startJob(api("/api/p/" + P() + "/verify", { method:"POST", body:{} }), "HB health check",
     function(){ forget("model"); forget("cell:"); forget("curve:"); render(); });
 }
+/* Deliver: one at a time, never while a fit is running (the server refuses too). The page moves
+   to Deliver as soon as the job starts, so its progress -- per corner -- is shown where the
+   result will land; when it is done the new stamp is opened on its report. */
 function doDeliver(){
+  if (jobBusy()) return;
   startJob(api("/api/p/" + P() + "/deliver", { method:"POST", body:{} }), "writing the deliverable",
-    function(j){ forget("deliverables"); if (j.status !== "failed") go("deliver"); });
+    function(j){
+      forget("deliverables"); forget("dfile:"); forget("ddiff:");
+      if (j.status !== "failed"){
+        S.sel.deliv = 0; S.sel.file = "report.md"; S.sel.ddiff = false;
+        go("deliver");
+      } else render();
+    },
+    function(){ if (S.screen !== "deliver") go("deliver"); });
+}
+/* A busy button says why it is busy instead of doing nothing. */
+function busyAttr(){
+  return jobBusy() ? ' disabled title="' + esc("wait: " + (S.job.title || "a job") + " is still working") + '"' : "";
+}
+/* Join a deliverable's directory and a file name the way the OS that wrote it does: ONE
+   separator throughout (the server says which; a Windows path never gets a '/' glued on). */
+function joinPath(dir, name, sep){
+  dir = String(dir || "");
+  sep = sep || (dir.indexOf("\\") >= 0 ? "\\" : "/");
+  while (dir.length > 1 && (dir.charAt(dir.length - 1) === "/" || dir.charAt(dir.length - 1) === "\\")) dir = dir.slice(0, -1);
+  return dir ? dir + sep + name : name;
+}
+function includeLine(dv, scsName, corner){
+  if (dv.include && (!corner || corner === (dv.envelope.corners || [])[0])) return dv.include;
+  return 'include "' + joinPath(dv.path, scsName || dv.scs || "", dv.sep) + '" section=' + (corner || "tt");
 }
 
 /* A nested object as key/value rows: `extra: {user: x}` becomes the row "extra.user  x", never
@@ -2656,15 +2685,18 @@ SCREENS.deliver = {
             + "per corner, the validity envelope, the report and the provenance. ")
         + "It needs a fitted model.</div>"
         + '<div class="rowflex" style="margin-top:6px"><button class="btn pri" data-act="'
-        + regAction(function(){ doDeliver(); }) + '">Deliver</button>'
-        + '<button class="btn" data-go="model">Go to Model</button></div></div>') + "</div>";
+        + regAction(function(){ doDeliver(); }) + '"' + busyAttr() + ">Deliver</button>"
+        + '<button class="btn" data-go="model">Go to Model</button></div></div>')
+        + verifyWarn(d, null) + "</div>";
     }
-    var dv = d.deliverables[S.sel.deliv || 0] || d.deliverables[0];
+    var di = Math.min(S.sel.deliv || 0, d.deliverables.length - 1);
+    var dv = d.deliverables[di];
+    var prevDv = d.deliverables[di + 1] || null;
     var file = S.sel.file || (dv.files[0] || {}).name;
     if (file && !dv.files.some(function(f){ return f.name === file; })) file = (dv.files[0] || {}).name;
     var rows = dv.files.map(function(f){
-      var ctx = regCtx({ row: f, stampPath: dv.path });
-      var id = regAction(function(){ S.sel.file = f.name; forget("dfile:"); render(); refreshCli(); });
+      var ctx = regCtx({ row: f, stampPath: dv.path, sep: dv.sep, dv: dv, hasPrev: !!prevDv });
+      var id = regAction(function(){ S.sel.file = f.name; S.sel.ddiff = false; forget("dfile:"); render(); refreshCli(); });
       return "<tr" + rc("file", f.name, ctx) + ' class="click rc' + (f.name === file ? " sel" : "")
         + '" data-act="' + id + '">'
         + '<td style="color:var(--ink3);width:18px">' + ICON.file + "</td>"
@@ -2680,15 +2712,21 @@ SCREENS.deliver = {
     }).join(" ");
     var left = panel("Deliverable", '<span class="mono">' + esc(dv.path) + "</span>",
       '<table class="t"><thead><tr><th></th><th>File</th><th>What</th><th class="num">Size</th>'
-      + "<th>sha</th></tr></thead><tbody>" + rows + "</tbody></table>",
+      + "<th>sha</th></tr></thead><tbody>" + rows + "</tbody></table>"
+      + (prevDv ? '<div class="rowflex" style="padding:8px 10px"><button class="btn sm' + (S.sel.ddiff ? " pri" : "")
+          + '" data-act="' + regAction(function(){ S.sel.ddiff = !S.sel.ddiff; render(); }) + '">'
+          + (S.sel.ddiff ? "Back to the file" : "Diff against the previous deliverable") + "</button>"
+          + '<span class="hint">previous: <span class="mono">' + esc(prevDv.stamp) + "</span></span></div>" : ""),
       { flush: true, right: '<div class="rowflex">' + stamps + "</div>" });
-    var scsName = (dv.files.filter(function(f){ return /\.scs$/.test(f.name); })[0] || {}).name;
+    var scsName = dv.scs || (dv.files.filter(function(f){ return /\.scs$/.test(f.name); })[0] || {}).name;
     var corner0 = (dv.envelope.corners || ["tt"])[0];
-    var incl = 'include "' + dv.path + "/" + scsName + '" section=' + corner0;
+    var incl = includeLine(dv, scsName, corner0);
     // The instance line comes FROM the deliverable (interface.json): the PMU's own instance,
-    // its nets on the PMU's pins in the PMU's order, with the model as master.
+    // its nets on the PMU's pins in the PMU's order, with the model as master -- ONE line for
+    // every corner. An older deliverable carries only the per-corner map.
     var u = dv.use || null;
-    var inst = u && u.instance ? (u.instance[corner0] || u.instance[Object.keys(u.instance)[0]] || "") : "";
+    var inst = u ? (u.instance_line || (u.instance ? (u.instance[corner0] || u.instance[Object.keys(u.instance)[0]] || "") : "")) : "";
+    var oneModule = !!(u && u.module);
     var through = (u && u.pass_through) || [];
     var sw = (u && u.params && u.params.load_en) || [];
     var instText = !inst
@@ -2709,12 +2747,18 @@ SCREENS.deliver = {
       + (inst ? '<button class="btn sm" data-act="' + regAction(function(){ copy(inst); }) + '">'
         + ICON.copy + " Copy the instance line</button>" : "")
       + '<span class="hint">Temperature comes from your <span class="mono">options temp=</span>. '
-      + (inst && nCorners > 1 ? "The master names the corner: with <span class=\"mono\">section=</span> another corner, use that corner's module ("
-        + esc(Object.keys((u && u.modules) || {}).map(function(c){ return u.modules[c]; }).join(", ")) + "). " : "")
+      + (oneModule && nCorners > 1 ? "Switch corners with <span class=\"mono\">section=</span> alone ("
+          + esc((dv.envelope.corners || []).join(", ")) + "): the master stays <span class=\"mono\">"
+          + esc(u.module) + "</span> on every corner. Include one section only. "
+        : inst && nCorners > 1 ? "This older deliverable names the corner in the master: with <span class=\"mono\">section=</span> another corner, use that corner's module ("
+          + esc(Object.keys((u && u.modules) || {}).map(function(c){ return u.modules[c]; }).join(", ")) + "); deliver again for one master on every corner. " : "")
       + "Anything outside envelope.json is reported, never silently extrapolated.</span></div>",
       { style: "flex:none" });
-    var body;
-    if (file){
+    var body, bodyTitle = '<span class="mono">' + esc(file || "") + "</span>";
+    if (S.sel.ddiff && prevDv){
+      bodyTitle = 'Diff <span class="mono">' + esc(prevDv.stamp) + "</span> &rarr; <span class=\"mono\">" + esc(dv.stamp) + "</span>";
+      body = deliverDiff(dv);
+    } else if (file){
       var key = "dfile:" + dv.stamp + file;
       var fd = need(key, "/api/p/" + P() + "/deliverables/" + encodeURIComponent(dv.stamp)
         + "/files/" + encodeURIComponent(file), "deliver");
@@ -2724,8 +2768,9 @@ SCREENS.deliver = {
     } else body = '<div class="hint">Pick a file.</div>';
     var prov = panel("Provenance", '<span class="badge b-ok">' + ICON.ok + " reproducible</span>",
       '<div class="kv">' + kvRows(dv.provenance || {}, "") + "</div>", { style: "flex:none" });
-    return '<div class="col" style="flex:0 0 560px">' + errBlock("deliver") + jobBlock() + left + use + "</div>"
-         + '<div class="col grow">' + panel('<span class="mono">' + esc(file || "") + "</span>", "", body)
+    return '<div class="col" style="flex:0 0 560px">' + errBlock("deliver") + jobBlock()
+         + verifyWarn(d, dv) + left + use + "</div>"
+         + '<div class="col grow">' + panel(bodyTitle, "", body)
          + prov + "</div>";
   },
   foot: function(){
@@ -2734,10 +2779,91 @@ SCREENS.deliver = {
          + '">' + ICON.copy + " Copy for desk</button>"
          + '<button class="btn" data-act="' + regAction(function(){ openReport(); })
          + '" title="report.md of the latest deliverable">' + ICON.file + " Open report</button>"
-         + '<button class="btn pri" data-act="' + regAction(function(){ doDeliver(); })
-         + '">Deliver again</button></div>';
+         + '<button class="btn pri" data-act="' + regAction(function(){ doDeliver(); }) + '"' + busyAttr()
+         + ">Deliver again</button></div>";
   }
 };
+/* The grades a deliverable carries are verify's only when verify is newer than the fit. When
+   the shown deliverable's grades are the fit's own -- or the NEXT one's would be -- say so and
+   offer to verify first. Delivering is never blocked. */
+function verifyWarn(d, dv){
+  var now = (d && d.verify) || {};
+  var shown = dv && dv.provisional ? dv.provisional : "";
+  var next = (now.state === "stale" || now.state === "missing") ? now.why : "";
+  if (!shown && !next) return "";
+  var lines = [];
+  if (shown) lines.push("<b>This deliverable's grades are provisional:</b> " + esc(shown) + ".");
+  if (next && (!shown || now.state === "stale" || !dv)) lines.push((shown ? "And now: " : "<b>Before you deliver:</b> ") + esc(next) + ".");
+  var vid = regAction(function(){
+    if (jobBusy()) return;
+    startJob(api("/api/p/" + P() + "/verify", { method:"POST", body:{} }), "HB health check",
+      function(){ forget("deliverables"); forget("model"); forget("cell:"); render(); });
+  });
+  return '<div class="callout warn" style="flex:none">' + lines.join("<br>")
+       + '<div class="rowflex" style="margin-top:8px"><button class="btn sm" data-act="' + vid + '"' + busyAttr()
+       + ">Verify first</button>"
+       + '<span class="hint">then Deliver again for grades from the HB health check</span></div></div>';
+}
+/* "Diff against the previous deliverable": files, valid range, grades per port / block, the pin
+   list, provenance, and the .scs / .va text (the server trims it to a readable size). */
+function gradeCls(g){ return { green:"b-ok", yellow:"b-warn", red:"b-bad" }[g] || "b-mute"; }
+function deliverDiff(dv){
+  var key = "ddiff:" + dv.stamp;
+  var r = need(key, "/api/p/" + P() + "/deliverables/" + encodeURIComponent(dv.stamp) + "/diff", "deliver");
+  if (r === undefined) return loadingBlock(key, "comparing with the previous deliverable");
+  var x = r.diff || {}, out = [];
+  var f = x.files || {};
+  var sec = function(t){ return '<div class="lbl" style="margin:12px 0 6px">' + esc(t) + "</div>"; };
+  var list = function(a){ return (a || []).length ? '<span class="mono">' + esc(a.join(", ")) + "</span>" : '<span class="hint">none</span>'; };
+  out.push(sec("Files") + '<div class="kv"><span class="k">added</span><span>' + list(f.added)
+    + '</span><span class="k">removed</span><span>' + list(f.removed)
+    + '</span><span class="k">changed</span><span>' + list(f.changed) + "</span></div>");
+  var valid = x.valid || [];
+  out.push(sec("Valid range") + (valid.length
+    ? '<table class="t"><thead><tr><th>what</th><th>before</th><th>now</th></tr></thead><tbody>'
+      + valid.map(function(v){ return "<tr><td>" + esc(v.what) + '</td><td class="mono">' + esc(v.a || "-")
+        + '</td><td class="mono">' + esc(v.b || "-") + "</td></tr>"; }).join("") + "</tbody></table>"
+    : '<div class="hint">unchanged</div>'));
+  var gr = x.grades || [];
+  out.push(sec("Grades per port and block") + (gr.length
+    ? '<table class="t"><thead><tr><th>port</th><th>corner</th><th>block</th><th>before</th><th>now</th></tr></thead><tbody>'
+      + gr.map(function(g){ return '<tr><td class="mono">' + esc(g.port) + "</td><td>" + esc(g.corner) + "</td><td>"
+        + esc(g.block) + '</td><td><span class="badge ' + gradeCls(g.a) + '">' + esc(g.a || "absent") + "</span></td>"
+        + '<td><span class="badge ' + gradeCls(g.b) + '">' + esc(g.b || "absent") + "</span></td></tr>"; }).join("")
+      + "</tbody></table>"
+    : '<div class="hint">unchanged</div>'));
+  var pn = x.pins || {};
+  var pinTxt = pn.note ? '<div class="hint">' + esc(pn.note) + "</div>"
+    : !pn.a ? '<div class="hint">same pins, same order</div>'
+    : '<div class="kv"><span class="k">added</span><span>' + list(pn.added)
+      + '</span><span class="k">removed</span><span>' + list(pn.removed)
+      + '</span><span class="k">modeled</span><span>' + (Object.keys(pn.modeled || {}).length
+        ? '<span class="mono">' + esc(Object.keys(pn.modeled).map(function(p){
+            return p + ": " + (pn.modeled[p][0] ? "modeled" : "pass-through") + " -> " + (pn.modeled[p][1] ? "modeled" : "pass-through"); }).join("; ")) + "</span>"
+        : '<span class="hint">unchanged</span>')
+      + '</span><span class="k">order</span><span>' + (pn.order_changed ? "<b>changed</b> -- re-check the instance line" : "unchanged") + "</span></div>";
+  out.push(sec("Pins") + pinTxt);
+  var pv = x.provenance || {};
+  out.push(sec("Provenance") + (Object.keys(pv).length
+    ? '<div class="kv">' + Object.keys(pv).map(function(k){
+        var v = pv[k] || [];
+        var s = function(z){ return z !== null && typeof z === "object" ? JSON.stringify(z) : String(z === null || z === undefined ? "-" : z); };
+        return '<span class="k">' + esc(k) + '</span><span class="mono">' + esc(s(v[0])) + " &rarr; " + esc(s(v[1])) + "</span>"; }).join("") + "</div>"
+    : '<div class="hint">unchanged</div>'));
+  var tx = x.text || [];
+  out.push(sec("Model text (.scs / .va), provenance header left out") + (tx.length
+    ? tx.map(function(t){
+        var body = t.diff ? t.diff.split("\n").map(function(ln){
+            var c = ln.indexOf("+++") === 0 || ln.indexOf("---") === 0 ? "c"
+                  : ln.charAt(0) === "+" ? "a" : ln.charAt(0) === "-" ? "d" : ln.indexOf("@@") === 0 ? "c" : "";
+            return c ? '<span class="' + c + '">' + esc(ln) + "</span>" : esc(ln); }).join("\n")
+          : esc(t.note || "no text change");
+        return '<div style="margin-bottom:10px"><div class="rowflex"><span class="mono">' + esc(t.file) + "</span>"
+          + '<span class="hint">+' + (t.added || 0) + " / -" + (t.removed || 0) + (t.truncated ? ", trimmed" : "") + "</span></div>"
+          + '<div class="code" style="max-height:30vh;margin-top:4px">' + body + "</div></div>"; }).join("")
+    : '<div class="hint">no .scs or .va changed</div>'));
+  return '<div style="max-height:62vh;overflow:auto">' + out.join("") + "</div>";
+}
 
 /* -------------------------------------------------------------- Digest -- */
 SCREENS.digest = {

@@ -201,7 +201,8 @@ def test_module_ports_grounds_and_instance_parameters():
     built = build_va(demo_fits(), demo_derived(), "tt", project="demo_pmu")
     text = built["text"]
     assert text.startswith("// ====")
-    assert f"module PMU_demo_pmu_tt(" in text
+    # one module name for every corner: the section picks the corner, never the master
+    assert "module PMU_demo_pmu(" in text and built["module"] == "PMU_demo_pmu"
     # every ground is a REAL pin, never an implicit 0
     for g in ("VSS", "VSS_A", "VSS_B", "AGND"):
         assert g in built["ports"], f"{g} is not a module pin"
@@ -485,7 +486,7 @@ def test_lint_fires_on_the_planted_8890_henry_inductor():
     names = {f.get("element") for f in rep["findings"]}
     assert f"{RAIL_A}.psrr.Lpc" in names
     txt = lint.render(rep)
-    assert "8890" in txt and "inductor" in txt
+    assert "8.89 kH" in txt and "inductor" in txt
 
 
 def test_lint_names_the_rule_a_finding_strains():

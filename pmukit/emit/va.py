@@ -5,7 +5,11 @@
 
 What the module looks like
 
-    module PMU_<project>_<corner>(<every pin of the PMU subcircuit, in ITS order>);
+    module PMU_<project>(<every pin of the PMU subcircuit, in ITS order>);
+
+  * ONE module name for every corner (contract 4): each corner is its own file
+    `PMU_<project>_<corner>.va`, and the library's `section <corner>` includes only that file,
+    so the consumer switches corners by `section=` alone and never touches the instance's master.
 
   * the module is PIN-COMPATIBLE with the PMU (contract 4): the consumer swaps the cell and keeps
     the wiring.  Modeled pins behave as below; a pin the model has nothing for (a role-less
@@ -863,8 +867,16 @@ def _bias_block(nl: Netlist, port: str, gnd: str, supply: str, vrf: str, blocks:
 
 
 # --------------------------------------------------------------------------- the module
-def module_name(project: str, corner: str) -> str:
-    return f"PMU_{project}_{corner}"
+def module_name(project: str, corner: str | None = None) -> str:
+    """The module's name: `PMU_<project>`, the SAME for every corner.
+
+    Contract 4: the consumer adds one include line and switches corners by `section=` alone.
+    Each section `ahdl_include`s its own corner's file, and Spectre reads only the section the
+    include selects, so exactly one definition of the module is live in any netlist -- and the
+    instance's master never changes with the corner. `corner` is accepted (and ignored) so a
+    caller written against the old per-corner name keeps working."""
+    del corner
+    return f"PMU_{project}"
 
 
 def _supply_tracker(nl: Netlist, supply: str, gnd: str, f_start: float) -> str:

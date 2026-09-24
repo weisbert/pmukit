@@ -47,7 +47,8 @@ def test_every_va_repeats_the_provenance_header(tmp_path):
         text = (out / f"PMU_demo_pmu_{corner}.va").read_text(encoding="utf-8")
         assert "cfg123" in text and "ds456" in text and "spec789" in text
         assert "RX mode" in text
-        assert f"module PMU_demo_pmu_{corner}(" in text
+        assert "module PMU_demo_pmu(" in text
+        assert f"process corner {corner}" in text
 
 
 def test_files_are_lf_only(tmp_path):
@@ -65,7 +66,7 @@ def test_section_library_selects_the_corner(tmp_path):
     for corner in CORNERS:
         assert f"section {corner}" in text
         assert f'ahdl_include "PMU_demo_pmu_{corner}.va"' in text
-        assert f"module PMU_demo_pmu_{corner} (process corner {corner})" in text
+        assert f"module PMU_demo_pmu (process corner {corner}" in text
     # the consumer's one include line, and the valid range, are spelled out
     assert "include" in text and "section=" in text
     assert "valid:" in text

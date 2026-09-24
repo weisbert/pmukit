@@ -479,7 +479,13 @@ def test_18b_the_verify_colours_reach_the_grid_the_cell_and_the_tiles(api):
 # ========================================================================= 9  deliver
 def test_19_deliver_writes_one_stamped_folder(api):
     requires("fit")
-    api.job("POST", f"/api/p/{PROJECT}/deliver", {})
+    j = api.job("POST", f"/api/p/{PROJECT}/deliver", {})
+    # Deliver emits from the SAVED fit: the dataset has not changed since the fit, so there
+    # is nothing to re-fit (it used to re-fit everything and take as long as the fit itself)
+    assert j["result"]["refit"] == "", j["result"]
+    assert any("emitting corner" in e["text"] for e in j["events"]), "no per-corner progress"
+    if "verify" in STATE:
+        assert j["result"]["graded_by"] == "verify" and not j["result"]["provisional"]
     d = api.need("GET", f"/api/p/{PROJECT}/deliverables")
     assert d["deliverables"], "deliver produced no folder"
     dv = d["deliverables"][0]
@@ -492,6 +498,10 @@ def test_19_deliver_writes_one_stamped_folder(api):
     nl = api.need("GET", f"/api/p/{PROJECT}/netlist")["copy"]
     assert dv["provenance"]["netlist_sha"] == nl["sha"]
     assert isinstance(dv["provenance"]["extra"], dict)
+    # one master for every corner, and an include line with one separator
+    assert dv["use"]["module"] == f"PMU_{PROJECT}"
+    inc = dv["include"].split('"')[1]
+    assert not ("/" in inc and "\\" in inc), inc
     STATE["deliver"] = dv
 
 

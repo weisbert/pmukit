@@ -379,7 +379,9 @@ def hb_check(fit, derived, *, corner: str = "", project: str = "pmu", site=None,
         tempfile.mkdtemp(prefix="pmukit_hb_"))
     work = base / "verify" / "hb" / corner
     work.mkdir(parents=True, exist_ok=True)
-    va_name = f"{built['module']}.va"
+    # ONE corner per deck: the module name is the same on every corner, so a deck that included
+    # two corners' files would define it twice. The file is named like the deliverable's.
+    va_name = f"{built['module']}_{corner}.va"
     va_path = work / va_name
     va_path.write_text(built["text"], encoding="utf-8", newline="\n")
 

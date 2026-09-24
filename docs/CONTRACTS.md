@@ -178,14 +178,15 @@ CREATE TABLE consumes (           -- 哪个参数吃了哪次 run
 
 ```
 $PMUKIT_DATA/<project>/deliver/<stamp>/
-  PMU_<project>.scs          Spectre 库：每个工艺角一个 section，include 对应 .va
-  PMU_<project>_tt.va        每角一份 Verilog-A；温度在内部连续，vset/load 是实例参数
+  PMU_<project>.scs          Spectre 库：每个工艺角一个 section，只 ahdl_include 本角的 .va
+  PMU_<project>_tt.va        每角一份 Verilog-A，模块名都叫 PMU_<project>；温度在内部连续，vset/load 是实例参数
   PMU_<project>_ss.va
   PMU_<project>_ff.va
   envelope.json              有效包络：频率上限、负载范围、温度范围、VSET 档、哪些 ls 项默认开
   report.md                  每角分块评分、HB 体检结果、未跑项清单
+  grades.json                report.md 的机读版；graded_by = verify / fit，provisional = 评分为何只是临时的
   provenance.json            config_sha、dataset_sha、pmukit 版本、表征时 TB 状态、日期
-  interface.json             PMU 的引脚（按 PMU 的顺序）、哪些是直通脚、每个角的实例行
+  interface.json             PMU 的引脚（按 PMU 的顺序）、哪些是直通脚、模块名和实例行（所有角同一行）
 ```
 
 规则：
@@ -201,6 +202,24 @@ $PMUKIT_DATA/<project>/deliver/<stamp>/
 - `envelope.json` 里的任何一项超出，报告里必须出现红字；模型不静默外推。
 - 交付目录不进 git；`report.md` 里只有数字，没有客户网名，才允许摘录进仓库文档。
 - 工艺角选择靠 Spectre `section`，和 PDK 的角变量同名，消费者的 corner 设置里加一行就能切。
+  - **所有角的模块同名**：`PMU_<project>`。每个 `section <角>` 只 `ahdl_include` 本角的
+    `PMU_<project>_<角>.va`，所以切角只改 `section=`，实例的 master 永远是 `PMU_<project>`，不跟着换。
+  - 为什么合法：`include "PMU_<project>.scs" section=<x>` 让 Spectre（ALPS 读同一套 Spectre 语法）
+    只读库里名为 `<x>` 的那一段，其余 section 整段跳过、根本不解析，所以网表里只有一个
+    `ahdl_include`、只有一个 `PMU_<project>` 定义是活的。反过来，**同一个库同时 include 两个 section**
+    （两行 include、section 不同）就会把同名模块定义两次，仿真器报重复定义——一个网表只能 include 一个角。
+  - 仓库里自己的消费者都守这条：verify 的 HB 台子（`verify/hb.py`）和振荡器台子（`verify/system.py`）
+    每个台子只 `ahdl_include` 一个角的 .va（文件名同交付物，`PMU_<project>_<角>.va`），按角分目录。
+  - 旧交付物（模块名带角名 `PMU_<project>_<角>`）照样能列出、能读、能 diff；Deliver 屏对它们仍按
+    旧说法提示「换角要换 master」，重新交付即得同名模块。
+- Deliver 用**存好的拟合**（`fit.json`，即 Model 屏看到的那份），不重拟合；只有 `fit.json` 不存在、
+  读不了、或比数据集旧（拟合时记下的 dataset_sha 和现在的数据集对不上）时才重拟合，写回 `fit.json`，
+  并明说「re-fitted the dataset: <原因>」。`pmukit deliver` 和 Deliver 屏走同一个函数
+  `pmukit.emit.deliver_project`。
+- 评分来源：`verify.json` 比 `fit.json` 新 → 用 verify 的评分和它放行的 ls 项；否则（verify 比拟合旧，
+  或没跑过）用拟合自己的评分（`pmukit.verify.grades`，纯函数、不跑仿真），所有 ls 项关闭，
+  report.md 和 grades.json 写明「verify is older than the fit -- grades are from the fit」
+  （没跑过则「verify has not run on this fit -- grades are from the fit」）。不阻止交付。
 
 ## 5. 摘要（Copy for desk：盒子到桌面的气隙回程）
 
