@@ -680,6 +680,16 @@ function wire(){
   document.querySelectorAll("[data-change]").forEach(function(n){
     n.onchange = function(){ var f = ACTS[n.getAttribute("data-change")]; if (f) f(n.value); };
   });
+  /* Enter in a text box runs its action; data-keep keeps what was typed across a re-render. */
+  document.querySelectorAll("[data-enter]").forEach(function(n){
+    n.onkeydown = function(e){
+      if (e.key !== "Enter") return;
+      e.preventDefault(); var f = ACTS[n.getAttribute("data-enter")]; if (f) f(n.value);
+    };
+  });
+  document.querySelectorAll("[data-keep]").forEach(function(n){
+    n.oninput = function(){ S.sel[n.getAttribute("data-keep")] = n.value; };
+  });
   document.querySelectorAll("[data-go]").forEach(function(n){
     n.onclick = function(){ go(n.getAttribute("data-go")); };
   });
@@ -735,8 +745,9 @@ function emptyBlock(title, text, btnLabel, btnGo){
                      + esc(btnLabel) + "</button>" : "") + "</div>";
 }
 /* The four-part error, with the Do actions as real buttons. The table that produced it is
-   rendered underneath, never replaced. */
-function errBlock(screen){
+   rendered underneath, never replaced. `pick` is an optional row of controls a screen offers
+   to fix the error in place (the New screen's PMU instance picker). */
+function errBlock(screen, pick){
   var e = S.errs[screen];
   if (!e) return "";
   var er = e.error || {};
@@ -751,11 +762,14 @@ function errBlock(screen){
        + '<div class="row"><span class="k">Why</span><span>' + esc(er.why || "") + "</span></div>"
        + '<div class="row"><span class="k">Do</span><span class="rowflex">' + dos
        + '<button class="btn sm" data-act="' + rid + '">' + ICON.retry + " Try again</button></span></div>"
+       + (pick ? '<div class="row"><span class="k">Pick</span><span class="rowflex">' + pick + "</span></div>" : "")
        + '<div class="row"><span class="k">Where</span><span class="mono">' + esc(er.where || "-") + "</span></div>"
        + "</div>";
 }
 function doAction(text, e){
   var t = String(text || "");
+  if (/pmu instance/i.test(t) && el("instpick")) return el("instpick").focus();
+  if (/path on this machine/i.test(t) && el("nlpath")) return el("nlpath").focus();
   if (/new screen/i.test(t)) return go("new");
   if (/plan screen/i.test(t)) return go("plan");
   if (/run screen/i.test(t)) return go("run");
@@ -920,8 +934,9 @@ SCREENS.new = {
   cli: function(){
     var cfg = (S.data["config"] || {}).config || {};
     var pins = S.data["pins"] || {};
+    var src = (S.data["netlistsrc"] || {}).source || {};
     return {
-      netlist: (pins.netlist || {}).path || "",
+      netlist: src.path || (pins.netlist || {}).path || "",
       pmu_inst: pins.pmu_inst || cfg.pmu_inst || "",
       corners: cfg.corners || [], temps: cfg.temps_c || [], vset: cfg.vset_codes || [],
       loads: cfg.my_load || {}, fmax: cfg.care_up_to_hz || 0,
@@ -931,23 +946,33 @@ SCREENS.new = {
   },
   main: function(){
     if (!S.project) return noProject();
-    var pins = need("pins", "/api/p/" + P() + "/pins", "new");
+    /* need() asks again for whatever is missing on every render. While New shows an error and
+       has no pin table, the pins wait for Try again, a load or a pick: asking at once would loop
+       on a refused read and replace the error being shown (the path that was tried, say). */
+    var hold = !!S.errs.new && S.data["pins"] === undefined;
+    var pins = hold ? undefined : need("pins", "/api/p/" + P() + "/pins", "new");
     var cfgd = need("config", "/api/p/" + P() + "/config", "new");
+    var src = S.errs.new && S.errs.new.key === "netlistsrc" ? undefined
+            : need("netlistsrc", "/api/p/" + P() + "/netlist", "new");
     var left;
     if (S.errs.new && !pins){
-      left = panel("Netlist", "one file, exported at the nominal corner", dropZone(), { style:"flex:1" });
+      /* The pins could not be read: say where the file came from, so the fixed bench is one
+         click away, and keep every way of loading another one open. */
+      left = panel("Netlist", "one file, exported at the nominal corner",
+        (src && src.source ? '<div class="kv" style="margin-bottom:12px">' + netlistSourceKv(src) + "</div>" : "")
+        + dropZone(src), { style:"flex:1" });
     } else if (S.loading["pins"] || pins === undefined){
       left = panel("Netlist", "one file, exported at the nominal corner",
         loadingBlock("pins", "parsing the netlist and resolving the pins"), { style:"flex:1" });
     } else {
       left = panel("Netlist", "one file, exported at the nominal corner",
-        netlistBody(pins), { style:"flex:1" });
+        netlistBody(pins, src), { style:"flex:1" });
     }
     var right = (cfgd === undefined)
       ? panel("Three things only you know", "everything else is derived",
               loadingBlock("config", "reading the project configuration"))
       : panel("Three things only you know", "everything else is derived", threeQuestions(cfgd, pins));
-    return '<div class="col" style="flex:1 1 640px">' + errBlock("new") + jobBlock() + left + "</div>"
+    return '<div class="col" style="flex:1 1 640px">' + errBlock("new", errInstPicker()) + jobBlock() + left + "</div>"
          + '<div class="col grow">' + right + "</div>";
   },
   foot: function(){
@@ -970,21 +995,130 @@ function noProject(){
       "Every screen below Home belongs to one project. Open one from Home, or create a new one.",
       "Go to Home", "home")) + "</div>";
 }
-function dropZone(){
+function dropZone(info){
   var choose = regAction(function(){ pickFile(); });
-  var byPath = regAction(function(){
-    var p = window.prompt("Path of the netlist on this machine:", "");
-    if (p) loadNetlist({ path: p });
+  var byPath = regAction(function(v){
+    var p = String(typeof v === "string" ? v : (el("nlpath") || {}).value || "").trim();
+    if (!p){ if (el("nlpath")) el("nlpath").focus(); return; }
+    S.sel.nlpath = p;
+    loadNetlist({ path: p });
   });
+  var s = (info && info.source) || {};
+  var typed = S.sel.nlpath !== undefined ? S.sel.nlpath : (s.typed || s.path || "");
   return '<div class="drop" id="drop"><span style="color:var(--ink3)">' + ICON.up + "</span>"
        + '<div style="font-weight:600;color:var(--ink)">Drop <span class="mono">input.scs</span> here</div>'
        + '<div class="hint">Sources named IL_ / VB_ / VS_ / VEN_ tell pmukit which pin is which. '
        + "No manifest.</div>"
        + '<div class="rowflex" style="margin-top:6px"><button class="btn" data-act="' + choose
-       + '">Choose a file</button><button class="btn" data-act="' + byPath + '">By path on this machine</button></div>'
+       + '">Choose a file</button></div>'
+       + '<div class="rowflex" style="width:100%;max-width:640px;justify-content:center">'
+       + '<span class="hint">or its path on this machine</span>'
+       + '<input class="inp mono" id="nlpath" style="flex:1;min-width:240px" data-keep="nlpath"'
+       + ' data-enter="' + byPath + '" placeholder="$WORK_ROOT/.../netlist/input.scs" value="' + esc(typed) + '">'
+       + '<button class="btn" data-act="' + byPath + '">Load</button></div>'
+       + '<div class="hint">~ and $VARIABLES expand on the server; a relative path is read from '
+       + '<span class="mono">' + esc((info && info.cwd) || "the directory pmukit ui was started in") + "</span></div>"
        + '<input type="file" id="fileinp" style="display:none" accept=".scs,.sp,.cir,.net,.txt"></div>';
 }
-function netlistBody(pins){
+/* Where the netlist came from, and the one-click way back to it: the bench fixed in Virtuoso
+   and exported to the same path is "Re-read", not a second trip through the file picker. */
+function netlistSourceKv(info){
+  var s = (info && info.source) || null, cp = (info && info.copy) || null;
+  var other = regAction(function(){ S.sel.loadAnother = !S.sel.loadAnother; render(); });
+  var where, btns = "";
+  if (s && s.path){
+    var again = regAction(function(){ loadNetlist({ reread: true }); });
+    where = '<span class="mono">' + esc(s.path) + "</span>"
+      + (s.typed && s.typed !== s.path ? ' <span class="hint">typed as <span class="mono">' + esc(s.typed) + "</span></span>" : "")
+      + (s.on_disk === "changed" ? ' <span class="badge b-warn">changed on disk since the last read</span>'
+         : s.on_disk === "missing" ? ' <span class="badge b-bad">no longer there</span>' : "");
+    btns = '<button class="btn sm" data-act="' + again + '"' + (s.on_disk === "missing" ? " disabled" : "")
+      + ">" + ICON.retry + " Re-read " + esc(s.name || "the netlist") + "</button>";
+  } else if (s){
+    where = '<span class="mono">' + esc(s.name || "input.scs") + '</span> <span class="hint">dropped into the '
+      + "browser, which never tells pmukit where a file lives: load it by path once to make re-reading one click</span>";
+  } else {
+    where = '<span class="hint">not recorded (loaded before pmukit kept the path)</span>';
+  }
+  btns += '<button class="btn sm" data-act="' + other + '">' + (S.sel.loadAnother ? "Cancel" : "Load another&hellip;") + "</button>";
+  var ch = s && s.changes && s.changes.text;
+  return '<span class="k">Netlist</span><span style="display:flex;flex-direction:column;gap:5px">'
+    + "<span>" + where + "</span>"
+    + '<span class="rowflex">' + btns + "</span>"
+    + (ch ? '<span class="hint">' + (s.changes.unchanged ? "unchanged" : "last read") + ": " + esc(ch)
+        + (s.loaded_at ? " &middot; " + esc(ago(s.loaded_at)) : "") + "</span>" : "")
+    + "</span>"
+    + (cp ? '<span class="k">Working copy</span><span class="mono">' + esc(cp.path) + " &middot; "
+        + Math.round((cp.bytes || 0) / 1024) + " KB &middot; sha " + esc((cp.sha || "").slice(0, 8)) + "</span>" : "");
+}
+function instOptions(cands, cur){
+  var list = (cands || []).slice();
+  if (cur && !list.some(function(c){ return c.name === cur; })) list.unshift({ name: cur, master: "?", pins: 0, defined: true });
+  return list.map(function(c){
+    return '<option value="' + esc(c.name) + '"' + (c.name === cur ? " selected" : "") + ">"
+      + esc(c.name) + " &middot; " + esc(c.master) + ", " + (c.pins || 0) + " pins"
+      + (c.defined ? "" : " (subckt not in the netlist)") + "</option>";
+  }).join("");
+}
+/* The PMU instance row: a real choice, not a read-only guess. Switching re-scans, re-seeds the
+   pins and keeps every other answer; Ctrl Z brings the previous instance back. */
+function instPicker(pins){
+  var cands = pins.candidates || [];
+  var act = regAction(function(v){
+    var name = typeof v === "string" ? v : (el("instsel") || {}).value;
+    if (name && name !== pins.pmu_inst) setInstance(name);
+  });
+  return '<select class="inp mono" id="instsel" data-change="' + act + '">'
+    + instOptions(cands, pins.pmu_inst) + "</select>";
+}
+/* When the guess fails there is no pin table to put the row in: the error offers the choice. */
+function errInstPicker(){
+  var e = S.errs.new;
+  var cands = e && e.error && e.error.candidates;
+  if (!cands || !cands.length) return "";
+  var act = regAction(function(){ var p = el("instpick"); if (p && p.value) setInstance(p.value); });
+  return '<select class="inp mono" id="instpick">' + instOptions(cands, cands[0].name) + "</select>"
+    + '<button class="btn sm pri" data-act="' + act + '">Use this instance</button>';
+}
+function setInstance(name){
+  api("/api/p/" + P() + "/netlist/instance", { method:"PUT", body:{ pmu_inst: name } })
+    .then(function(){
+      delete S.errs.new; S.job = null;
+      forget("pins"); forget("config"); forget("derived"); forget("plan"); forget("consequences");
+      forget("netlistsrc");
+      render(); refreshCli();
+    }, showErr);
+}
+function scanNotes(pins){
+  var notes = pins.notes || [];
+  if (!notes.length) return "";
+  return '<div class="callout" style="margin-top:10px"><b>What the scan noticed</b>'
+    + '<ul style="margin:6px 0 0 18px;padding:0">' + notes.map(function(n){
+        return '<li style="margin-bottom:3px">' + esc(n) + "</li>"; }).join("") + "</ul></div>";
+}
+/* Set role, inline: the DC value is asked for in the page, not in a browser dialog. */
+function roleAskBlock(){
+  var a = S.sel.roleAsk;
+  if (!a) return "";
+  var pre = { rail:"IL_", bias:"VB_", supply:"VS_", en:"VEN_" }[a.role] || "";
+  var unit = a.role === "rail" ? "A, typical load current" : "V, compliance / level";
+  var go1 = regAction(function(v){
+    var txt = typeof v === "string" ? v : (el("roledc") || {}).value;
+    S.sel.roleAsk = null;
+    setPin(a.pin, { role: a.role, dc: parseEng(txt) });
+  });
+  var cancel = regAction(function(){ S.sel.roleAsk = null; render(); });
+  return '<div class="callout" style="margin-bottom:10px"><div class="rowflex">'
+    + "<b>Set " + esc(a.pin) + " as " + esc(a.role) + "</b>"
+    + '<span class="hint">DC (' + unit + ")</span>"
+    + '<input class="inp mono" id="roledc" style="width:92px" data-enter="' + go1 + '" value="'
+    + (a.role === "rail" ? "500u" : a.role === "bias" ? "0.4" : "1") + '">'
+    + '<button class="btn sm pri" data-act="' + go1 + '">Write ' + esc(pre + a.pin) + " into the netlist</button>"
+    + '<button class="btn sm" data-act="' + cancel + '">Cancel</button></div>'
+    + '<div class="hint" style="margin-top:6px">This edits pmukit\'s working copy. Add the same source to '
+    + "the bench in Virtuoso too, or the next re-read of a changed export will not have it.</div></div>";
+}
+function netlistBody(pins, info){
   var nl = pins.netlist || {};
   var rows = (pins.pins || []).map(function(p){
     var ctx = regCtx({ row: p });
@@ -1006,12 +1140,12 @@ function netlistBody(pins){
       + '<td><span class="badge ' + fateCls + '">' + fateTxt + "</span></td></tr>";
   }).join("");
   var unc = (pins.summary || {}).unclassified || [];
+  var srcInfo = info || { source: null, copy: { path: nl.path, bytes: nl.bytes, sha: nl.sha } };
   return '<div class="kv" style="margin-bottom:12px">'
-    + '<span class="k">File</span><span class="mono">' + esc(nl.path) + " &middot; "
-    + Math.round((nl.bytes || 0) / 1024) + " KB &middot; sha " + esc((nl.sha || "").slice(0, 8)) + "</span>"
-    + '<span class="k">PMU instance</span><span><span class="mono">' + esc(pins.pmu_inst)
-    + '</span> &middot; cell <span class="mono">' + esc(pins.pmu_master) + "</span> &middot; "
-    + (pins.pins || []).length + " pins</span>"
+    + netlistSourceKv(srcInfo)
+    + '<span class="k">PMU instance</span><span class="rowflex">' + instPicker(pins)
+    + '<span>cell <span class="mono">' + esc(pins.pmu_master) + "</span> &middot; "
+    + (pins.pins || []).length + " pins</span></span>"
     + '<span class="k">PDK includes</span><span class="mono">'
     + esc(Object.keys(pins.sections || {}).map(function(k){ return k + " section=" + pins.sections[k]; }).join(" &middot; ") || "-")
     + "</span>"
@@ -1019,9 +1153,12 @@ function netlistBody(pins){
     + esc(Object.keys(pins.params || {}).map(function(k){ return k + "=" + pins.params[k]; }).join(" ") || "-") + "</span>"
     + '<span class="k">Analyses in file</span><span>' + (pins.analyses || []).length
     + " found &middot; stripped, pmukit writes its own</span></div>"
+    + (S.sel.loadAnother ? '<div style="margin-bottom:12px">' + dropZone(srcInfo) + "</div>" : "")
+    + roleAskBlock()
     + '<table class="t"><thead><tr><th style="width:26px" title="Model this port? Unticked rails and biases become stubs.">Model</th>'
     + "<th>Pin</th><th>Net</th><th>Role</th><th>From source</th><th>DC</th><th>Fate</th></tr></thead>"
     + "<tbody>" + rows + "</tbody></table>"
+    + scanNotes(pins)
     + (unc.length ? '<div class="callout warn" style="margin-top:10px">' + ICON.warn + " <b>"
         + esc(unc.join(", ")) + "</b> " + (unc.length > 1 ? "have" : "has")
         + " no IL_ / VB_ / VS_ / VEN_ source, so no role, and "
@@ -1164,21 +1301,28 @@ function pickFile(){
   inp.click();
 }
 function loadNetlist(body){
+  delete S.errs.new;
   startJob(api("/api/p/" + P() + "/netlist", { method:"POST", body: body }),
-           "parsing the netlist",
-           function(){ forget("pins"); forget("config"); forget("derived"); forget("plan"); render(); });
+           body.reread ? "re-reading the netlist" : "parsing the netlist",
+           function(j){
+             if (j && j.status === "done") S.sel.loadAnother = false;
+             /* Try again = read it again: the bench was fixed and exported to the same place */
+             if (j && j.status === "failed" && S.errs.new) S.errs.new.retry = function(){ loadNetlist(body); };
+             forget("pins"); forget("config"); forget("derived"); forget("plan"); forget("consequences");
+             forget("netlistsrc");
+             render();
+           });
 }
 function setPin(pin, body){
   api("/api/p/" + P() + "/pins/" + encodeURIComponent(pin), { method:"PUT", body: body })
-    .then(function(){ forget("pins"); forget("config"); forget("derived"); forget("plan"); render(); },
-          showErr);
+    .then(function(){
+      forget("pins"); forget("config"); forget("derived"); forget("plan"); forget("netlistsrc"); render();
+    }, showErr);
 }
 function askRole(pin, role){
-  var unit = role === "rail" ? "A (typical load current)" : "V (compliance / level)";
-  var v = window.prompt("DC value for " + pin.name + " as " + role + ", in " + unit + ":",
-                        role === "rail" ? "500u" : "0.4");
-  if (v === null) return;
-  setPin(pin.name, { role: role, dc: parseEng(v) });
+  S.sel.roleAsk = { pin: pin.name, role: role };
+  render();
+  if (el("roledc")) el("roledc").focus();
 }
 function patchConfig(key, value){
   var cur = (S.data["config"] || {}).config;
@@ -2238,6 +2382,12 @@ document.addEventListener("drop", function(e){
   var rd = new FileReader();
   rd.onload = function(){ loadNetlist({ text: String(rd.result), name: f.name }); };
   rd.readAsText(f);
+});
+/* back from Virtuoso: ask again whether the exported netlist changed on disk since the read */
+window.addEventListener("focus", function(){
+  if (S.screen !== "new" || !S.project || S.demo || !S.data["netlistsrc"]) return;
+  if (S.job && S.job.status === "running") return;
+  forget("netlistsrc"); render();
 });
 
 /* ---------------------------------------------------------------- boot -- */
