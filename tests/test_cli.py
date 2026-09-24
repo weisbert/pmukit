@@ -287,6 +287,14 @@ def test_check_json_is_machine_readable(capsys):
     assert d["sections"]["pdk/toplevel.scs"] == "tt"
 
 
+def test_check_looks_for_the_named_code_variable(capsys):
+    """The template declares VSET; asking for another name lists what IS declared."""
+    assert cli.main(["check", str(TEMPLATE), "--pmu-inst", "PMU_TOP",
+                     "--vset-param", "vout_sel"]) == 1
+    out = capsys.readouterr().out
+    assert "parameters vout_sel=<n>" in out and "declares: VSET" in out
+
+
 def test_duplicate_ground_pins_do_not_collapse(capsys):
     """Three grounds all tied to 0 must stay three pins, not one."""
     cli.main(["--json", "check", str(TEMPLATE), "--pmu-inst", "PMU_TOP"])

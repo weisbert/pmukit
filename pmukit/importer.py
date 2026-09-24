@@ -119,7 +119,7 @@ class Deck:
     asks for (`IL_<pin name>`).
     """
 
-    def __init__(self, text: str, path: str = "", pmu_inst: str = ""):
+    def __init__(self, text: str, path: str = "", pmu_inst: str = "", vset_param: str = "VSET"):
         self.text = text
         self.path = str(path)
         self.netlist = Netlist(text, path)
@@ -143,7 +143,7 @@ class Deck:
                                      for f, s in self.netlist.includes() if s))
         m = _TEMP_RE.search(text)
         self.temp_c = float(m.group(1)) if m else None
-        vset = self.params.get("VSET")
+        vset = self.params.get(vset_param)
         self.vset = int(float(vset)) if vset not in (None, "") and _isnum(vset) else None
 
     # -- the pin table -------------------------------------------------------
@@ -1007,7 +1007,8 @@ def _find_deck(psf_dir: pathlib.Path) -> pathlib.Path | None:
 
 # =============================================================================== (b) external
 def import_external(dirs, plan, ledger: Ledger, dataset: Dataset, *,
-                    spec: dict | None = None, pmu_inst: str = "") -> dict:
+                    spec: dict | None = None, pmu_inst: str = "",
+                    vset_param: str = "VSET") -> dict:
     """Fill the dataset from result directories the user already has.
 
     Each directory must hold the `input.scs` that produced it plus its PSF.  The corner, the
@@ -1028,7 +1029,7 @@ def import_external(dirs, plan, ledger: Ledger, dataset: Dataset, *,
     for pr in planned:                     # one Deck per DISTINCT netlist, not per run
         ckey = pr.run.netlist_sha or pr.netlist_text
         if ckey not in cache:
-            cache[ckey] = Deck(pr.netlist_text, pmu_inst=pmu_inst)
+            cache[ckey] = Deck(pr.netlist_text, pmu_inst=pmu_inst, vset_param=vset_param)
         sigs[pr.run_id] = cache[ckey].signature()
         keys[pr.run_id] = cache[ckey].analysis_key_for(pr.run.analysis)
     matched: set[str] = set()
@@ -1043,7 +1044,7 @@ def import_external(dirs, plan, ledger: Ledger, dataset: Dataset, *,
             continue
         try:
             deck = Deck(deck_path.read_text(encoding="utf-8", errors="replace"),
-                        str(deck_path), pmu_inst=pmu_inst)
+                        str(deck_path), pmu_inst=pmu_inst, vset_param=vset_param)
         except PmuError as exc:
             report["unmatched"].append({"dir": str(d), "why": exc.what})
             continue

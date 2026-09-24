@@ -9,7 +9,8 @@
 ;;   VS_<pin>   vsource   a supply         dc = nominal
 ;;   VEN_<pin>  vsource   the enable
 ;;
-;; plus a `VSET` design variable and a PDK include carrying `section=`.
+;; plus the output-code design variable (named by the optional 7th argument, default "VSET" --
+;; use the name the PMU schematic already reads) and a PDK include carrying `section=`.
 ;;
 ;;   load("/abs/path/to/pmukit/tools/skill/pmukit_tb.il")
 ;;   pmukitBuildTB("myTBlib" "pmu_tb" "pmuLib" "PMU_CELL" "PMU_TOP"
@@ -64,7 +65,7 @@
 ;; pmuLib/pmuCell   : the PMU whose symbol gets instanced
 ;; instName         : the instance name -- this is what you pass as --pmu-inst
 ;; roles            : list of (pinName roleString dcValue)
-(defun pmukitBuildTB (libName cellName pmuLib pmuCell instName roles)
+(defun pmukitBuildTB (libName cellName pmuLib pmuCell instName roles @optional (vsetVar "VSET"))
   (let (cv pmuSym inst x y srcName master cellMaster gndCv row pin role dc n)
     (unless (ddGetObj libName)
       (error "pmukitBuildTB: library %s not found -- create it first (ddCreateLib)" libName))
@@ -104,9 +105,9 @@
                               (list x (plus y 0.25)) pin "lowerLeft" "R0" "stick" 0.0625 nil))
         (setq n (plus n 1))))
 
-    ;; VSET: the design variable pmukit rewrites per output code. Declared on the schematic so it
-    ;; lands in the exported netlist as `parameters VSET=<n>`.
-    (hiSetDesignVar "VSET" "3")
+    ;; The design variable pmukit rewrites per output code (pmukit's --vset-param). Declared on
+    ;; the schematic so it lands in the exported netlist as `parameters <vsetVar>=<n>`.
+    (hiSetDesignVar vsetVar "3")
 
     (schCheck cv)
     (dbSave cv)

@@ -396,11 +396,11 @@ def _apply_corner(nl: Netlist, cfg: ProjectConfig, corner: str) -> list[str]:
 
 def _base_variant(base: Netlist, cfg: ProjectConfig, derived: DerivedConfig, corner: str,
                   temp: float | None, code: int, state: LoadState) -> Netlist:
-    """The netlist every run of one cell starts from: corner, VSET, temperature, load state."""
+    """The netlist every run of one cell starts from: corner, output code, temperature, load state."""
     nl = base.copy()
     nl.edits.clear()
     _apply_corner(nl, cfg, corner)      # notes surface once, via compile_plan's dry pass
-    nl.set_param("VSET", code)
+    nl.set_param(cfg.vset_param, code)
     if temp is not None:
         nl.set_temperature(float(temp))
     for rail, amps in sorted(state.currents.items()):

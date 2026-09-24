@@ -222,6 +222,35 @@ def test_each_run_carries_its_own_netlist_with_the_right_corner(plan):
         assert "\r" not in txt
 
 
+def test_the_code_variable_is_whatever_the_designer_named_it():
+    """VSET is only the default: the variable the plan rewrites is config.vset_param."""
+    text = DEMO.replace("parameters VSET=3", "parameters vout_sel=3 trim=0")
+    nl = Netlist(text, "tb/input.scs")
+    cfg = ProjectConfig.from_dict({**CFG, "vset_codes": [2, 5], "vset_param": "vout_sel"})
+    pins = nl.scan("PMU_TOP", ports=cfg.ports)
+    der = derive(cfg, pins)
+    assert der.vset["param"] == "vout_sel"
+    runs = compile_plan(cfg, der, nl, pins).runs(enabled_only=False)
+    seen = set()
+    for r in runs:
+        assert "VSET" not in r.netlist_text
+        assert f"parameters vout_sel={r.run.vset} trim=0" in r.netlist_text
+        seen.add(r.run.vset)
+    assert seen == {2, 5}
+
+
+def test_several_codes_on_an_undeclared_variable_are_refused():
+    """Declaring it would run -- and every code would simulate the same circuit."""
+    nl = Netlist(DEMO, "tb/input.scs")
+    cfg = ProjectConfig.from_dict({**CFG, "vset_codes": [2, 5], "vset_param": "vout_sel"})
+    with pytest.raises(PmuError) as ei:
+        derive(cfg, nl.scan("PMU_TOP", ports=cfg.ports))
+    assert "vout_sel" in ei.value.what and "VSET" in " ".join(ei.value.do)
+    # one code is harmless: nothing is being switched
+    one = ProjectConfig.from_dict({**CFG, "vset_param": "vout_sel"})
+    derive(one, nl.scan("PMU_TOP", ports=one.ports))
+
+
 def test_ac_run_sets_exactly_one_hot_source(plan):
     r = plan.group("ac:VS_VDDA_1V0").runs[0]
     hot = [ln for ln in r.netlist_text.splitlines() if "mag=1" in ln]

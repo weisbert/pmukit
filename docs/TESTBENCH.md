@@ -21,9 +21,15 @@
 除此之外还要有：
 
 ```
-parameters VSET=3                          // 输出档位，工具按 vset_codes 逐档改写
+parameters VSET=3                          // 输出档位变量，工具按 vset_codes 逐档改写
 include "<pdk>/toplevel.scs" section=tt    // 带 section= 的 PDK include，工具按 corners 逐角改写
 ```
+
+**档位变量叫什么由你定**：你的 PMU 里控制输出档位的设计变量叫 `vout_sel` 就写 `vout_sel`，
+不用改名成 `VSET`。告诉工具它的名字：`pmukit check/new ... --vset-param vout_sel`
+（New 屏 “code var” 下拉框从网表的 `parameters` 里选）。不指定就当它叫 `VSET`。
+要跑多个档，而网表里没有声明这个变量时，工具直接拒绝，因为那样每一档跑的都是同一个电路。
+PMU 没有档位变量的话，只跑一个档就行。
 
 分析语句可有可无 —— 工具会把台子里所有分析语句剥掉，自己写。
 
@@ -57,7 +63,7 @@ pmukitBuildTB("我的TB库" "pmu_tb" "PMU所在库" "PMU_CELL" "PMU_TOP"
 ## 四、导出后先校验，再开项目
 
 ```
-pmukit check <导出的 input.scs> --pmu-inst PMU_TOP
+pmukit check <导出的 input.scs> --pmu-inst PMU_TOP [--vset-param <档位变量名>]
 ```
 
 它会把引脚表打出来：每个引脚的网、角色、源、dc、地，以及**认不出来的引脚和原因**。
@@ -68,7 +74,7 @@ pmukit check <导出的 input.scs> --pmu-inst PMU_TOP
 
 ```
 pmukit new <项目名> --netlist <input.scs> --pmu-inst PMU_TOP \
-    --corners tt,ss,ff --temps -40,25,125 --vset 3 \
+    --corners tt,ss,ff --temps -40,25,125 --vset 3 --vset-param VSET \
     --care-up-to 2e10 \
     --load VDD0P8_A=5e-4,2e-6 --load VDD0P8_B=2e-3,5e-6 \
     --note "RX 模式，寄存器 0x12=0x03"
@@ -84,12 +90,13 @@ pmukit new <项目名> --netlist <input.scs> --pmu-inst PMU_TOP \
 偏置脚上挂的 `VB_` 是电压，而 stub 要发成电流源。stub 按定义不跑仿真，所以这是网表唯一给不出的数。
 不给的话，那个脚会被**弱连而不是驱动**，并在报告里写明 —— 工具不编一个值。
 
-## 五、常见的四个坑
+## 五、常见的五个坑
 
 1. **源挂反了**（轨挂了 vsource / 偏置挂了 isource）→ 报错点名，改 master 即可。
-2. **PDK include 没有 `section=`** → 工具没法生成工艺角，报错时会把当前带 section 的 include 行列给你看。
-3. **引脚名 ≠ 网名**：工具按 PMU 实例的**引脚**报角色，按它连到的**网**找源。两者不同名没关系，
+2. **档位变量名没对上**：`check` 会报 `no parameters <名字>=`，并把网表里声明了的变量列出来，挑对的那个传给 `--vset-param`。
+3. **PDK include 没有 `section=`** → 工具没法生成工艺角，报错时会把当前带 section 的 include 行列给你看。
+4. **引脚名 ≠ 网名**：工具按 PMU 实例的**引脚**报角色，按它连到的**网**找源。两者不同名没关系，
    前缀跟着**引脚名**走（`IL_<引脚名>`）。
-4. **地**：台子里接到 `0` 的那些 PMU 引脚被认成地引脚；哪条轨回哪个地，是从子电路内部的器件图
+5. **地**：台子里接到 `0` 的那些 PMU 引脚被认成地引脚；哪条轨回哪个地，是从子电路内部的器件图
    读出来的（就近原则）。如果网表里没有 PMU 的子电路定义（黑盒 include），工具会**明说**读不到，
    要你在 New 屏指定，而不是瞎配一个。

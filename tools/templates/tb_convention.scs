@@ -9,7 +9,8 @@
 simulator lang=spectre
 
 // ---------------------------------------------------------------- what pmukit rewrites
-parameters VSET=3                              // output code; rewritten per --vset
+parameters VSET=3                              // output code; rewritten per --vset. The NAME is
+                                               // yours -- pass it as --vset-param if not VSET
 include "pdk/toplevel.scs" section=tt          // process corner; rewritten per --corners
 include "pdk/rc.scs"       section=typ         // a second include, for composite corners
 

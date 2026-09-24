@@ -1591,7 +1591,8 @@ class Api:
             plan = pr.plan()
             with pr.ledger() as led:
                 ds = pr.dataset(create=True)
-                report = fn([str(d) for d in dirs], plan, led, ds)
+                report = fn([str(d) for d in dirs], plan, led, ds,
+                            vset_param=pr.config().vset_param)
             job.say("done", 1.0)
             return {"report": report}
 

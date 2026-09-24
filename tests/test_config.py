@@ -92,6 +92,22 @@ def test_edge_s_survives_the_round_trip():
     assert ProjectConfig.from_dict(d).to_dict()["my_load"]["VDD0P8_A"]["edge_s"] == 5e-9
 
 
+def test_vset_param_is_the_designers_name_and_round_trips():
+    cfg = ProjectConfig.from_dict(cfg_dict(vset_param="vout_sel"))
+    assert cfg.vset_param == "vout_sel"
+    assert ProjectConfig.from_dict(cfg.to_dict()).vset_param == "vout_sel"
+    # a config written before the key existed meant VSET, and keeps its sha
+    assert ProjectConfig.from_dict(CONTRACT_0A).vset_param == "VSET"
+    assert "vset_param" not in ProjectConfig.from_dict(CONTRACT_0A).to_dict()
+
+
+@pytest.mark.parametrize("bad", ["", "3vset", "vout sel", "VSET=3", 3])
+def test_vset_param_must_be_a_parameter_name(bad):
+    with pytest.raises(PmuError) as ei:
+        ProjectConfig.from_dict(cfg_dict(vset_param=bad))
+    assert "vset_param" in ei.value.what
+
+
 def test_save_load_round_trip(tmp_path):
     cfg = ProjectConfig.from_dict(CONTRACT_0A)
     p = cfg.save(tmp_path / "config.json")

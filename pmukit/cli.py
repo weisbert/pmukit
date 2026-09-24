@@ -198,18 +198,18 @@ def cmd_new(a) -> int:
         "corners": [c.strip() for c in a.corners.split(",") if c.strip()],
         "temps_c": _num_list(a.temps),
         "vset_codes": _num_list(a.vset, int),
+        "vset_param": a.vset_param,
         "state_note": a.note or "",
         "ports": ports,
         "my_load": my_load,
         "care_up_to_hz": float(a.care_up_to),
         "stub_dc": stub_dc,
     })
+    table.apply_fates(cfg.ports)
+    der = cfgmod.derive(cfg, table, _site())     # before anything is written: it can refuse
     d = paths.ensure_project(a.project)
     cfg.save(d / "config.json")
     cfgmod.ConfigHistory(d / "config_history.json").push(cfg, "created")
-
-    table.apply_fates(cfg.ports)
-    der = cfgmod.derive(cfg, table, _site())
     der.save(d / "derived.json")
 
     unclassified = [p.name for p in table.unclassified()]
@@ -331,9 +331,12 @@ def cmd_check(a) -> int:
     if not any(s for _f, s in nl.includes()):
         problems.append("no `include ... section=` line -- pmukit cannot generate process corners; "
                         "add section=<nominal> to the PDK include")
-    if "VSET" not in nl.parameters():
-        problems.append("no `parameters VSET=<n>` -- pmukit cannot switch output codes; add it if "
-                        "your PMU has one (harmless to omit if it does not)")
+    declared = nl.parameters()
+    if a.vset_param not in declared:
+        problems.append(f"no `parameters {a.vset_param}=<n>` -- pmukit cannot switch output codes. "
+                        "Name the design variable that selects the code with --vset-param "
+                        f"(the netlist declares: {', '.join(sorted(declared)) or 'none'}); "
+                        "harmless if the PMU has no such variable and you run one code")
     if not table.of_role("supply"):
         problems.append("no VS_* supply source -- PSRR cannot be characterized and the bias I-V "
                         "sweep has no upper limit")
@@ -368,7 +371,8 @@ def cmd_check(a) -> int:
         print("\nSee docs/TESTBENCH.md.")
         return 1
     print("\nConvention OK.  Next:")
-    print(f"  {PROG} new <project> --netlist {a.netlist} --pmu-inst {a.pmu_inst} \\")
+    vp = "" if a.vset_param == "VSET" else f" --vset-param {a.vset_param}"
+    print(f"  {PROG} new <project> --netlist {a.netlist} --pmu-inst {a.pmu_inst}{vp} \\")
     print("      --corners tt,ss,ff --temps -40,25,125 --load <rail>=<on_a>,<off_a>")
     return 0
 
@@ -761,7 +765,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pmu-inst", required=True, help="the PMU instance name in the testbench")
     p.add_argument("--corners", default="tt", help="comma separated, e.g. tt,ss,ff")
     p.add_argument("--temps", default="-40,25,125", help="degrees C, comma separated")
-    p.add_argument("--vset", default="0", help="VSET codes, comma separated")
+    p.add_argument("--vset", default="0", help="output codes, comma separated")
+    p.add_argument("--vset-param", default="VSET", metavar="NAME",
+                   help="the design variable that selects the output code, as named in the "
+                        "netlist's `parameters` line (default VSET)")
     p.add_argument("--care-up-to", default="1e9", help="highest frequency you care about, Hz")
     p.add_argument("--load", action="append",
                    help="RAIL=<on_a>,<off_a>[,<edge_s>] -- what YOUR module draws (repeatable)")
@@ -793,6 +800,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("check", help="does this netlist satisfy the convention? (creates nothing)")
     p.add_argument("netlist")
     p.add_argument("--pmu-inst", required=True)
+    p.add_argument("--vset-param", default="VSET", metavar="NAME",
+                   help="the design variable that selects the output code (default VSET)")
     p.set_defaults(fn=cmd_check)
 
     p = sub.add_parser("pins", help="the pin table read out of the testbench")

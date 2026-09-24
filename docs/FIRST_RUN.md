@@ -79,7 +79,7 @@ pmukit site --simulator spectre               # 只在要用 Spectre 时（licen
 | 电源 | 电压源 | `VS_<引脚名>`，dc = 标称 |
 | EN | 电压源 | `VEN_<引脚名>` |
 
-加上 `parameters VSET=<n>` 和一行带 `section=` 的 PDK include。分析语句随意（会被剥掉）。
+加上档位设计变量（`parameters <你的变量名>=<n>`，名字随你，下面用 `--vset-param` 告诉工具）和一行带 `section=` 的 PDK include。分析语句随意（会被剥掉）。
 
 - 懒人路径：`tools/skill/pmukit_tb.il` 能生成这个台子。
   ⚠️ **它在桌面上没跑过**（桌面没有 Virtuoso）。先用 `pmukitPreviewTB` 干跑看一眼要放什么，
@@ -95,7 +95,7 @@ pmukit site --simulator spectre               # 只在要用 Spectre 时（licen
 ## 2. 校验（不创建任何东西，30 秒）
 
 ```tcsh
-pmukit check <input.scs> --pmu-inst <PMU 实例名>
+pmukit check <input.scs> --pmu-inst <PMU 实例名> --vset-param <档位变量名>
 ```
 
 **期望**：引脚表全部认出，结尾 `Convention OK`。
@@ -113,7 +113,7 @@ pmukit check <input.scs> --pmu-inst <PMU 实例名>
 
 ```tcsh
 pmukit new <项目名> --netlist <input.scs> --pmu-inst <实例名> \
-    --corners tt,ss,ff --temps -40,25,125 --vset 3 --care-up-to 2e10 \
+    --corners tt,ss,ff --temps -40,25,125 --vset 3 --vset-param <档位变量名> --care-up-to 2e10 \
     --load <轨名>=<开态电流>,<关态电流> \
     --note "<表征时台子处于什么状态，会印进每个 .va 的溯源头>"
 pmukit plan <项目名>

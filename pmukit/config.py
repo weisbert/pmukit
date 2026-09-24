@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import math
 import pathlib
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from . import jsonio
 from .errors import PmuError
+
+#: A Spectre parameter name, as `vset_param` must be.
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # ---------------------------------------------------------------------------- 0a vocabulary
 FATES = ("model", "stub", "ignore")
@@ -159,6 +163,11 @@ class ProjectConfig:
     #: says so, rather than driving it at an invented level.
     stub_dc: dict = field(default_factory=dict)
     state_note: str = ""
+    #: The name of the design variable that selects the output code -- whatever the designer
+    #: called it (`VSET`, `vout_sel`, `ldo_trim`...). It is rewritten per `vset_codes` as
+    #: `parameters <vset_param>=<code>`. Absent in configs written before it existed, which all
+    #: meant `VSET`.
+    vset_param: str = "VSET"
 
     # ---------------------------------------------------------------- serialization
     @classmethod
@@ -168,7 +177,7 @@ class ProjectConfig:
                        "Contract 0a is a single JSON object with the ten intake keys.",
                        ["Start from the example in docs/CONTRACTS.md section 0a"], where)
         known = {"project", "netlist", "pmu_inst", "corners", "temps_c", "vset_codes",
-                 "ports", "my_load", "care_up_to_hz", "state_note", "stub_dc"}
+                 "vset_param", "ports", "my_load", "care_up_to_hz", "state_note", "stub_dc"}
         unknown = set(d) - known
         if unknown:
             raise _err(f"The project config has unknown key(s): {sorted(unknown)}.",
@@ -200,6 +209,7 @@ class ProjectConfig:
                   pmu_inst=d.get("pmu_inst", ""), corners=corners,
                   temps_c=list(d.get("temps_c") or []),
                   vset_codes=list(d.get("vset_codes") or []),
+                  vset_param=d.get("vset_param", "VSET"),
                   ports=ports, my_load=loads, care_up_to_hz=d.get("care_up_to_hz"),
                   state_note=d.get("state_note", ""),
                   stub_dc={str(k): float(v) for k, v in (d.get("stub_dc") or {}).items()})
@@ -225,6 +235,10 @@ class ProjectConfig:
         # absent, so a config written back out is the config that was read in.
         if self.stub_dc:
             out["stub_dc"] = {str(k): float(v) for k, v in self.stub_dc.items()}
+        # Omitted at its default for the same reason -- and so every config written before the
+        # key existed keeps its sha.
+        if self.vset_param != "VSET":
+            out["vset_param"] = str(self.vset_param)
         return out
 
     @classmethod
@@ -287,7 +301,7 @@ class ProjectConfig:
 
         if not isinstance(self.vset_codes, list) or not self.vset_codes:
             raise _err(f"'vset_codes' is empty ({self.vset_codes!r}).",
-                       "The netlist VSET parameter is rewritten per code; an empty list "
+                       f"The netlist parameter {self.vset_param!r} is rewritten per code; an empty list "
                        "characterizes nothing.",
                        ['Set "vset_codes": [3] (one integer per output code you care about)'], where)
         for v in self.vset_codes:
@@ -295,6 +309,12 @@ class ProjectConfig:
                 raise _err(f"'vset_codes' holds a non-integer ({v!r}).",
                            "VSET is a register code written verbatim into the netlist parameter.",
                            ['Set "vset_codes": [3] -- integers only, not 3.0 or "3"'], where)
+        if not isinstance(self.vset_param, str) or not _IDENT.fullmatch(self.vset_param):
+            raise _err(f"'vset_param' is not a netlist parameter name ({self.vset_param!r}).",
+                       "It names the design variable that selects the output code; pmukit "
+                       "rewrites `parameters <vset_param>=<code>` in the netlist.",
+                       ['Set "vset_param" to the variable as it appears in the netlist '
+                        '`parameters` line, e.g. "VSET" or "vout_sel"'], where)
 
         if not isinstance(self.ports, Mapping) or not self.ports:
             raise _err(f"'ports' is empty or not an object ({self.ports!r}).",
@@ -654,9 +674,23 @@ def derive(cfg: ProjectConfig, pins=None, site=None) -> DerivedConfig:
     }
 
     # -- vset -----------------------------------------------------------------
-    d.vset = {"codes": [int(v) for v in cfg.vset_codes],
-              "provenance": "config.vset_codes -> the netlist VSET parameter is rewritten per code "
-                            "(0b row: VSET)"}
+    name = cfg.vset_param
+    declared = getattr(pins, "params", None)       # a PinTable carries them; a plain dict does not
+    if isinstance(declared, Mapping) and len(cfg.vset_codes) > 1 and name not in declared:
+        # Declaring the missing variable would "work" -- and every code would simulate the same
+        # circuit, because nothing in the PMU reads it. That is a wrong answer, not a warning.
+        have = ", ".join(sorted(declared)) or "(none)"
+        raise _err(f"The netlist has no `parameters {name}=` but {len(cfg.vset_codes)} codes "
+                   f"were asked for.",
+                   f"Each code is produced by rewriting `{name}`; if the design does not read "
+                   "that variable, every code simulates the same circuit.",
+                   [f"Set vset_param to the design variable that selects the output code; the "
+                    f"netlist declares: {have}",
+                    "Or ask for one code only, if this PMU has no output-code variable"],
+                   getattr(cfg, "source_path", "") or "project config (CONTRACTS.md 0a)")
+    d.vset = {"codes": [int(v) for v in cfg.vset_codes], "param": name,
+              "provenance": f"config.vset_codes -> the netlist parameter {name} (config."
+                            f"vset_param) is rewritten per code (0b row: VSET)"}
 
     # -- frequency / noise / grouping (config-only) ---------------------------
     stop_hz = float(cfg.care_up_to_hz)

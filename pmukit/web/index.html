@@ -1032,6 +1032,25 @@ function netlistBody(pins){
     + "rail or bias = <b>stub</b>: the pin stays on the symbol, emitted as an ideal source at its "
     + "DC value, zero runs.</div>";
 }
+function vsetParamPicker(cfg, pins){
+  // The name is the designer's, not pmukit's: offer what the netlist declares, keep a name the
+  // netlist does not declare visible (plan refuses it when more than one code is asked for).
+  var cur = cfg.vset_param || "VSET";
+  var names = Object.keys((pins && pins.params) || {});
+  var act = regAction(function(v){
+    patchConfig("vset_param", (typeof v === "string" ? v : el("vsetparam").value).trim()); });
+  if (!names.length){
+    return '<input class="inp mono" id="vsetparam" style="width:120px" value="' + esc(cur) + '">'
+      + '<button class="btn sm" data-act="' + act + '">Set</button>';
+  }
+  if (names.indexOf(cur) < 0) names.unshift(cur);
+  return '<select class="inp mono" id="vsetparam" data-change="' + act + '">'
+    + names.map(function(n){
+        var val = (pins.params || {})[n];
+        return '<option value="' + esc(n) + '"' + (n === cur ? " selected" : "") + ">" + esc(n)
+          + (val === undefined ? "  (not in netlist)" : " = " + esc(val)) + "</option>";
+      }).join("") + "</select>";
+}
 function threeQuestions(cfgd, pins){
   var cfg = cfgd.config;
   if (!cfg){
@@ -1082,13 +1101,16 @@ function threeQuestions(cfgd, pins){
     + '<div class="rowflex"><span class="hint" style="width:66px">temp C</span>'
     + chips(kt.concat(cfg.temps_c.filter(function(t){ return kt.indexOf(t) < 0; })).map(String),
             cfg.temps_c.map(String), "temps_c") + "</div>"
-    + '<div class="rowflex"><span class="hint" style="width:66px">VSET</span>'
+    + '<div class="rowflex"><span class="hint" style="width:66px">code var</span>'
+    + vsetParamPicker(cfg, pins)
+    + '<span class="hint">the design variable that selects the output code; rewritten as '
+    + '<span class="mono">parameters ' + esc(cfg.vset_param || "VSET") + '=&lt;code&gt;</span></span></div>'
+    + '<div class="rowflex"><span class="hint" style="width:66px">codes</span>'
     + '<input class="inp mono" id="vsetinp" style="width:92px" value="' + esc(cfg.vset_codes.join(",")) + '">'
     + '<button class="btn sm" data-act="' + regAction(function(){
         patchConfig("vset_codes", el("vsetinp").value.split(",").map(function(s){
           return parseInt(s.trim(), 10); }).filter(function(n){ return !isNaN(n); }));
-      }) + '">Set</button>'
-    + '<span class="hint">from <span class="mono">parameters VSET=</span></span></div></div>'
+      }) + '">Set</button></div></div>'
     + '<div class="field"><span class="lbl">2 &middot; What your block draws from each rail'
     + '<span class="q" title="On/off currents set the characterization grid (off, 0.2x on, on, 2x on). Switches = your block turns on and off during simulation.">?</span></span>'
     + (railRows ? '<table class="t"><thead><tr><th>Rail</th><th>On</th><th>Off</th>'

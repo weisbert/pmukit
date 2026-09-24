@@ -25,6 +25,7 @@
   "corners": ["tt", "ss", "ff"],
   "temps_c": [-40, 25, 125],
   "vset_codes": [3],
+  "vset_param": "VSET",
   "state_note": "RX 模式，寄存器 0x12=0x03",
   "ports": {"VDD0P8_A": "model", "VDD0P8_B": "model", "VDD0P8_C": "stub", "IB_PTAT": "model", "IB_POLY": "model", "TESTMODE": "ignore"},
   "my_load": {
@@ -51,7 +52,7 @@
 | 每个偏置引脚上一个电压源 | `VB_<引脚名>`，dc = 该脚工作电压 | 这是电流偏置；顺从电压 |
 | 每个电源引脚上一个电压源 | `VS_<引脚名>`，dc = 标称电源 | 这是电源；标称值 |
 | EN 引脚上一个电压源（若有） | `VEN_<引脚名>` | 有 EN；要表征上电 |
-| 输出档位 | 设计变量 `parameters VSET=<n>` | 程序按 `vset_codes` 逐档改写 |
+| 输出档位 | 设计变量 `parameters <变量名>=<n>`，变量名是设计者自己起的，写进 `vset_param`（缺省 `VSET`） | 程序按 `vset_codes` 逐档改写 |
 | PDK include 行 | 带 `section=<角>` | 程序按 `corners` 改写生成各角网表 |
 | 地 | 每个引脚接的地网直接从连线读 | 分地 |
 | 分析语句 | 可有可无 | 程序全部剥掉，自己写 |
@@ -217,6 +218,6 @@ $PMUKIT_DATA/<project>/deliver/<stamp>/
 ## 已确认（2026-09-15）
 
 1. 交付形式：corner 设置靠模型文件的 `section` 切工艺角 → 契约 4 的 `.scs` 库形式成立。
-2. `vset` 用档位号；网表里由设计变量 `VSET` 控制输出电压，程序直接改写。
+2. `vset` 用档位号；网表里由一个设计变量控制输出电压，程序直接改写。变量名由设计者定（2026-09-24 更正：原先写死 `VSET`），配置里 `vset_param` 指定；要跑多个档而网表里没声明这个变量时，程序拒绝（否则每档跑的是同一个电路）。
 3. 源前缀 `IL_`/`VB_`/`VS_`/`VEN_` 接受；配 schematic 模板。
 4. 工艺角由工具改 PDK include 行生成；用户只导一份网表。
