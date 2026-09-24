@@ -715,12 +715,14 @@ class Project:
         local = self.netlist_dir / "input.scs"
         if local.is_file():
             return local
-        raise _err(f"{self.name} has no netlist yet.",
-                   "Every screen below New reads the pin roles out of one Spectre netlist; none "
-                   "has been loaded for this project.",
-                   ["Drop an input.scs on the New screen",
-                    "Or type its path on this machine in the box on the New screen"],
-                   str(self.netlist_dir / "input.scs"))
+        # `empty`: a new project's first step, not a failure -- the page shows it as such
+        raise PmuError(what=f"{self.name} has no netlist yet.",
+                       why="Every screen below New reads the pin roles out of one Spectre "
+                           "netlist; none has been loaded for this project.",
+                       do=["Drop an input.scs on the New screen",
+                           "Or type its path on this machine in the box on the New screen"],
+                       where=str(self.netlist_dir / "input.scs"),
+                       extra={"empty": "no_netlist"})
 
     @property
     def source_meta_path(self) -> pathlib.Path:
@@ -930,6 +932,21 @@ def guess_pmu_inst(nl) -> str:
             "Or re-export the netlist with the PMU subckt in it"],
         where=f"{nl.path or 'netlist'}: top-level instances",
         extra={"candidates": cands})
+
+
+def _one_rail(measured: dict, rail: str, where: str) -> dict:
+    """measure-load narrowed to one rail -- or why that rail has nothing to measure."""
+    rails = measured.get("rails") or {}
+    if rail not in rails:
+        have = ", ".join(sorted(rails)) or "none"
+        raise _err(f"{rail} has no load current in the netlist to measure.",
+                   "The ON current is read from the dc of the rail's IL_ source; this rail has "
+                   "no IL_ source with a dc value, or it is not a modeled rail. Rails that "
+                   f"have one: {have}.",
+                   [f"Give it one in the bench, e.g. `IL_{rail} ({rail} 0) isource dc=500u`, "
+                    "and re-read the netlist",
+                    "Or type the on and off currents into its row by hand"], where)
+    return {"rails": {rail: rails[rail]}, "biases": {}}
 
 
 def _inst_gone(nl, inst: str) -> PmuError:
@@ -1992,22 +2009,28 @@ class Api:
         out["undoable"] = st.undoable()
         return out
 
-    def measure_load(self, project: str) -> dict:
+    def measure_load(self, project: str, body: dict | None = None) -> dict:
         """Read what the netlist already says about each rail's load, and say where it came from.
 
         The ON current is a measurement -- the dc of the IL_ source. The OFF current is NOT in
         the netlist, so it is offered as a suggestion and labelled as one; pmukit does not invent
         a number and then present it as measured.
+
+        `rail` in the body narrows the answer to that one rail (the New screen's per-row button:
+        measuring one rail must not overwrite the numbers just typed for the others). Without
+        it every modeled rail and bias is answered, as before.
         """
+        rail = str((body or {}).get("rail") or "").strip()
         if self.demo:
-            return {"rails": {"VDD0P8_A": {"on_a": 5e-4, "on_from": "IL_VDD0P8_A dc=500u",
-                                           "off_a_suggested": 2e-6,
-                                           "off_note": "not in the netlist -- you set it"},
-                              "VDD0P8_B": {"on_a": 2e-3, "on_from": "IL_VDD0P8_B dc=2m",
-                                           "off_a_suggested": 8e-6,
-                                           "off_note": "not in the netlist -- you set it"}},
-                    "biases": {"IB_PTAT": {"compliance_v": 0.4, "from": "VB_IB_PTAT dc=0.4"},
-                               "IB_POLY": {"compliance_v": 0.4, "from": "VB_IB_POLY dc=0.4"}}}
+            out = {"rails": {"VDD0P8_A": {"on_a": 5e-4, "on_from": "IL_VDD0P8_A dc=500u",
+                                          "off_a_suggested": 2e-6,
+                                          "off_note": "not in the netlist -- you set it"},
+                             "VDD0P8_B": {"on_a": 2e-3, "on_from": "IL_VDD0P8_B dc=2m",
+                                          "off_a_suggested": 8e-6,
+                                          "off_note": "not in the netlist -- you set it"}},
+                   "biases": {"IB_PTAT": {"compliance_v": 0.4, "from": "VB_IB_PTAT dc=0.4"},
+                              "IB_POLY": {"compliance_v": 0.4, "from": "VB_IB_POLY dc=0.4"}}}
+            return _one_rail(out, rail, "the demo netlist") if rail else out
         pr = Project(project, self.root)
         table = pr.pins()
         cfg = pr.config_or_none()
@@ -2024,6 +2047,8 @@ class Api:
             elif pin.role == "bias" and pin.dc is not None:
                 biases[name] = {"compliance_v": float(pin.dc),
                                 "from": f"{pin.src} dc={_eng(pin.dc, 'V')}"}
+        if rail:
+            return _one_rail({"rails": rails, "biases": biases}, rail, str(pr.netlist_path()))
         if not rails and not biases:
             raise _err("no rail or bias carries a dc value in this netlist.",
                        "The load numbers are read from the dc of the IL_ sources; none of them "
@@ -3819,7 +3844,7 @@ def _r_undo(api, h, a, q, b):
 
 @route("POST", r"/api/p/<project>/measure-load")
 def _r_measure(api, h, a, q, b):
-    return api.measure_load(a["project"])
+    return api.measure_load(a["project"], b)
 
 
 # ---- Plan

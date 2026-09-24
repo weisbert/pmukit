@@ -92,7 +92,10 @@ table.t{width:100%;border-collapse:collapse;font-size:12.5px}
 .lbl{font-size:10.5px;font-weight:600;color:var(--ink2);letter-spacing:.05em;text-transform:uppercase}
 .inp{height:28px;border:1px solid var(--line3);border-radius:4px;padding:0 8px;font:inherit;background:var(--panel);color:var(--ink)}
 .hint{color:var(--ink3);font-size:12px}
-.foot{min-height:50px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 16px;background:var(--panel);border-top:1px solid var(--line);flex:none;flex-wrap:wrap}
+.inp.bad{border-color:var(--bad);background:var(--bad-bg)}
+.fielderr{color:var(--bad);font-size:12px}
+/* the screen's actions stay on screen however long the screen is (Model scrolls) */
+.foot{min-height:50px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 16px;background:var(--panel);border-top:1px solid var(--line);flex:none;flex-wrap:wrap;position:sticky;bottom:0;z-index:5}
 .stat{display:flex;flex-direction:column;gap:2px;padding:0 16px 0 0;margin-right:16px;border-right:1px solid var(--line2)}
 .stat:last-child{border-right:0}
 .stat .v{font-family:var(--mono);font-size:19px;font-weight:600;line-height:1.1}
@@ -189,10 +192,12 @@ var S = {
   data: {},          /* cache key -> payload                                */
   loading: {},       /* cache key -> true while in flight                   */
   slow: {},          /* cache key -> true after 2 s (the "what is happening")*/
+  failed: {},        /* cache key -> {screen, status, error}: not asked again */
   errs: {},          /* screen   -> {status, error, retry}                  */
   sel: {},           /* per-screen selections                               */
   menu: null,
   help: null,
+  note: null,        /* {title, lines}: an explanation popover, not a dialog    */
   palette: false,
   job: null,         /* {job, status, message, progress, title}             */
   undoable: "",
@@ -261,6 +266,68 @@ function copy(text){
     document.body.removeChild(ta);
   }
 }
+/* A file the browser saves (Downloads), built in the page: no round trip, no clipboard. */
+function download(name, text, mime){
+  var url = URL.createObjectURL(new Blob([text], { type: mime || "text/plain" }));
+  var a = document.createElement("a");
+  a.href = url; a.download = name; a.style.display = "none";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+  S.toast = "saved " + name; render();
+  setTimeout(function(){ S.toast = ""; render(); }, 1800);
+}
+function csvCell(v){
+  var s = String(v === null || v === undefined ? "" : v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+/* Typed numbers. Engineering suffixes as Spectre writes them plus the page's own display
+   (M = mega, as eng() prints it; m = milli; meg = mega too), an optional unit after it. A
+   token that is not a number is named back to the user -- never read as 0, never dropped. */
+var ENG_MULT = { T:1e12, G:1e9, M:1e6, meg:1e6, k:1e3, "":1, m:1e-3, u:1e-6, "µ":1e-6,
+                 n:1e-9, p:1e-12, f:1e-15 };
+function readEng(text, unit, what){
+  var t = String(text === null || text === undefined ? "" : text).trim();
+  if (!t) return { bad: "type " + (what || "a value") + " first" };
+  var m = t.match(/^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*(meg|Meg|MEG|[TGMkmunpfµ])?\s*([A-Za-z]*)$/);
+  if (!m || (m[3] && (!unit || m[3].toLowerCase() !== unit.toLowerCase()))){
+    return { bad: '"' + t + '" is not ' + (what || "a number") + (unit ? " in " + unit : "")
+                  + ": write e.g. " + (unit === "Hz" ? "20G or 2e10" : unit === "A" ? "500u or 5e-4" : "0.4 or 400m") };
+  }
+  var mult = ENG_MULT[m[2] ? (/^meg$/i.test(m[2]) ? "meg" : m[2]) : ""];
+  return { v: parseFloat(m[1]) * mult };
+}
+/* A list of integer codes, "1, 3 5": every token must be an integer, and the first that is not
+   is the one named. */
+function readInts(text, what){
+  var toks = String(text || "").split(/[\s,;]+/).filter(function(x){ return x !== ""; });
+  if (!toks.length) return { bad: "type at least one " + (what || "value") + ", e.g. 3 or 1,3,5" };
+  var out = [];
+  for (var i = 0; i < toks.length; i++){
+    if (!/^[-+]?\d+$/.test(toks[i])){
+      return { bad: '"' + toks[i] + '" is not an integer ' + (what || "value") + " (codes are whole numbers, e.g. 1,3,5)" };
+    }
+    var n = parseInt(toks[i], 10);
+    if (out.indexOf(n) < 0) out.push(n);
+  }
+  return { v: out };
+}
+/* What was typed into a box and not saved yet survives a re-render (data-keep="<key>"); this is
+   the value the box shows: the typing if there is any, else what is saved. */
+function typed(key, saved){ return S.sel[key] !== undefined ? S.sel[key] : saved; }
+function dropTyped(prefix){
+  Object.keys(S.sel).forEach(function(k){ if (k.indexOf(prefix) === 0) delete S.sel[k]; });
+  Object.keys(S.sel.bad || {}).forEach(function(k){ if (k.indexOf(prefix) === 0) delete S.sel.bad[k]; });
+}
+/* The inline message next to a field; "" when the field is fine. */
+function badMsg(key){
+  var b = (S.sel.bad || {})[key];
+  return b ? '<span class="fielderr" role="alert">' + ICON.x + " " + esc(b) + "</span>" : "";
+}
+function badCls(key){ return (S.sel.bad || {})[key] ? " bad" : ""; }
+function setBad(key, msg){
+  S.sel.bad = S.sel.bad || {};
+  if (msg) S.sel.bad[key] = msg; else delete S.sel.bad[key];
+}
 /* Five states, not four. "fitted" is what a block is before `verify` has judged it against a
    limit: it was measured and fitted, and that is all anyone can honestly say yet. It gets its
    own neutral colour so it can never be mistaken for a pass. */
@@ -308,28 +375,50 @@ function api(path, opts){
 }
 
 /* A cached GET tied to a screen. Renders skeletons while in flight, a four-part error on
-   failure, and marks the request "slow" after 2 s so the screen can say what it is doing. */
+   failure, and marks the request "slow" after 2 s so the screen can say what it is doing.
+   A failure is remembered per key and NOT asked again on the next render -- every render
+   would otherwise re-request it (hundreds a second) and rebuild the page under the cursor.
+   It is asked again only when the user acts: Try again, going to a screen, a reload, or a
+   forget() by whatever changed the answer (a netlist load, a saved config). */
 function need(key, path, screen){
   if (S.data[key] !== undefined || S.loading[key]) return S.data[key];
+  if (S.failed[key]){
+    if (!S.errs[screen]) S.errs[screen] = failErr(key, screen);   /* still unresolved: say so */
+    return undefined;
+  }
   S.loading[key] = true;
   var timer = setTimeout(function(){ S.slow[key] = true; render(); }, 2000);
   api(path).then(function(d){
     clearTimeout(timer);
     S.loading[key] = false; S.slow[key] = false; S.data[key] = d;
+    delete S.failed[key];
     if (S.errs[screen] && S.errs[screen].key === key) delete S.errs[screen];
     render();
   }, function(e){
     clearTimeout(timer);
     S.loading[key] = false; S.slow[key] = false;
-    S.errs[screen] = { status: e.status, error: e.error, key: key,
-                       retry: function(){ delete S.data[key]; delete S.errs[screen]; render(); } };
+    S.failed[key] = { screen: screen, status: e.status, error: e.error };
+    /* an error an action put up (a refused netlist, say) stays: it names what was tried */
+    if (!S.errs[screen] || S.errs[screen].key) S.errs[screen] = failErr(key, screen);
     render();
   });
   return undefined;
 }
+function failErr(key, screen){
+  var f = S.failed[key];
+  return { status: f.status, error: f.error, key: key,
+           retry: function(){ unfail(screen); delete S.data[key]; delete S.errs[screen]; render(); } };
+}
+/* Forget the failures of one screen (all of them, or every screen): the next render asks again. */
+function unfail(screen){
+  Object.keys(S.failed).forEach(function(k){
+    if (!screen || S.failed[k].screen === screen) delete S.failed[k];
+  });
+}
 function forget(prefix){
   Object.keys(S.data).forEach(function(k){ if (k.indexOf(prefix) === 0) delete S.data[k]; });
   Object.keys(S.loading).forEach(function(k){ if (k.indexOf(prefix) === 0) delete S.loading[k]; });
+  Object.keys(S.failed).forEach(function(k){ if (k.indexOf(prefix) === 0) delete S.failed[k]; });
 }
 function P(){ return encodeURIComponent(S.project); }
 
@@ -413,7 +502,7 @@ var VERBS = {
   ],
   rail: [
     { id:"measure", label:"Measure on / off from the netlist", common:true,
-      run:function(){ measureLoad(); } },
+      run:function(c){ measureLoad(c.row.name); } },
     { id:"sw", label:function(c){ return c.row.switches ? "Static load only (no load-EN)"
                                                         : "Characterize load-EN on/off"; },
       run:function(c){ toggleSwitch(c.row.name); } },
@@ -442,7 +531,11 @@ var VERBS = {
       run:function(c){ S.sel.planRun = c.row.run_id; forget("recipe:"); render(); } },
     { id:"copyid", label:"Copy run id", key:"id", run:function(c){ copy(c.row.run_id); } },
     { sep:true },
-    { id:"why", label:"Why this run exists", run:function(c){ alertWhy(c.row.why); } }
+    { id:"why", label:"Why this run exists",
+      run:function(c){ explain("Why run " + String(c.row.run_id || "").slice(0, 10) + " exists",
+        [c.row.why, [c.row.process, c.row.temp_c === null || c.row.temp_c === undefined ? "" : c.row.temp_c + " C",
+                     c.row.vset === undefined ? "" : "VSET " + c.row.vset, c.row.load_label || ""]
+                    .filter(function(x){ return x !== ""; }).join(" · ")]); } }
   ],
   run: [
     { id:"detail", label:"Show details", common:true,
@@ -478,7 +571,13 @@ var VERBS = {
     { id:"copy", label:"Copy the numbers",
       run:function(c){ copy(JSON.stringify(c.row, null, 1)); } },
     { sep:true },
-    { id:"explain", label:"What is this block", run:function(c){ alertWhy(c.row.metric || c.row.name); } }
+    { id:"explain", label:"What is this block",
+      run:function(c){ var b = c.row;
+        explain("Block " + b.name, [b.metric ? "Scored by " + b.metric + "." : "",
+          b.value !== undefined && b.value !== null ? "Model vs ground truth: " + b.value
+            + (b.limit !== undefined && b.limit !== null ? " (limit " + b.limit + ")" : "") : "",
+          b.load ? "At load " + b.load + "." : "",
+          b.grade ? "Grade: " + gradeLabel(b.grade) + "." : ""].concat(b.notes || [])); } }
   ],
   chart: [
     { id:"csv", label:"Copy the data as CSV", common:true, run:function(c){ copy(curveCsv(c.curve)); } },
@@ -558,6 +657,7 @@ function go(screen){
   if (screen === "settings" && S.screen !== "settings") S.prev = S.screen;
   S.screen = screen;
   delete S.errs[screen];
+  unfail();                 /* going somewhere is asking again, once */
   if (S.project && !S.demo && screen !== "settings"){
     api("/api/state/" + P(), { method:"PUT", body:{ screen: screen } }).then(function(){}, function(){});
   }
@@ -566,7 +666,7 @@ function go(screen){
 }
 function openProject(name, screen){
   S.project = name;
-  S.data = {}; S.loading = {}; S.errs = {}; S.sel = {};
+  S.data = {}; S.loading = {}; S.failed = {}; S.errs = {}; S.sel = {};
   go(screen || "new");
 }
 /* New project: the name field in the Home footer. This fills and focuses it; Enter or the
@@ -610,7 +710,7 @@ function render(){
      landing must not steal the name being typed). */
   var ae = document.activeElement;
   var keep = ae && ae.getAttribute && ae.getAttribute("data-keepfocus") ? ae.id : "";
-  var caret = keep ? ae.selectionStart : 0;
+  var caret = keep ? ae.selectionStart : 0, caretEnd = keep ? ae.selectionEnd : 0;
   ACTS = {}; CTXS = {};
   renderNav();
   var sc = SCREENS[S.screen] || SCREENS.home;
@@ -620,22 +720,24 @@ function render(){
   renderOverlays();
   wire();
   var kn = keep ? el(keep) : null;
-  if (kn && kn.focus){ kn.focus(); try { kn.setSelectionRange(caret, caret); } catch(e){ /* not a text field */ } }
+  if (kn && kn.focus){ kn.focus(); try { kn.setSelectionRange(caret, caretEnd); } catch(e){ /* not a text field */ } }
 }
 function renderNav(){
   var steps = STEPS.map(function(s, i){
     var cur = S.screen === s[2];
     var idx = STEPS.map(function(x){ return x[2]; }).indexOf(S.screen);
     var cls = cur ? "step cur" : (idx > i ? "step done" : "step");
-    return '<button class="' + cls + '" data-go="' + s[2] + '" title="key ' + s[0] + '">'
-         + '<span class="n">' + s[0] + "</span><span>" + s[1] + "</span></button>";
+    /* the accessible name is the screen's name; the digit is the shortcut, said in the title */
+    return '<button class="' + cls + '" data-go="' + s[2] + '" aria-label="' + s[1] + '"'
+         + (cur ? ' aria-current="page"' : "") + ' title="' + s[1] + " (key " + s[0] + ')">'
+         + '<span class="n" aria-hidden="true">' + s[0] + "</span><span>" + s[1] + "</span></button>";
   }).join("");
   var extra = "";
   if (S.screen === "digest") extra = '<span class="badge b-acc">4b Copy for desk</span>';
   if (S.screen === "states") extra = '<span class="badge b-mute">reference sheet</span>';
   if (S.screen === "settings") extra = '<span class="badge b-mute">this machine, every project</span>';
   el("nav").innerHTML =
-      '<button class="brand" data-go="home" title="Home: every project (key 0)">pmukit</button>'
+      '<button class="brand" data-go="home" aria-label="pmukit Home" title="Home: every project (key 0)">pmukit</button>'
     + '<span class="proj">' + esc(S.project || "no project") + (S.demo ? " &middot; demo" : "") + "</span>"
     + '<div class="steps">' + steps + "</div>"
     + '<div class="navr">' + extra
@@ -684,6 +786,15 @@ function renderOverlays(){
         + "</div></div>"
         + '<div class="hint">The same text: <span class="mono">pmukit help ' + esc(h.screen || "") + "</span>. "
         + "Every error carries four parts: what happened, why, what to do, where to look.</div>"
+        + "</div></div>";
+  }
+  if (S.note){
+    /* an explanation in the page, not a browser dialog: nothing blocks, Esc or Close shuts it */
+    out += '<div class="help" role="dialog" aria-label="' + esc(S.note.title) + '"><div class="ph"><span>'
+        + esc(S.note.title) + '</span><button class="btn sm" data-close="note">Close &middot; Esc</button></div>'
+        + '<div class="pb" style="display:flex;flex-direction:column;gap:6px">'
+        + (S.note.lines || []).map(function(l){
+            return '<div style="line-height:1.5">' + esc(l) + "</div>"; }).join("")
         + "</div></div>";
   }
   if (S.palette){
@@ -746,6 +857,7 @@ function wire(){
       var w = n.getAttribute("data-close");
       if (w === "menu") S.menu = null;
       if (w === "help") S.help = null;
+      if (w === "note") S.note = null;
       if (w === "palette"){ S.palette = false; S.paletteQ = ""; }
       render();
     };
@@ -803,6 +915,13 @@ function errBlock(screen, pick){
     var id = regAction(function(){ doAction(d, e); });
     return '<button class="btn sm" data-act="' + id + '">' + esc(d) + "</button>";
   }).join(" ");
+  if (er.empty){
+    /* "nothing here yet" (no netlist loaded, say) is the first step, not a failure: no red, no
+       status code, just what is missing and the button that fills it */
+    return '<div class="callout" style="margin-bottom:12px"><div class="rowflex"><b>'
+         + esc(er.what || "") + '</b><span class="rowflex">' + dos + "</span></div>"
+         + (pick ? '<div class="rowflex" style="margin-top:6px">' + pick + "</div>" : "") + "</div>";
+  }
   var rid = regAction(function(){ if (e.retry) e.retry(); });
   return '<div class="err"><div class="t">' + ICON.x + " " + esc(er.what || "something failed")
        + (e.status ? ' <span class="badge b-bad">' + e.status + "</span>" : "") + "</div>"
@@ -841,7 +960,13 @@ function jobBlock(){
        + (j.status === "running" ? "" : '<button class="btn sm" data-act="' + id + '">Dismiss</button>')
        + "</div>";
 }
-function alertWhy(text){ window.alert(String(text || "")); }
+/* "Why this run exists", "What is this block": a small panel on the page, never a browser
+   dialog (it blocks the page and every automation driving it). */
+function explain(title, lines){
+  S.note = { title: title, lines: (lines || []).filter(function(l){ return l; }).map(String) };
+  if (!S.note.lines.length) S.note.lines = ["pmukit has no explanation recorded for this."];
+  render();
+}
 
 /* ------------------------------------------------------------- CLI echo -- */
 function cliState(){
@@ -944,9 +1069,9 @@ SCREENS.home = {
         : '<div class="hint">Click a project row. Right-click it for every verb.</div>',
       { style: "flex:none" });
     var diff = panel("Compare two deliverables", "same project, two stamps",
-      '<div class="rowflex"><input class="inp mono" id="diffa" style="width:230px" placeholder="project/stamp" value="'
+      '<div class="rowflex"><input class="inp mono" id="diffa" data-keep="diffA" data-keepfocus="1" style="width:230px" placeholder="project/stamp" value="'
       + esc(S.sel.diffA || "") + '"><span class="hint">vs</span>'
-      + '<input class="inp mono" id="diffb" style="width:230px" placeholder="project/stamp" value="'
+      + '<input class="inp mono" id="diffb" data-keep="diffB" data-keepfocus="1" style="width:230px" placeholder="project/stamp" value="'
       + esc(S.sel.diffB || "") + '">'
       + '<button class="btn" data-act="' + regAction(function(){
           var a = el("diffa").value, b = el("diffb").value;
@@ -1006,16 +1131,24 @@ SCREENS.new = {
   },
   main: function(){
     if (!S.project) return noProject();
-    /* need() asks again for whatever is missing on every render. While New shows an error and
-       has no pin table, the pins wait for Try again, a load or a pick: asking at once would loop
-       on a refused read and replace the error being shown (the path that was tried, say). */
-    var hold = !!S.errs.new && S.data["pins"] === undefined;
-    var pins = hold ? undefined : need("pins", "/api/p/" + P() + "/pins", "new");
+    /* The netlist row first: it says whether there is a netlist at all. A new project has none,
+       and that is the first step, not an error -- the pins are not even asked for. A refused
+       read is asked once (need() remembers the failure) and waits for Try again, a load or a
+       pick; an error an action put up (the path that was tried, say) is not replaced. */
+    var src = need("netlistsrc", "/api/p/" + P() + "/netlist", "new");
+    var noNetlist = !!(src && !src.copy);
+    var pins = noNetlist || (src === undefined && !S.failed["netlistsrc"]) ? undefined
+             : need("pins", "/api/p/" + P() + "/pins", "new");
     var cfgd = need("config", "/api/p/" + P() + "/config", "new");
-    var src = S.errs.new && S.errs.new.key === "netlistsrc" ? undefined
-            : need("netlistsrc", "/api/p/" + P() + "/netlist", "new");
     var left;
-    if (S.errs.new && !pins){
+    if (noNetlist && !pins){
+      left = panel("Netlist", "step 1 &middot; load the testbench netlist",
+        (src.source ? '<div class="kv" style="margin-bottom:12px">' + netlistSourceKv(src) + "</div>"
+         : '<div class="hint" style="margin-bottom:10px">This project has no netlist yet. Export the '
+           + "testbench from ADE (one file, at the nominal corner) and load it here; everything "
+           + "else on this screen is read from it.</div>")
+        + dropZone(src), { style:"flex:1" });
+    } else if (S.errs.new && !pins){
       /* The pins could not be read: say where the file came from, so the fixed bench is one
          click away, and keep every way of loading another one open. */
       left = panel("Netlist", "one file, exported at the nominal corner",
@@ -1073,7 +1206,7 @@ function dropZone(info){
        + '">Choose a file</button></div>'
        + '<div class="rowflex" style="width:100%;max-width:640px;justify-content:center">'
        + '<span class="hint">or its path on this machine</span>'
-       + '<input class="inp mono" id="nlpath" style="flex:1;min-width:240px" data-keep="nlpath"'
+       + '<input class="inp mono" id="nlpath" style="flex:1;min-width:240px" data-keep="nlpath" data-keepfocus="1"'
        + ' data-enter="' + byPath + '" placeholder="$WORK_ROOT/.../netlist/input.scs" value="' + esc(typed) + '">'
        + '<button class="btn" data-act="' + byPath + '">Load</button></div>'
        + '<div class="hint">~ and $VARIABLES expand on the server; a relative path is read from '
@@ -1164,17 +1297,21 @@ function roleAskBlock(){
   var unit = a.role === "rail" ? "A, typical load current" : "V, compliance / level";
   var go1 = regAction(function(v){
     var txt = typeof v === "string" ? v : (el("roledc") || {}).value;
-    S.sel.roleAsk = null;
-    setPin(a.pin, { role: a.role, dc: parseEng(txt) });
+    var r = readEng(txt, a.role === "rail" ? "A" : "V", a.role === "rail" ? "a current" : "a voltage");
+    setBad("in:roledc", r.bad);
+    if (r.bad){ S.sel["in:roledc"] = txt; render(); return; }
+    S.sel.roleAsk = null; dropTyped("in:roledc");
+    setPin(a.pin, { role: a.role, dc: r.v });
   });
-  var cancel = regAction(function(){ S.sel.roleAsk = null; render(); });
+  var cancel = regAction(function(){ S.sel.roleAsk = null; dropTyped("in:roledc"); render(); });
   return '<div class="callout" style="margin-bottom:10px"><div class="rowflex">'
     + "<b>Set " + esc(a.pin) + " as " + esc(a.role) + "</b>"
     + '<span class="hint">DC (' + unit + ")</span>"
-    + '<input class="inp mono" id="roledc" style="width:92px" data-enter="' + go1 + '" value="'
-    + (a.role === "rail" ? "500u" : a.role === "bias" ? "0.4" : "1") + '">'
+    + '<input class="inp mono' + badCls("in:roledc") + '" id="roledc" style="width:92px" data-keep="in:roledc"'
+    + ' data-keepfocus="1" data-enter="' + go1 + '" value="'
+    + esc(typed("in:roledc", a.role === "rail" ? "500u" : a.role === "bias" ? "0.4" : "1")) + '">'
     + '<button class="btn sm pri" data-act="' + go1 + '">Write ' + esc(pre + a.pin) + " into the netlist</button>"
-    + '<button class="btn sm" data-act="' + cancel + '">Cancel</button></div>'
+    + '<button class="btn sm" data-act="' + cancel + '">Cancel</button>' + badMsg("in:roledc") + "</div>"
     + '<div class="hint" style="margin-top:6px">This edits pmukit\'s working copy. Add the same source to '
     + "the bench in Virtuoso too, or the next re-read of a changed export will not have it.</div></div>";
 }
@@ -1207,7 +1344,7 @@ function netlistBody(pins, info){
     + '<span>cell <span class="mono">' + esc(pins.pmu_master) + "</span> &middot; "
     + (pins.pins || []).length + " pins</span></span>"
     + '<span class="k">PDK includes</span><span class="mono">'
-    + esc(Object.keys(pins.sections || {}).map(function(k){ return k + " section=" + pins.sections[k]; }).join(" &middot; ") || "-")
+    + esc(Object.keys(pins.sections || {}).map(function(k){ return k + " section=" + pins.sections[k]; }).join(" · ") || "-")
     + "</span>"
     + '<span class="k">Parameters</span><span class="mono">'
     + esc(Object.keys(pins.params || {}).map(function(k){ return k + "=" + pins.params[k]; }).join(" ") || "-") + "</span>"
@@ -1235,10 +1372,18 @@ function vsetParamPicker(cfg, pins){
   var cur = cfg.vset_param || "VSET";
   var names = Object.keys((pins && pins.params) || {});
   var act = regAction(function(v){
-    patchConfig("vset_param", (typeof v === "string" ? v : el("vsetparam").value).trim()); });
+    var name = String(typeof v === "string" ? v : el("vsetparam").value).trim();
+    var bad = !name ? "type the name of the design variable, e.g. VSET"
+            : /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? ""
+            : '"' + name + '" is not a netlist parameter name (letters, digits and _, not starting with a digit)';
+    setBad("in:vsetparam", bad);
+    if (bad){ S.sel["in:vsetparam"] = name; render(); return; }
+    patchConfig("vset_param", name, "in:vsetparam"); });
   if (!names.length){
-    return '<input class="inp mono" id="vsetparam" style="width:120px" value="' + esc(cur) + '">'
-      + '<button class="btn sm" data-act="' + act + '">Set</button>';
+    return '<input class="inp mono' + badCls("in:vsetparam") + '" id="vsetparam" style="width:120px"'
+      + ' data-keep="in:vsetparam" data-keepfocus="1" data-enter="' + act + '" value="'
+      + esc(typed("in:vsetparam", cur)) + '">'
+      + '<button class="btn sm" data-act="' + act + '">Set</button>' + badMsg("in:vsetparam");
   }
   if (names.indexOf(cur) < 0) names.unshift(cur);
   return '<select class="inp mono" id="vsetparam" data-change="' + act + '">'
@@ -1271,23 +1416,48 @@ function threeQuestions(cfgd, pins){
            + rc("corner", key + " " + v, ctx) + ">" + esc(v) + "</button>";
     }).join(" ");
   };
+  var save = regAction(function(){ saveLoadsFromInputs(); });
+  var loadBox = function(r, k, val){
+    var key = "in:load:" + r + ":" + k;
+    return '<input class="inp mono' + badCls(key) + '" style="width:92px;height:24px" id="ld-' + esc(r) + "-" + k
+      + '" data-load="' + esc(r) + '" data-k="' + k + '" data-keep="' + esc(key) + '" data-keepfocus="1"'
+      + ' data-enter="' + save + '" aria-label="' + esc(r) + (k === "on_a" ? " on" : " off") + ' current"'
+      + ' value="' + esc(typed(key, eng(val, "A"))) + '">';
+  };
   var railRows = Object.keys(cfg.my_load || {}).map(function(r){
     var ld = cfg.my_load[r];
     var ctx = regCtx({ row: { name: r, on_a: ld.on_a, switches: ld.switches } });
     var sw = regAction(function(){ toggleSwitch(r); });
+    var bad = badMsg("in:load:" + r + ":on_a") + badMsg("in:load:" + r + ":off_a");
+    var got = S.sel.measured && S.sel.measured.rail === r ? S.sel.measured.text : "";
     return '<tr class="rc"' + rc("rail", "rail " + r, ctx) + ">"
       + '<td class="mono">' + esc(r) + "</td>"
-      + '<td><input class="inp mono" style="width:92px;height:24px" data-load="' + esc(r)
-      + '" data-k="on_a" value="' + esc(eng(ld.on_a, "A")) + '"></td>'
-      + '<td><input class="inp mono" style="width:92px;height:24px" data-load="' + esc(r)
-      + '" data-k="off_a" value="' + esc(eng(ld.off_a, "A")) + '"></td>'
+      + "<td>" + loadBox(r, "on_a", ld.on_a) + "</td>"
+      + "<td>" + loadBox(r, "off_a", ld.off_a) + "</td>"
       + '<td><input type="checkbox" data-act="' + sw + '"' + (ld.switches ? " checked" : "")
       + '> <span class="hint">' + (ld.switches ? "load-EN characterized" : "static load only")
       + "</span></td>"
-      + "<td>" + verbButtons("rail", CTXS[ctx]) + "</td></tr>";
+      + "<td>" + verbButtons("rail", CTXS[ctx]) + "</td></tr>"
+      + (bad || got ? '<tr><td></td><td colspan="4">' + bad
+          + (got ? '<span class="hint">' + ICON.ok + " " + esc(got) + "</span>" : "") + "</td></tr>" : "");
   }).join("");
-  var save = regAction(function(){ saveLoadsFromInputs(); });
   var undo = regAction(function(){ doUndo(); });
+  /* Set = Enter. A bad token is named next to the box and nothing is sent; what was typed stays. */
+  var setCodes = regAction(function(v){
+    var txt = typeof v === "string" ? v : el("vsetinp").value;
+    var r = readInts(txt, "VSET code");
+    setBad("in:vset", r.bad);
+    if (r.bad){ S.sel["in:vset"] = txt; render(); return; }
+    patchConfig("vset_codes", r.v, "in:vset");
+  });
+  var setFmax = regAction(function(v){
+    var txt = typeof v === "string" ? v : el("fmaxinp").value;
+    var r = readEng(txt, "Hz", "a frequency");
+    if (!r.bad && !(r.v > 0)) r.bad = "the highest frequency must be above 0 Hz, e.g. 20G";
+    setBad("in:fmax", r.bad);
+    if (r.bad){ S.sel["in:fmax"] = txt; render(); return; }
+    patchConfig("care_up_to_hz", r.v, "in:fmax");
+  });
   var known = ["tt","ss","ff","fs","sf"];
   var kt = [-40, 0, 25, 85, 125];
   return '<div style="display:flex;flex-direction:column;gap:16px">'
@@ -1296,18 +1466,17 @@ function threeQuestions(cfgd, pins){
     + '<div class="rowflex"><span class="hint" style="width:66px">corners</span>'
     + chips(known.concat(corners.filter(function(c){ return known.indexOf(c) < 0; })), corners, "corners") + "</div>"
     + '<div class="rowflex"><span class="hint" style="width:66px">temp C</span>'
-    + chips(kt.concat(cfg.temps_c.filter(function(t){ return kt.indexOf(t) < 0; })).map(String),
+    + chips(kt.concat(cfg.temps_c.filter(function(t){ return kt.indexOf(t) < 0; }))
+              .sort(function(a, b){ return a - b; }).map(String),
             cfg.temps_c.map(String), "temps_c") + "</div>"
     + '<div class="rowflex"><span class="hint" style="width:66px">code var</span>'
     + vsetParamPicker(cfg, pins)
     + '<span class="hint">the design variable that selects the output code; rewritten as '
     + '<span class="mono">parameters ' + esc(cfg.vset_param || "VSET") + '=&lt;code&gt;</span></span></div>'
     + '<div class="rowflex"><span class="hint" style="width:66px">codes</span>'
-    + '<input class="inp mono" id="vsetinp" style="width:92px" value="' + esc(cfg.vset_codes.join(",")) + '">'
-    + '<button class="btn sm" data-act="' + regAction(function(){
-        patchConfig("vset_codes", el("vsetinp").value.split(",").map(function(s){
-          return parseInt(s.trim(), 10); }).filter(function(n){ return !isNaN(n); }));
-      }) + '">Set</button></div></div>'
+    + '<input class="inp mono' + badCls("in:vset") + '" id="vsetinp" style="width:92px" data-keep="in:vset"'
+    + ' data-keepfocus="1" data-enter="' + setCodes + '" value="' + esc(typed("in:vset", cfg.vset_codes.join(","))) + '">'
+    + '<button class="btn sm" data-act="' + setCodes + '">Set</button>' + badMsg("in:vset") + "</div></div>"
     + '<div class="field"><span class="lbl">2 &middot; What your block draws from each rail'
     + '<span class="q" title="On/off currents set the characterization grid (off, 0.2x on, on, 2x on). Switches = your block turns on and off during simulation.">?</span></span>'
     + (railRows ? '<table class="t"><thead><tr><th>Rail</th><th>On</th><th>Off</th>'
@@ -1318,19 +1487,16 @@ function threeQuestions(cfgd, pins){
     + "</div>"
     + '<div class="field"><span class="lbl">3 &middot; Highest frequency you care about'
     + '<span class="q" title="Zout and PSRR are characterized up to this frequency and never extrapolated past it.">?</span></span>'
-    + '<div class="rowflex"><input class="inp mono" id="fmaxinp" style="width:120px" value="'
-    + esc(eng(cfg.care_up_to_hz, "Hz")) + '">'
-    + '<button class="btn sm" data-act="' + regAction(function(){
-        var v = parseEng(el("fmaxinp").value);
-        if (v) patchConfig("care_up_to_hz", v);
-      }) + '">Set</button>'
+    + '<div class="rowflex"><input class="inp mono' + badCls("in:fmax") + '" id="fmaxinp" style="width:120px"'
+    + ' data-keep="in:fmax" data-keepfocus="1" data-enter="' + setFmax + '" value="'
+    + esc(typed("in:fmax", eng(cfg.care_up_to_hz, "Hz"))) + '">'
+    + '<button class="btn sm" data-act="' + setFmax + '">Set</button>' + badMsg("in:fmax")
     + '<span class="hint">Zout and PSRR are characterized up to here and never extrapolated past it.</span>'
     + "</div></div>"
     + '<div class="rowflex"><button class="btn sm" data-act="' + undo + '"'
     + (cfgd.undoable ? "" : " disabled") + ">" + ICON.retry + " Undo (Ctrl Z)</button>"
     + '<button class="btn sm" data-act="' + regAction(function(){
         S.sel.showDerived = !S.sel.showDerived;
-        if (S.sel.showDerived) need("derived", "/api/p/" + P() + "/config/derived", "new");
         render(); }) + '">'
     + (S.sel.showDerived ? "Hide" : "Show") + " derived settings (pmukit decided these)</button>"
     + '<span class="hint mono">config sha ' + esc((cfgd.sha || "").slice(0, 8)) + "</span></div>"
@@ -1338,15 +1504,11 @@ function threeQuestions(cfgd, pins){
     + "</div>";
 }
 function derivedBlock(){
-  var d = S.data["derived"];
+  /* asked here, not only when the panel opens: a saved answer forgets it, and it follows */
+  var d = need("derived", "/api/p/" + P() + "/config/derived", "new");
+  if (d === undefined && S.failed["derived"]) return '<div class="hint">The derived settings could not be computed; the error above says why.</div>';
   if (d === undefined) return skeleton(4, "deriving the characterization settings");
   return '<div class="code wrap" style="max-height:260px">' + esc(JSON.stringify(d.derived, null, 1)) + "</div>";
-}
-function parseEng(text){
-  var m = String(text || "").trim().match(/^([-+0-9.eE]+)\s*([TGMkmunpf]?)/);
-  if (!m) return 0;
-  var mult = { T:1e12, G:1e9, M:1e6, k:1e3, "":1, m:1e-3, u:1e-6, n:1e-9, p:1e-12, f:1e-15 };
-  return parseFloat(m[1]) * (mult[m[2]] === undefined ? 1 : mult[m[2]]);
 }
 function pickFile(){
   var inp = el("fileinp");
@@ -1381,16 +1543,18 @@ function setPin(pin, body){
 }
 function askRole(pin, role){
   S.sel.roleAsk = { pin: pin.name, role: role };
+  dropTyped("in:roledc");
   render();
   if (el("roledc")) el("roledc").focus();
 }
-function patchConfig(key, value){
+/* `typedKey`: the box the value came from -- its unsaved typing is dropped once it is saved. */
+function patchConfig(key, value, typedKey){
   var cur = (S.data["config"] || {}).config;
   if (!cur) return;
   var next = JSON.parse(JSON.stringify(cur));
-  if (key === "temps_c") value = value.map(Number);
+  if (key === "temps_c") value = value.map(Number).sort(function(a, b){ return a - b; });
   next[key] = value;
-  putConfig(next, key + " changed");
+  putConfig(next, key + " changed", typedKey);
 }
 function toggleSwitch(rail){
   var cur = (S.data["config"] || {}).config;
@@ -1399,22 +1563,36 @@ function toggleSwitch(rail){
   next.my_load[rail].switches = !next.my_load[rail].switches;
   putConfig(next, rail + " load-EN toggled");
 }
+/* Only the boxes that were typed into are read (a shown value is rounded for display and must
+   not overwrite the saved one). Every bad box is marked; nothing is sent until all read. */
 function saveLoadsFromInputs(){
   var cur = (S.data["config"] || {}).config;
   if (!cur) return;
   var next = JSON.parse(JSON.stringify(cur));
-  document.querySelectorAll("[data-load]").forEach(function(n){
-    var rail = n.getAttribute("data-load"), k = n.getAttribute("data-k");
-    var v = parseEng(n.value);
-    if (next.my_load[rail] && v) next.my_load[rail][k] = v;
+  var bad = 0, changed = 0;
+  Object.keys(next.my_load || {}).forEach(function(rail){
+    ["on_a", "off_a"].forEach(function(k){
+      var key = "in:load:" + rail + ":" + k;
+      if (S.sel[key] === undefined) return;
+      var r = readEng(S.sel[key], "A", k === "on_a" ? "an on current" : "an off current");
+      if (!r.bad && r.v < 0) r.bad = "a load current is a magnitude: write it without the sign";
+      setBad(key, r.bad);
+      if (r.bad){ bad++; return; }
+      next.my_load[rail][k] = r.v; changed++;
+    });
   });
-  putConfig(next, "load numbers edited");
+  if (bad){ render(); return; }
+  if (!changed){ S.toast = "no load number was changed"; render();
+                 setTimeout(function(){ S.toast = ""; render(); }, 1400); return; }
+  putConfig(next, "load numbers edited", "in:load:");
 }
-function putConfig(cfg, note){
+function putConfig(cfg, note, typedKey, after){
   api("/api/p/" + P() + "/config", { method:"PUT", body:{ config: cfg, note: note } })
     .then(function(d){
       S.data["config"] = { exists:true, config:d.config, sha:d.sha, answers:{}, undoable:d.undoable, history:[] };
       S.undoable = d.undoable;
+      if (typedKey) dropTyped(typedKey);
+      if (after) after(d);
       forget("derived"); forget("plan"); forget("consequences");
       render(); refreshCli();
     }, showErr);
@@ -1422,22 +1600,34 @@ function putConfig(cfg, note){
 function doUndo(){
   api("/api/p/" + P() + "/config/undo", { method:"POST", body:{} }).then(function(d){
     forget("config"); forget("derived"); forget("plan"); forget("consequences"); forget("pins");
+    dropTyped("in:"); S.sel.measured = null;       /* the boxes show what was restored */
     S.undoable = d.undoable || "";
     S.toast = "undone: " + d.kind;
     render(); setTimeout(function(){ S.toast = ""; render(); }, 1400);
   }, showErr);
 }
-function measureLoad(){
-  api("/api/p/" + P() + "/measure-load", { method:"POST", body:{} }).then(function(d){
+/* One rail, the row's own: the other rails' numbers (saved or being typed) are not touched.
+   The ON current is the dc of its IL_ source; the OFF current is not in the netlist, so it is
+   only filled in when the saved one cannot stand next to the new ON (off must stay below on). */
+function measureLoad(rail){
+  api("/api/p/" + P() + "/measure-load", { method:"POST", body:{ rail: rail } }).then(function(d){
     var cur = (S.data["config"] || {}).config;
-    if (!cur) return;
+    var m = (d.rails || {})[rail];
+    if (!cur || !m) return;
     var next = JSON.parse(JSON.stringify(cur));
-    Object.keys(d.rails || {}).forEach(function(r){
-      if (!next.my_load[r]) next.my_load[r] = { on_a: 0, off_a: 0, switches: true };
-      next.my_load[r].on_a = d.rails[r].on_a;
-      if (!next.my_load[r].off_a) next.my_load[r].off_a = d.rails[r].off_a_suggested;
-    });
-    putConfig(next, "loads measured from the netlist");
+    if (!next.my_load[rail]) next.my_load[rail] = { on_a: 0, off_a: 0, switches: true };
+    var ld = next.my_load[rail], was = ld.on_a, keys = "in:load:" + rail + ":on_a";
+    ld.on_a = m.on_a;
+    var text = rail + " on " + eng(was, "A") + " → measured " + eng(m.on_a, "A")
+             + (m.on_from ? " (" + m.on_from + ")" : "");
+    if (!(Number(ld.off_a) >= 0) || Number(ld.off_a) >= m.on_a){
+      text += "; off " + eng(ld.off_a, "A") + " → " + eng(m.off_a_suggested, "A")
+            + " suggested (" + (m.off_note || "not in the netlist") + ")";
+      ld.off_a = m.off_a_suggested;
+      keys = "in:load:" + rail + ":";
+    }
+    putConfig(next, rail + " load measured from the netlist", keys,
+              function(){ S.sel.measured = { rail: rail, text: text }; });
   }, showErr);
 }
 
@@ -1501,10 +1691,10 @@ SCREENS.plan = {
     var block = submitBlocker(S.data["site"]);
     return '<span class="hint">Resume: runs already in the ledger are skipped. Nothing is '
          + "submitted until you press this.</span>"
-         + '<div class="rowflex">' + runDestination() + '<button class="btn" data-act="' + regAction(function(){
-             copy(((S.data["plan"] || {}).groups || []).map(function(g){
-               return [g.id, g.analysis, g.runs, g.cpu_hours].join(","); }).join("\n"));
-           }) + '">Export plan (CSV)</button>'
+         + '<div class="rowflex">' + runDestination() + '<button class="btn" title="Save '
+         + esc(S.project) + '_plan.csv: one row per group (copy it instead from Ctrl K)" data-act="'
+         + regAction(function(){ download(S.project + "_plan.csv", planCsv(), "text/csv"); })
+         + '">Export plan (CSV)</button>'
          + '<button class="btn" title="Write every run into the ledger without submitting one: '
          + 'the netlists and recipes exist, nothing is queued." data-act="'
          + regAction(function(){ doSubmit(true); }) + '">Dry run</button>'
@@ -1514,6 +1704,13 @@ SCREENS.plan = {
          + ICON.play + " Submit " + n + " runs</button></div>";
   }
 };
+function planCsv(){
+  var rows = ((S.data["plan"] || {}).groups || []).map(function(g){
+    return [g.id, g.enabled ? "on" : "off", g.analysis, g.runs, g.cached || 0, g.cpu_hours,
+            (g.ports || []).join(" "), (g.observables || []).join(" ")].map(csvCell).join(",");
+  });
+  return ["group,enabled,analysis,runs,cached,cpu_hours,ports,feeds"].concat(rows).join("\n") + "\n";
+}
 function stat(v, l){
   return '<div class="stat"><span class="v">' + esc(v === undefined || v === null ? "-" : v)
        + '</span><span class="l">' + esc(l) + "</span></div>";
@@ -1724,7 +1921,7 @@ SCREENS.run = {
       var id = regAction(function(){ S.sel.run = r.run_id; forget("run:"); render(); refreshCli(); });
       var bcls = { done:"b-ok", running:"b-acc", failed:"b-bad", planned:"b-mute",
                    submitted:"b-acc", skipped_cached:"b-mute", imported:"b-ok" }[r.status] || "b-mute";
-      return "<tr" + rc("run", "run " + r.run_id + " &middot; " + r.status, ctx)
+      return "<tr" + rc("run", "run " + r.run_id + " · " + r.status, ctx)
         + ' class="click rc' + (S.sel.run === r.run_id ? " sel" : "") + '" data-act="' + id + '">'
         + '<td class="id">' + esc(r.run_id.slice(0, 10)) + "</td>"
         + '<td class="mono" style="font-size:11.5px">' + esc(r.cell_text || "") + "</td>"
@@ -1744,15 +1941,21 @@ SCREENS.run = {
   foot: function(){
     var led = S.data["ledger:" + (S.sel.runFilter || "all")] || {};
     var c = led.counts || {};
-    var busy = (c.running || 0) + (c.planned || 0) + (c.submitted || 0);
+    /* Fit waits while something is working: a pmukit job (a submit, a fit already going) or
+       runs still in the queue. Fitting early on what is done stays one click on Model. */
+    var inQueue = (c.running || 0) + (c.submitted || 0);
+    var why = jobBusy() ? "wait: " + (S.job.title || "a job") + " is still working"
+            : inQueue ? "wait: " + inQueue + " run" + (inQueue > 1 ? "s are" : " is")
+                        + " still in the queue (or fit early with what is done on Model)" : "";
     var fid = regAction(function(){ doFit(); });
     return '<span class="hint">Runs are written to <span class="mono">runs.sqlite</span>. '
          + "Closing this page does not stop the queue.</span>"
          + '<div class="rowflex"><button class="btn" title="The failure logs and the netlist diff '
          + 'are one block of the digest" data-act="' + regAction(function(){ go("digest"); })
          + '">' + ICON.copy + " Failure bundle for the desk " + ICON.arrow + "</button>"
-         + '<button class="btn pri" data-act="' + fid + '"' + (busy ? "" : "") + ">Fit model "
-         + ICON.arrow + "</button></div>";
+         + (why ? '<span class="hint">' + esc(why) + "</span>" : "")
+         + '<button class="btn pri" data-act="' + fid + '"' + (why ? ' disabled title="' + esc(why) + '"' : "")
+         + ">Fit model " + ICON.arrow + "</button></div>";
   }
 };
 function runDetail(){
@@ -1810,7 +2013,9 @@ function runAction(id, action){
   api("/api/p/" + P() + "/runs/" + encodeURIComponent(id) + "/" + action, { method:"POST", body:{} })
     .then(function(){ forget("ledger:"); forget("run:"); render(); refreshCli(); }, showErr);
 }
+function jobBusy(){ return !!(S.job && (S.job.status === "running" || S.job.status === "queued")); }
 function doFit(){
+  if (jobBusy()) return;              /* Ctrl Enter and the palette too: one fit at a time */
   startJob(api("/api/p/" + P() + "/fit", { method:"POST", body:{} }), "fitting the model",
     function(j){ if (j.status === "done"){ forget("model"); go("model"); } });
 }
@@ -2684,12 +2889,14 @@ function paletteCommands(){
   cmds.push({ label: "Undo the last configuration change", hint: "Ctrl Z", run: function(){ doUndo(); } });
   cmds.push({ label: "Copy the command echo", hint: "$", run: function(){ copy(S.cli); } });
   cmds.push({ label: "Reload everything from the server", hint: "cache", run: function(){
-    S.data = {}; S.loading = {}; render(); } });
+    S.data = {}; S.loading = {}; S.failed = {}; render(); } });
   if (S.project){
     cmds.push({ label: "Fit the model", hint: S.project, run: function(){ doFit(); } });
     cmds.push({ label: "Verify (HB health check)", hint: S.project, run: function(){ doVerify(); } });
     cmds.push({ label: "Write the deliverable", hint: S.project, run: function(){ doDeliver(); } });
     cmds.push({ label: "Submit the plan", hint: S.project, run: function(){ doSubmit(); } });
+    if (S.data["plan"]) cmds.push({ label: "Copy the plan as CSV", hint: "clipboard",
+                                    run: function(){ copy(planCsv()); } });
     cmds.push({ label: "Open report", hint: "report.md of the latest deliverable", run: function(){ openReport(); } });
   }
   cmds.push({ label: "Settings: engine, queue, Donau accounts", hint: "this machine", run: function(){ go("settings"); } });
@@ -2710,6 +2917,7 @@ document.addEventListener("keydown", function(e){
     if (S.palette){ S.palette = false; S.paletteQ = ""; render(); return; }
     if (S.menu){ S.menu = null; render(); return; }
     if (S.help){ S.help = null; render(); return; }
+    if (S.note){ S.note = null; render(); return; }
     if (S.errs[S.screen]){ delete S.errs[S.screen]; render(); return; }
     return;
   }
