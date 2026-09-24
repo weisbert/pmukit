@@ -1161,7 +1161,8 @@ def _demo_curve(port: str, block: str, cell: str) -> dict:
         gp = mp = [0.0] * len(fs)
         unit, label = "A^2/Hz", "current noise PSD"
     return {"port": port, "block": block, "cell": cell, "x": fs, "x_label": "frequency [Hz]",
-            "x_log": True, "unit": unit, "label": label, "complex": bool(rail),
+            "x_log": True, "y_log": True, "y_scale": "log", "y_db": False,
+            "unit": unit, "label": label, "complex": bool(rail),
             "gt": {"mag": gt, "phase_deg": gp}, "model": {"mag": md, "phase_deg": mp},
             "points": len(fs), "source": "demo (analytic)"}
 
@@ -2468,9 +2469,16 @@ class Api:
                                "note": "usable, not sign-off: it rises with the measured time; "
                                        "use the real PMU for startup sign-off"})
             elif tier == "ls":
-                usable.append({"item": "%s.%s" % (bf["port"], bf["block"]),
-                               "note": "large-signal term, opt-in: off by default in the emitted "
-                                       "model, enabled per instance"})
+                ptype = str((fit.get("ports") or {}).get(bf["port"]) or "rail")
+                if _default_off(bf["block"], bf["port"], ptype, _ls_on(ver)):
+                    sw = _switch_for(bf["block"], bf["port"])
+                    note = ("large-signal term, opt-in: off by default in the emitted model, so "
+                            "its grade is shown on the cell but does not colour it"
+                            + ("; enable per instance with " + sw if sw else ""))
+                else:
+                    note = ("large-signal term, on by default: it passed the HB health check, "
+                            "so its grade counts in every cell it covers")
+                usable.append({"item": "%s.%s" % (bf["port"], bf["block"]), "note": note})
         seen, uniq = set(), []
         for u in usable:
             if u["item"] in seen:
@@ -2549,7 +2557,8 @@ class Api:
                        ["Run the fit from the Run screen"], str(pr.fit_path))
         vgrades = _verify_index(ver)
         port_type = str((fit.get("ports") or {}).get(port) or "rail")
-        blocks, worst = [], "green"
+        ls_on = _ls_on(ver)
+        blocks = []
         for bf in _fit_blocks(fit):
             if bf["port"] != port:
                 continue
@@ -2564,8 +2573,14 @@ class Api:
             gv = _verify_lookup(vgrades, port, corner or bcorner, _numstr(temp), bf["block"])
             grade = str(gv.get("grade")) if gv else ("not_run" if bf.get("missing") else "fitted")
             # verify grades a block per CORNER (the worst of its cells). The row's own verdict,
-            # against the same limit table, says WHICH load / VSET / temperature is the one.
-            own = _row_grade(bf, port_type) if gv else ""
+            # against the same limit table, says WHICH load / VSET / temperature is the one --
+            # and WHY: a held grade's reason is shown on the row, not only in a tooltip.
+            verdict = _row_verdict(bf, port_type) if gv else {}
+            own = str(verdict.get("grade") or "")
+            off = _default_off(bf["block"], port, port_type, ls_on)
+            reason = str(verdict.get("reason") or "")
+            if not reason and gv and str(gv.get("grade")) not in ("green", "fitted"):
+                reason = _short_reason(str(gv.get("grade")), str(gv.get("detail") or ""))
             blocks.append({"name": bf["block"], "metric": bf.get("metric", ""),
                            "value": ("not run" if bf.get("missing")
                                      else _numstr(bf.get("score"), 3)),
@@ -2573,6 +2588,16 @@ class Api:
                            "limit": _limit_text(bf.get("metric", "")),
                            "grade": grade, "row_grade": own or grade,
                            "detail": (gv or {}).get("detail", ""),
+                           # the row's own why: a short line, and the full sentence behind it
+                           "reason": reason,
+                           "reason_full": str(verdict.get("detail") or
+                                              (gv or {}).get("detail", "") or ""),
+                           "held": bool(verdict.get("held")),
+                           "held_by": list(verdict.get("held_by") or []),
+                           # shipped switched off: graded, shown, never in the cell's colour
+                           "default_off": off,
+                           "switch": _switch_for(bf["block"], port) if off else "",
+                           "off_note": _off_note(bf["block"], port, own or grade) if off else "",
                            "missing": bool(bf.get("missing")),
                            "n_points": bf.get("n_points", 0),
                            # A block is fitted on the axes ITS parameters vary over, so one
@@ -2587,8 +2612,9 @@ class Api:
                            "cell_key": _cell_key_of(cell),
                            "notes": bf.get("notes") or [],
                            "identifiability": bf.get("identifiability") or {}})
-            if _GRADE_RANK.get(grade, 0) > _GRADE_RANK.get(worst, 0):
-                worst = grade
+        # the cell's badge: the SAME aggregation as the grid (verify.grades.headline)
+        head = _headline([{"block": b["name"], "grade": b["grade"], "detail": b["detail"]}
+                          for b in blocks], port, port_type, ls_on) if blocks else {}
         runs = []
         try:
             with pr.ledger() as led:
@@ -2596,7 +2622,10 @@ class Api:
         except PmuError:                                               # pragma: no cover - no db
             pass
         return {"port": port, "corner": corner, "temp_c": temp,
-                "grade": worst if blocks else "not_run", "blocks": blocks, "runs": runs,
+                "grade": head.get("grade", "not_run") if blocks else "not_run",
+                "held": bool(head.get("held")), "held_by": head.get("held_by") or [],
+                "off_by_default": head.get("off_by_default") or [],
+                "blocks": blocks, "runs": runs,
                 "graded_by": ("verify" if vgrades and not any(
                     b["grade"] == "fitted" for b in blocks) else
                     "partial" if vgrades else "fit"),
@@ -2658,6 +2687,20 @@ class Api:
         full = dict(bf.get("cell") or {})
         for k, v in want.items():
             full.setdefault(k, v)
+        if var not in set(ds.variables()):
+            # A single characterized temperature declares no temperature sweep: the law is
+            # flat by construction (its slope is pinned at zero), so there is no curve -- say
+            # so plainly instead of surfacing the dataset's own "not declared" error.
+            unit, label, _scale = _curve_axis(obs, port_type)
+            why = ("only one temperature was characterized, so there is no temperature sweep "
+                   "to draw: the law is flat by construction and its fitted value and residual "
+                   "are in the block table. Add a second temperature to characterize it."
+                   if obs == "dc_temp" else
+                   "%s was never measured, so there is no curve to draw." % var)
+            return {"port": port, "block": block, "cell": _cell_key_of(full),
+                    "cell_label": _cell_label(full), "empty": True, "why": why,
+                    "unit": unit, "label": label, "source": var,
+                    "score": bf.get("score"), "metric": bf.get("metric", "")}
         x = ds.coord(var)
         if x is None:
             raise _err("%s has no coordinate in the dataset." % var,
@@ -2678,14 +2721,25 @@ class Api:
                            str(pr.fit_path))
             kwargs["zout"] = zbf.get("params") or {}
         model = predict(bf.get("params") or {}, **kwargs)
-        unit, label = _curve_units(obs, port_type)
+        unit, label, scale = _curve_axis(obs, port_type)
+        if obs.startswith("noise_"):
+            # the dataset stores a PSD (V^2/Hz); the fitter and predict() work in AMPLITUDE
+            # (V/rtHz) -- the domain its dB-RMS score is taken in. Draw both sides there.
+            from .fit._base import _psd_to_amplitude, _var_record
+            gt, _how = _psd_to_amplitude(gt, (_var_record(ds, var) or {}).get("unit", ""))
+        gt_s, md_s = _split_complex(gt), _split_complex(model)
+        if scale == "db":
+            gt_s["mag"], md_s["mag"] = _to_db(gt_s["mag"]), _to_db(md_s["mag"])
         return {"port": port, "block": block, "cell": _cell_key_of(full),
                 "cell_label": _cell_label(full),
                 "x": _clean(x), "x_label": ("frequency [Hz]" if spectral else "temperature [C]"),
-                # a temperature law is a few percent around one value: linear on both axes
-                "x_log": bool(spectral), "y_log": bool(spectral), "unit": unit, "label": label,
+                # a temperature law is a few percent around one value: linear on both axes;
+                # a dB quantity is already logarithmic: linear y (CURVE_AXES)
+                "x_log": bool(spectral), "y_log": scale == "log",
+                "y_scale": "log" if scale == "log" else "linear", "y_db": scale == "db",
+                "unit": unit, "label": label,
                 "complex": bool(obs.startswith("ac_")),
-                "gt": _split_complex(gt), "model": _split_complex(model),
+                "gt": gt_s, "model": md_s,
                 "points": int(len(x)), "source": var,
                 "score": bf.get("score"), "metric": bf.get("metric", "")}
 
@@ -3199,11 +3253,47 @@ def _verify_lookup(index: dict, port: str, corner: str, temp: str, block: str):
 
 def _row_grade(bf: dict, port_type: str) -> str:
     """One fitted block's own verdict against verify's limit table ('' if it cannot say)."""
+    return str(_row_verdict(bf, port_type).get("grade") or "")
+
+
+def _row_verdict(bf: dict, port_type: str) -> dict:
+    """verify.grades.block_verdict for one fitted row: grade, detail, held, short reason."""
     try:
         from .fit._base import BlockFit
-        from .verify.grades import grade_block
-        grade, _detail = grade_block(BlockFit.from_dict(bf), port_type=port_type or "rail")
-        return str(grade)
+        from .verify.grades import block_verdict
+        return block_verdict(BlockFit.from_dict(bf), port_type=port_type or "rail")
+    except Exception:                                                  # noqa: BLE001 - decoration
+        return {}
+
+
+def _short_reason(grade: str, detail: str) -> str:
+    try:
+        from .verify.grades import short_reason
+        return short_reason(grade, detail)
+    except Exception:                                                  # noqa: BLE001 - decoration
+        return ""
+
+
+def _default_off(block: str, port: str, port_type: str, ls_on: list) -> bool:
+    try:
+        from .verify.grades import default_off
+        return bool(default_off(block, port, port_type or None, ls_on))
+    except Exception:                                                  # noqa: BLE001 - decoration
+        return False
+
+
+def _off_note(block: str, port: str, grade: str) -> str:
+    try:
+        from .verify.grades import off_note
+        return off_note(block, port, grade)
+    except Exception:                                                  # noqa: BLE001 - decoration
+        return ""
+
+
+def _switch_for(block: str, port: str) -> str:
+    try:
+        from .verify.grades import switch_for
+        return switch_for(block, port)
     except Exception:                                                  # noqa: BLE001 - decoration
         return ""
 
@@ -3218,6 +3308,31 @@ def _limit_text(metric: str) -> str:
     if lim is None:
         return "-"
     return f"<= {_numstr(lim.green, 3)} / {_numstr(lim.yellow, 3)} {lim.unit}".strip()
+
+
+def _ls_on(ver: dict) -> list:
+    """The rails whose large-signal term defaults ON in the delivered model: the ones verify's
+    HB check cleared. No verify, or a check that did not run, means none -- every `ls` term
+    ships switched off (emit/__init__.py writes load_en_<rail> = 0)."""
+    ver = ver or {}
+    for src in (ver.get("ls_default_on"), (ver.get("hb_check") or {}).get("ls_default_on"),
+                (ver.get("envelope") or {}).get("ls_default_on")):
+        if src:
+            return [str(x) for x in src]
+    return []
+
+
+def _headline(items: list, port: str, port_type, ls_on: list) -> dict:
+    """verify.grades.headline -- the ONE aggregation rule -- with a local fallback so a grid
+    can still be drawn when the verify package cannot be imported."""
+    try:
+        from .verify.grades import headline
+        return headline(items, port=port, port_type=port_type or None, ls_default_on=ls_on)
+    except ImportError:                                               # pragma: no cover
+        worst = max(items, key=lambda it: _GRADE_RANK.get(str(it.get("grade")), 0))
+        return {"grade": str(worst.get("grade")), "block": str(worst.get("block")),
+                "detail": str(worst.get("detail") or ""), "held": False, "held_by": [],
+                "off_by_default": []}
 
 
 def _grade_grid(fit: dict, ver: dict, stale: str = "") -> dict:
@@ -3257,7 +3372,15 @@ def _grade_grid(fit: dict, ver: dict, stale: str = "") -> dict:
         ck = ("", "")
         cells[ck] = {"corner": "", "temp_c": None, "label": "all cells"}
         order.append(ck)
+    # (port) -> (cell) -> (block) -> the worst {block, grade, detail} seen for it there
     ports, ungraded, seen_pb = {}, [], set()
+
+    def put(slot, ck, block, grade, detail):
+        per = slot.setdefault(ck, {})
+        prev = per.get(block)
+        if prev is None or _GRADE_RANK.get(grade, 0) > _GRADE_RANK.get(prev["grade"], 0):
+            per[block] = {"block": block, "grade": grade, "detail": detail}
+
     for bf in blocks:
         cell = bf.get("cell") or {}
         corner, temp = str(cell.get("process") or ""), _numstr(cell.get("temp_c"))
@@ -3268,16 +3391,14 @@ def _grade_grid(fit: dict, ver: dict, stale: str = "") -> dict:
         for ck in covers:
             gv = _verify_lookup(vgrades, bf["port"], ck[0], ck[1], bf["block"])
             if gv is not None:
-                grade = str(gv.get("grade"))
+                grade, detail = str(gv.get("grade")), str(gv.get("detail") or "")
             else:
-                grade = "not_run" if bf.get("missing") else "fitted"
+                grade, detail = ("not_run" if bf.get("missing") else "fitted"), ""
                 if vgrades and grade == "fitted":
                     label = "%s.%s" % (bf["port"], bf["block"])
                     if label not in ungraded:
                         ungraded.append(label)
-            prev = slot.get(ck)
-            if prev is None or _GRADE_RANK.get(grade, 0) > _GRADE_RANK.get(prev, 0):
-                slot[ck] = grade
+            put(slot, ck, bf["block"], grade, detail)
     # A block verify graded that has no fitted record at all (a group ticked off before the
     # fit) is `not_run` in verify.json; it still belongs on its corner's cells.
     for (p, c, t, b), g in vgrades.items():
@@ -3285,15 +3406,28 @@ def _grade_grid(fit: dict, ver: dict, stale: str = "") -> dict:
             continue
         for ck in order:
             if (not c or ck[0] == c) and (not t or ck[1] == t):
-                grade = str(g.get("grade"))
-                prev = ports[p].get(ck)
-                if prev is None or _GRADE_RANK.get(grade, 0) > _GRADE_RANK.get(prev, 0):
-                    ports[p][ck] = grade
+                put(ports[p], ck, b, str(g.get("grade")), str(g.get("detail") or ""))
     order.sort(key=lambda k: (k[0], float(k[1]) if k[1] else 1e9))
-    rows = [{"port": port,
-             "cells": [{"corner": cells[k]["corner"], "temp_c": cells[k]["temp_c"],
-                        "grade": ports[port].get(k, "not_run")} for k in order]}
-            for port in sorted(ports)]
+    # The cell's colour is what the model does AS DELIVERED (one shared rule with the verify
+    # roll-up and the report): a block that ships switched off is graded and named on the cell,
+    # never averaged into its colour.
+    ls_on, types = _ls_on(ver), (fit.get("ports") or {})
+    rows = []
+    for port in sorted(ports):
+        out_cells = []
+        for k in order:
+            items = list((ports[port].get(k) or {}).values())
+            head = _headline(items, port, types.get(port), ls_on) if items else \
+                {"grade": "not_run", "block": "", "held": False, "held_by": [],
+                 "off_by_default": []}
+            out_cells.append({"corner": cells[k]["corner"], "temp_c": cells[k]["temp_c"],
+                              "grade": head["grade"], "block": head.get("block", ""),
+                              "held": bool(head.get("held")),
+                              "held_by": head.get("held_by") or [],
+                              "off": [{"block": o["block"], "grade": o["grade"],
+                                       "note": o["note"], "switch": o["switch"]}
+                                      for o in head.get("off_by_default") or []]})
+        rows.append({"port": port, "cells": out_cells})
     if not vgrades:
         graded_by = "fit"
         why = ("provisional: the pass/fail limits come from `verify`. Until it runs, a cell says "
@@ -3418,25 +3552,56 @@ CURVE_OBSERVABLE = {("rail", "zout"): "ac_zout", ("rail", "psrr"): "ac_psrr",
                     ("bias", "yout"): "ac_yout", ("bias", "noise"): "noise_i",
                     ("bias", "psrr"): "ac_psrr", ("bias", "idc"): "dc_temp"}
 
-CURVE_UNITS = {"ac_zout": ("ohm", "|Zout|"), "ac_psrr": ("dB", "PSRR"),
-               "ac_yout": ("S", "|Yout|"), "noise_v": ("V^2/Hz", "output noise PSD"),
-               "noise_i": ("A^2/Hz", "current noise PSD"),
-               "dc_temp": ("A or V", "value versus temperature"),
-               "dc_load": ("V", "rail voltage versus load"),
-               "dc_iv": ("A", "bias current versus pin voltage")}
+#: How each curve is drawn: (unit, label, y scale), per (port type, observable).
+#:
+#:   * "log"    -- a MAGNITUDE spanning decades (|Zout| in ohm, |Yout| in S, a noise PSD, the
+#:                 bias supply transfer in A/V): log y, the payload carries |x|;
+#:   * "db"     -- a quantity READ in dB (the rail PSRR): the payload carries 20*log10|x| and the
+#:                 y axis is LINEAR, because a dB axis is already logarithmic -- a log axis
+#:                 labelled dB draws the log of a log;
+#:   * "linear" -- a DC law (a few percent around one value): linear y in its own unit.
+#:
+#: Every unit is concrete: the rail PSRR is V/V on the pin (importer: ac_psrr rail V/V), the
+#: bias one A/V; the rail `dc` law is volts, the bias `idc` law amperes.
+CURVE_AXES = {
+    ("rail", "ac_zout"): ("ohm", "|Zout|", "log"),
+    ("rail", "ac_psrr"): ("dB", "PSRR, supply to rail: 20 log10 |Vout/Vsupply|", "db"),
+    ("bias", "ac_psrr"): ("A/V", "|gdd|, supply to bias current", "log"),
+    ("bias", "ac_yout"): ("S", "|Yout|", "log"),
+    # noise is drawn as the AMPLITUDE density (sqrt of the stored PSD), the domain predict()
+    # returns and the Sv / In dB-RMS score is taken in; a PSD beside an amplitude is off by sqrt
+    ("rail", "noise_v"): ("V/rtHz", "output voltage noise density", "log"),
+    ("bias", "noise_i"): ("A/rtHz", "bias current noise density", "log"),
+    ("rail", "dc_temp"): ("V", "output voltage versus temperature", "linear"),
+    ("bias", "dc_temp"): ("A", "bias current versus temperature", "linear"),
+    ("rail", "dc_load"): ("V", "rail voltage versus load", "linear"),
+    ("bias", "dc_iv"): ("A", "bias current versus pin voltage", "linear"),
+}
+
+#: (unit, label) per observable -- the axis table without the scale, kept for callers.
+CURVE_UNITS = {obs: (u, lab) for (_pt, obs), (u, lab, _s) in CURVE_AXES.items()}
 
 
 def _observable_for(block: str, port_type: str):
     return CURVE_OBSERVABLE.get((port_type, block))
 
 
+def _curve_axis(obs: str, port_type: str = "") -> tuple:
+    """(unit, label, y scale) for one curve; see CURVE_AXES."""
+    got = CURVE_AXES.get((port_type, obs))
+    if got is None:                 # no port type: the first port type that has it
+        got = next((v for (pt, o), v in CURVE_AXES.items() if o == obs), None)
+    return got or ("", obs, "log")
+
+
 def _curve_units(obs: str, port_type: str = "") -> tuple:
-    if obs == "dc_temp":            # rail `dc` is the output voltage, bias `idc` the current
-        if port_type == "rail":
-            return ("V", "output voltage versus temperature")
-        if port_type == "bias":
-            return ("A", "bias current versus temperature")
-    return CURVE_UNITS.get(obs, ("", obs))
+    unit, label, _scale = _curve_axis(obs, port_type)
+    return unit, label
+
+
+def _to_db(mags: list) -> list:
+    """|x| -> 20*log10|x|; a zero or missing point stays missing instead of becoming -inf."""
+    return [(20.0 * math.log10(m) if (m is not None and m > 0) else None) for m in mags]
 
 
 def _fit_blocks(fit: dict) -> list:

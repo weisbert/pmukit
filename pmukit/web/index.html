@@ -119,6 +119,24 @@ table.t{width:100%;border-collapse:collapse;font-size:12.5px}
 .grid{display:grid;gap:4px;min-width:0}
 .cell{height:28px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid transparent;font-family:var(--mono)}
 .cell.sel{outline:2px solid var(--ink);outline-offset:1px}
+/* grid markers: "h" = the grade is held for a reason, "off" = a default-off block is graded worse */
+.cell{position:relative;gap:4px}
+.cell .gm{font-size:9px;font-weight:600;line-height:1;padding:1px 3px;border-radius:2px;border:1px solid currentColor;opacity:.85;font-style:normal}
+.cell .gm.off{color:var(--ink3)}
+/* panels that must never scroll sideways: fixed table layout, long values wrap */
+.noxs{overflow-x:hidden}
+table.t.fixed{table-layout:fixed}
+.t.fixed th{white-space:normal;overflow-wrap:normal;padding:6px 5px}
+.t.fixed td{padding-left:5px;padding-right:5px}
+.t.fixed td{overflow-wrap:anywhere}
+.t.fixed td.num{white-space:normal}
+.t.fixed td.val{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.t tr.why>td{padding:0 8px 7px;border-bottom:1px solid var(--line2);font-size:12px;color:var(--ink2)}
+.t tr.haswhy>td{border-bottom:0;padding-bottom:3px}
+.t tr.why .full{margin-top:3px;color:var(--ink3)}
+.kv.wrap{grid-template-columns:minmax(80px,120px) minmax(0,1fr)}
+.kv.wrap>span{min-width:0;overflow-wrap:anywhere}
+.cellchart>:first-child{margin-top:0!important}
 .c-ok{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-line)}
 .c-warn{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-line)}
 .c-bad{background:var(--bad-bg);color:var(--bad);border-color:var(--bad-line)}
@@ -1049,14 +1067,15 @@ SCREENS.home = {
       mach = panel("This machine",
         (md.ready ? '<span class="badge b-ok">' + ICON.ok + " ready</span>"
                   : '<span class="badge b-warn">' + ICON.warn + " partial</span>"),
-        '<div class="kv">' + probes
+        /* a 380px column: long paths and probe details wrap instead of scrolling sideways */
+        '<div class="kv wrap">' + probes
         + '<span class="k">data</span><span class="mono">' + esc(md.data_root) + "</span>"
         + '<span class="k">pmukit</span><span class="mono">' + esc(md.pmukit) + " &middot; python "
         + esc(md.python) + "</span></div>"
         + '<div class="rowflex" style="margin-top:10px"><button class="btn sm" data-act="' + reid + '">'
         + ICON.retry + " Probe again</button>"
         + '<button class="btn sm" data-go="settings" title="engine, simulator, queue, CPUs, Donau accounts">'
-        + "Settings</button></div>", { style: "flex:none" });
+        + "Settings</button></div>", { style: "flex:none", bodyStyle: "overflow-x:hidden" });
     }
     var selp = (pd && pd.projects || []).filter(function(p){ return p.name === S.sel.project; })[0];
     var sel = panel("Selected", selp ? esc(selp.name) : "nothing selected",
@@ -2140,7 +2159,8 @@ function gradesGrid(gr){
           var id = regAction(function(){ pickCell(r.port, c.corner, c.temp_c); });
           return '<div class="cell rc c-' + gradeCls(c.grade) + (sel ? " sel" : "")
                + '" data-act="' + id + '"' + rc("cell", r.port + " " + c.corner + " " + c.temp_c, ctx)
-                  + ">" + gradeLabel(c.grade) + "</div>";
+               + ' title="' + esc(gridCellTitle(c)) + '"'
+                  + ">" + gradeLabel(c.grade) + gridMarks(c) + "</div>";
         }).join("");
   }).join("");
   return panel("Grade per port and cell", "worst block in the cell &middot; click a cell",
@@ -2151,11 +2171,38 @@ function gradesGrid(gr){
     + '<span><span class="badge b-warn">MARG</span> one block near its limit</span>'
     + '<span><span class="badge b-bad">FAIL</span> block outside tolerance</span>'
     + '<span><span class="badge b-acc">FIT</span> fitted, not yet judged</span>'
-    + '<span><span class="badge b-mute">N/R</span> the data behind it was never run</span></div>'
+    + '<span><span class="badge b-mute">N/R</span> the data behind it was never run</span>'
+    + '<span><i class="gm" style="font-style:normal;font-size:9px;border:1px solid;padding:0 3px;border-radius:2px">h</i>'
+    + " held at MARG: the fit is inside the limit but the data does not pin a parameter</span>"
+    + '<span><i class="gm" style="font-style:normal;font-size:9px;border:1px solid;padding:0 3px;border-radius:2px;color:var(--ink3)">off</i>'
+    + " a block that ships switched off grades worse; it is shown, not counted</span></div>"
     + (gr.why ? '<div class="callout warn" style="margin-top:10px">' + ICON.warn + " "
         + esc(gr.why) + (gr.graded_by !== "verify"
           ? ' <button class="btn sm" style="margin-left:8px" data-act="'
             + regAction(function(){ doVerify(); }) + '">Run verify</button>' : "") + "</div>" : ""));
+}
+/* The grade in a grid cell is what the model does AS DELIVERED. Two small marks say what the
+   colour alone cannot: "h" -- the headline grade is held at MARG for a reason (the data does
+   not pin a parameter), and "off" -- a block that ships switched off (a large-signal term)
+   grades worse than the cell; it is graded and shown, never averaged into the colour. */
+function offWorse(c){
+  var rank = { green:0, fitted:1, yellow:2, not_run:3, red:4 };
+  return (c.off || []).filter(function(o){
+    return (rank[o.grade] || 0) > (rank[c.grade] || 0) && o.grade !== "fitted"; });
+}
+function gridMarks(c){
+  var out = "";
+  if (c.held) out += '<i class="gm">h</i>';
+  if (offWorse(c).length) out += '<i class="gm off">off</i>';
+  return out;
+}
+function gridCellTitle(c){
+  var t = [];
+  if (c.block) t.push("worst block: " + c.block);
+  if (c.held) t.push("held at MARG: the data does not pin a parameter of "
+                     + (c.held_by || []).join(", "));
+  offWorse(c).forEach(function(o){ t.push(o.note || ("off by default: " + o.block)); });
+  return t.join(" · ");
 }
 function pickCell(port, corner, temp){
   S.sel.port = port; S.sel.corner = corner;
@@ -2182,33 +2229,72 @@ function cellDetail(){
   var blockRow = blocks.filter(function(b){
       return b.name === S.sel.block && (!S.sel.blockCell || b.cell_key === S.sel.blockCell); })[0]
     || blocks[0] || {};
+  S.sel.why = S.sel.why || {};
   var rows = blocks.map(function(b){
     var ctx = regCtx({ row: b });
     var id = regAction(function(){
       S.sel.block = b.name; S.sel.blockCell = b.cell_key; forget("curve:"); render(); refreshCli(); });
     var own = b.row_grade || b.grade;
     var badge = '<span class="badge b-' + gradeCls(own) + '"'
-      + (b.detail ? ' title="' + esc(b.detail) + '"' : "") + ">" + gradeLabel(own) + "</span>"
+      + (b.detail ? ' title="' + esc(b.detail) + '"' : "") + ">" + gradeLabel(own)
+      + "</span>" + (b.held ? '<div class="hint" style="color:var(--warn)">held</div>' : "")
       + (own !== b.grade ? '<div class="hint" title="verify grades a block once per corner: the '
           + 'worst of its loads, VSETs and temperatures">corner: ' + gradeLabel(b.grade) + "</div>" : "");
+    var why = whyRow(b);
     return "<tr" + rc("block", "block " + b.name, ctx) + ' class="click rc'
-      + (b === blockRow ? " sel" : "") + '" data-act="' + id + '">'
+      + (b === blockRow ? " sel" : "") + (why ? " haswhy" : "") + '" data-act="' + id + '">'
       + '<td class="mono">' + esc(b.name) + "</td>"
       + '<td class="num">' + (b.vset === null || b.vset === undefined ? '<span class="hint">all</span>' : esc(b.vset)) + "</td>"
       + '<td class="num">' + (b.load ? esc(b.load) : '<span class="hint">' + (b.temp === "sweep" ? "-" : "all") + "</span>") + "</td>"
       + '<td class="hint">' + esc(b.metric) + (b.temp === "sweep" ? " &middot; temperature sweep" : "") + "</td>"
-      + '<td class="num">' + esc(b.value) + "</td>"
+      + '<td class="num val" title="' + esc(b.value) + '">' + esc(b.value) + "</td>"
       + '<td class="num" style="color:var(--ink3)" title="green / yellow upper bound">' + esc(b.limit) + "</td>"
-      + "<td>" + badge + "</td></tr>";
+      + "<td>" + badge + "</td></tr>" + why;
   }).join("");
+  /* The chart comes first, right under the cell header: it is what the user came for, and at
+     the bottom of a long table it was off screen. The table follows, laid out to the panel's
+     width (no sideways scroll): long values wrap. */
+  var offs = (d.off_by_default || []).filter(function(o){ return o.grade !== "green"; });
+  var offBox = offs.length ? '<div class="callout" style="margin-top:12px">'
+      + offs.map(function(o){ return '<div><span class="badge b-mute">off by default</span> '
+          + esc(offText(o.note) || o.block) + "</div>"; }).join("") + "</div>" : "";
+  var table = '<table class="t fixed" style="margin-top:12px"><colgroup><col style="width:13%">'
+    + '<col style="width:10%"><col style="width:11%"><col><col style="width:15%">'
+    + '<col style="width:14%"><col style="width:14%"></colgroup>'
+    + '<thead><tr><th>Block</th><th class="num">VSET</th><th class="num">Load</th>'
+    + '<th>Metric</th><th class="num">Model vs GT</th>'
+    + '<th class="num">Limit</th><th>Grade</th></tr></thead><tbody>' + rows + "</tbody></table>";
+  var right = '<span class="rowflex" style="gap:6px"><span class="badge b-' + gradeCls(d.grade) + '"'
+    + ' title="the grade of the model as delivered: every block that is on by default">'
+    + gradeLabel(d.grade) + "</span>"
+    + (d.held ? '<span class="badge b-warn" title="held at MARG: the data does not pin a parameter of '
+        + esc((d.held_by || []).join(", ")) + '">held</span>' : "")
+    + (offs.length ? '<span class="badge b-mute" title="graded, shown below, not part of this grade">'
+        + offs.length + " off by default</span>" : "") + "</span>";
   return panel('<span class="mono">' + esc(S.sel.port) + "</span> &middot; " + esc(S.sel.corner)
     + " / " + esc(S.sel.temp) + " C",
-    "", '<table class="t"><thead><tr><th>Block</th><th class="num">VSET</th><th class="num">Load</th>'
-    + '<th>Metric</th><th class="num">Model vs GT</th>'
-    + '<th class="num">Limit</th><th>Grade</th></tr></thead><tbody>' + rows + "</tbody></table>"
-    + curveBlock(blockRow),
-    { style: "flex:1", right: '<span class="badge b-' + gradeCls(d.grade) + '">'
-      + gradeLabel(d.grade) + "</span>" });
+    "", '<div class="cellchart">' + curveBlock(blockRow) + "</div>" + offBox + table,
+    { style: "flex:1", bodyStyle: "overflow-x:hidden", right: right });
+}
+/* the server's note starts "off by default: ..."; beside the badge that says so, drop it */
+function offText(note){ return String(note || "").replace(/^off by default: /, ""); }
+/* The row's WHY, on the row: a held grade, a yellow / red / not-run reason, a block that ships
+   switched off. Short text; "more" opens the full sentence verify wrote. */
+function whyRow(b){
+  var own = b.row_grade || b.grade;
+  var bits = [];
+  if (b.default_off) bits.push('<span class="badge b-mute">off by default</span> '
+    + esc(offText(b.off_note) || ("not part of this cell's grade" + (b.switch ? "; turn on with " + b.switch : ""))));
+  if (b.reason && own !== "green") bits.push((b.held ? "<b>held:</b> " : "<b>why:</b> ")
+    + esc(b.reason.replace(/^held at yellow: /, "")));
+  if (!bits.length) return "";
+  var k = b.name + "|" + (b.cell_key || "");
+  var open = !!S.sel.why[k];
+  var full = b.reason_full || b.detail || "";
+  var tog = full ? ' <a data-act="' + regAction(function(){ S.sel.why[k] = !S.sel.why[k]; render(); })
+    + '">' + (open ? "less" : "more") + "</a>" : "";
+  return '<tr class="why"><td colspan="7">' + bits.join("<br>") + tog
+    + (open && full ? '<div class="full">' + esc(full) + "</div>" : "") + "</td></tr>";
 }
 function curveBlock(row){
   var block = row.name || "zout";
@@ -2237,9 +2323,13 @@ function curveBlock(row){
   }
   if (c === undefined) return '<div style="margin-top:12px">' + skeleton(4, S.slow[key]
     ? "evaluating the fitted model at the measurement frequencies" : "") + "</div>";
+  if (c.empty){           /* nothing to draw (one temperature: a flat law) -- a note, not an error */
+    return '<div class="callout" style="margin-top:12px">' + ICON.warn + " <b>" + esc(block)
+         + "</b>: " + esc(c.why || "no curve to draw for this block") + "</div>";
+  }
   var ctx = regCtx({ curve: c });
   var head = '<div class="rowflex" style="margin-top:14px;justify-content:space-between">'
-    + "<b>" + esc(c.label) + " &middot; " + esc(c.unit) + "</b>"
+    + '<b style="min-width:0;overflow-wrap:anywhere">' + esc(c.label) + " &middot; " + esc(c.unit) + "</b>"
     + (c.cell_label ? ' <span class="hint">' + esc(c.cell_label) + "</span>" : "")
     + '<div class="rowflex">'
     + (c.metric ? '<span class="hint mono">' + esc(c.metric) + " " + num(c.score, 3) + "</span>" : "")
@@ -2254,7 +2344,7 @@ function curveBlock(row){
             + (g === null ? "-" : g.toPrecision(4)) + '</td><td class="num">'
             + (m === null ? "-" : m.toPrecision(4)) + '</td><td class="num">' + curveDelta(c, g, m) + "</td></tr>";
     }
-    return head + '<table class="t" style="margin-top:8px"><thead><tr><th>'
+    return head + '<table class="t fixed" style="margin-top:8px"><thead><tr><th>'
       + esc(c.x_label || "x") + '</th>'
       + '<th class="num">GT</th><th class="num">Model</th><th class="num">'
       + (c.y_log === false ? "model - GT" : "delta dB") + "</th></tr></thead><tbody>"
@@ -2272,11 +2362,19 @@ function curveBlock(row){
    own unit for a temperature law (a few mV on 0.8 V is not a dB quantity). */
 function curveDelta(c, g, m){
   if (g === null || m === null || g === undefined || m === undefined) return "-";
+  if (c.y_db) return num(m - g, 2) + " dB";          /* both sides are already in dB */
   if (c.y_log === false) return eng(m - g, c.unit);
   return (g && m) ? num(20 * Math.log10(m / g), 2) : "-";
 }
-/* Hand-rolled SVG: magnitude above, phase below. Log x, log y for magnitude, linear phase.
-   A temperature law (y_log false) is drawn linear on both axes, in its own unit. */
+/* Hand-rolled SVG: magnitude above, phase below. Log x, log y for a magnitude (|Zout|, a
+   noise PSD), linear phase. A quantity already in dB (y_db, the rail PSRR) is drawn on a LINEAR
+   y axis -- dB is already a log -- and a temperature law (y_log false) is linear on both axes.
+   Linear axes get round ticks (1 / 2 / 5 steps). */
+function niceStep(range, n){
+  if (!(range > 0) || !isFinite(range)) return 1;
+  var raw = range / (n || 4), mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * mag;
+}
 function chartSvg(c){
   var W = 520, H = 210, PH = (c.complex && S.sel.showPhase !== false) ? 92 : 0;
   var X0 = 52, X1 = W - 8, Y0 = 12, Y1 = H - 26;
@@ -2293,6 +2391,9 @@ function chartSvg(c){
     if (!isFinite(lo) || !isFinite(hi)){ lo = 0; hi = 1; }
     var pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.01 || 1e-3;
     lo -= pad; hi += pad;
+    var ystep = niceStep(hi - lo, 5);
+    lo = Math.floor(lo / ystep) * ystep; hi = Math.ceil(hi / ystep) * ystep;
+    if (hi <= lo) hi = lo + ystep;
   }
   var logx = c.x_log !== false;
   var fx0 = logx ? Math.log10(Math.max(xs[0], 1e-12)) : xs[0];
@@ -2349,9 +2450,11 @@ function chartSvg(c){
       hline(Math.pow(10, p), "1e" + Math.round(p));
     }
   } else {
-    for (var k3 = 0; k3 <= 4; k3++){
-      var v3 = lo + (hi - lo) * k3 / 4;
-      hline(v3, esc(eng(v3, "")));
+    var dig = Math.max(0, -Math.floor(Math.log10(ystep) + 1e-9));
+    for (var k3 = 0; lo + k3 * ystep <= hi + ystep * 1e-6 && k3 < 40; k3++){
+      var v3 = lo + k3 * ystep;
+      if (Math.abs(v3) < ystep * 1e-9) v3 = 0;
+      hline(v3, esc(c.y_db ? num(v3, dig) : eng(v3, "")));
     }
   }
   var phase = "";
@@ -2412,11 +2515,12 @@ function hoverChart(node){
     }
     var g = c.gt.mag[i], m = c.model.mag[i];
     var db = curveDelta(c, g, m) + (c.y_log === false ? "" : " dB");
+    var yu = c.y_db ? " dB" : "";
     box.style.display = "block";
     box.style.left = Math.min(Math.max(8, e.clientX - r.left + 10), r.width - 230) + "px";
     box.textContent = (lg ? eng(c.x[i], "Hz") : num(c.x[i], 1) + " C")
-      + "   GT " + (g === null ? "-" : g.toPrecision(4))
-      + "   model " + (m === null ? "-" : m.toPrecision(4)) + "   " + db;
+      + "   GT " + (g === null ? "-" : g.toPrecision(4) + yu)
+      + "   model " + (m === null ? "-" : m.toPrecision(4) + yu) + "   " + db;
     var xv = X0 + (X1 - X0) * ((lg ? Math.log10(c.x[i]) : c.x[i]) - f0) / (f1 - f0);
     svg.querySelector(".hov").innerHTML = '<line x1="' + xv.toFixed(1) + '" x2="' + xv.toFixed(1)
       + '" y1="12" y2="184" stroke="var(--ink3)" stroke-dasharray="3 3"/>';
@@ -2424,7 +2528,9 @@ function hoverChart(node){
   svg.onmouseleave = function(){ box.style.display = "none"; svg.querySelector(".hov").innerHTML = ""; };
 }
 function curveCsv(c){
-  var out = ["f_hz,gt_mag,gt_phase_deg,model_mag,model_phase_deg"];
+  var mg = c.y_db ? "db" : "mag";
+  var out = [(c.x_log === false ? "x" : "f_hz") + ",gt_" + mg + ",gt_phase_deg,model_" + mg
+             + ",model_phase_deg"];
   for (var i = 0; i < c.x.length; i++){
     out.push([c.x[i], c.gt.mag[i], c.gt.phase_deg[i], c.model.mag[i], c.model.phase_deg[i]].join(","));
   }

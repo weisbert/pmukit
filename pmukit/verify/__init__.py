@@ -144,7 +144,7 @@ def verify_project(project, fit=None, dataset=None, derived=None, *, root=None, 
 
     notes: list[str] = list(getattr(fit, "notes", None) or [])
     rows = grade_project(fit, derived=derived, dataset=dataset)
-    roll = rollup(rows)
+    port_types = {str(k): str(v) for k, v in (getattr(fit, "ports", None) or {}).items()}
     not_run = [f"{g.port} {g.block} at corner {g.corner}: {g.detail}"
                for g in rows if g.grade == "not_run"]
     not_run += _grades.never_run_lines(dataset)
@@ -167,6 +167,9 @@ def verify_project(project, fit=None, dataset=None, derived=None, *, root=None, 
             hb_report = {"status": "not_run", "error": exc.to_dict(),
                          "notes": [f"the HB health check could not run: {exc.what}"]}
     ls_on = list(hb_report.get("ls_default_on") or [])
+    # The roll-up is what the model does AS DELIVERED: an `ls` term that did not pass the HB
+    # check ships switched off, so it is graded and listed but never colours its rail.
+    roll = rollup(rows, ls_default_on=ls_on, port_types=port_types)
 
     sys_report: dict | None = None
     if system:
@@ -194,7 +197,7 @@ def verify_project(project, fit=None, dataset=None, derived=None, *, root=None, 
         "envelope": envelope.to_json() if envelope is not None else {},
         "not_run": not_run,
         "notes": notes,
-        "worst": _grades.worst(rows),
+        "worst": _grades.worst(rows, ls_default_on=ls_on, port_types=port_types),
         "ls_default_on": ls_on,
     }
     if sys_report is not None:
@@ -244,7 +247,7 @@ def render(result: dict) -> str:
 
     rows = [Grade.from_json(g) for g in (result.get("grades") or [])]
     out = [f"# {result.get('project', '?')} -- verification", "",
-           rollup_table(rows), ""]
+           rollup_table(rows, ls_default_on=result.get("ls_default_on") or ()), ""]
     nr = result.get("not_run") or []
     out.append("Never run:" if nr else "Never run: nothing -- every planned item produced data.")
     for item in nr:

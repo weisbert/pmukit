@@ -43,7 +43,9 @@ from ..deliverable import GRADES, Grade
 
 __all__ = ["Limit", "LIMITS", "DEFAULT_DB", "DEFAULT_PCT", "limit_for", "explain_limits",
            "band_for", "grade_block", "grade_project", "rollup", "rollup_table",
-           "worst", "GRADES", "flagged_parameters", "partial_variables", "never_run_lines"]
+           "worst", "GRADES", "flagged_parameters", "partial_variables", "never_run_lines",
+           "headline", "default_off", "switch_for", "off_note", "block_verdict",
+           "short_reason", "is_held", "HELD_MARK"]
 
 
 # --------------------------------------------------------------------------- the table
@@ -365,10 +367,162 @@ def grade_block(bf, *, port_type: str = "rail") -> tuple[str, str]:
         grade = "yellow"
         detail = ("the residual is inside the green limit, but the data does not pin "
                   + _and_list(flags) + " -- a tight fit to an undetermined parameter is the "
-                  "classic false green, so this is held at yellow")
+                  "classic false green, so " + HELD_MARK)
     elif flags:
         detail += "; the data also does not pin " + _and_list(flags)
     return grade, _join(detail, extra)
+
+
+#: The phrase a held grade's detail always carries.  `is_held()` reads it back, so a grade that
+#: travelled through verify.json (which stores only grade + detail) still says it was held.
+HELD_MARK = "this is held at yellow"
+
+
+def is_held(detail) -> bool:
+    """Was this grade capped at yellow by the identifiability rule rather than earned by its
+    residual?  True only for the detail `grade_block` writes when it holds a green."""
+    return HELD_MARK in str(detail or "")
+
+
+def block_verdict(bf, *, port_type: str = "rail") -> dict:
+    """`grade_block` plus what the screen needs to say WHY, in one dict.
+
+    `band` is the colour the residual alone earns; `held` is True when the identifiability rule
+    pulled a green residual down to yellow, and `held_by` names the parameters it held on.
+    `reason` is a short line (no number) for an inline cell; `detail` is the full sentence.
+    """
+    grade, detail = grade_block(bf, port_type=port_type)
+    flags = flagged_parameters(bf) if not getattr(bf, "missing", False) else []
+    held = is_held(detail)
+    lim, _exact = limit_for(getattr(bf, "metric", ""))
+    score = _num(getattr(bf, "score", float("nan")))
+    band = lim.band(score) if (lim is not None and not math.isnan(score)) else grade
+    return {"grade": grade, "detail": detail, "band": band, "held": held,
+            "held_by": flags if held else [], "flags": flags,
+            "reason": short_reason(grade, detail, held_by=flags if held else [])}
+
+
+def short_reason(grade: str, detail: str, *, held_by=()) -> str:
+    """A few words for the inline cell -- the full `detail` sits behind it."""
+    if held_by:
+        return "held at yellow: the data does not pin " + _and_list(held_by)
+    if is_held(detail):
+        return "held at yellow: a parameter is not pinned by the data"
+    if grade == "green":
+        return ""
+    if grade == "not_run":
+        return "never measured -- missing coverage, not a bad fit"
+    d = str(detail or "")
+    if "no acceptance limit" in d or "no residual" in d:
+        return "cannot be signed off automatically"
+    if grade == "yellow":
+        return "past the green limit, still usable"
+    if grade == "red":
+        return "outside the acceptance limit"
+    return ""
+
+
+# --------------------------------------------------------------------------- default-on
+def _tier(block: str, port_type=None) -> str:
+    """The block's tier; with no port type, any port type that has a block of this name."""
+    types = [port_type] if port_type else list(spec.PORT_TYPES)
+    for pt in types:
+        try:
+            return spec.tier_of(str(block), str(pt))
+        except Exception:                              # noqa: BLE001 -- not a block of pt
+            continue
+    return ""
+
+
+def default_off(block: str, port: str, port_type=None, ls_default_on=()) -> bool:
+    """Is this block switched OFF in the model as delivered, unless the consumer turns it on?
+
+    Only the `ls` tier has a switch (`load_en_<rail>`), and it defaults on only for the rails
+    that passed the HB health check (`ls_default_on`, which lists rails; a `load_en_<rail>`
+    spelling is accepted too).  Every other tier is what the delivered model does by default.
+    """
+    if _tier(block, port_type) != "ls":
+        return False
+    on = {str(x) for x in (ls_default_on or ())}
+    return str(port) not in on and f"load_en_{port}" not in on
+
+
+def switch_for(block: str, port: str) -> str:
+    """The instance parameter that turns a default-off block on, e.g. `load_en_VDD0P8_B=1`."""
+    return f"load_en_{port}=1" if str(block) == "load_en" else ""
+
+
+def off_note(block: str, port: str, grade: str) -> str:
+    """The one line that names a default-off block without letting it colour the cell."""
+    sw = switch_for(block, port)
+    how = (f"turn on with {sw} only if you need the load event and accept this grade"
+           if sw else "it is not active in the delivered model")
+    return (f"off by default: {block} {_WORD.get(grade, grade)} -- not part of this grade; "
+            f"{how}")
+
+
+_WORD = {"green": "OK", "yellow": "MARG", "red": "FAIL", "not_run": "not run",
+         "fitted": "fitted"}
+
+#: The rank the headline uses; "fitted" (the web shell's "fitted, not yet judged") sits
+#: between green and yellow, exactly as in `pmukit.server`.
+_HEAD_RANK = {"green": 0, "fitted": 1, "yellow": 2, "not_run": 3, "red": 4}
+
+
+def _get(item, key, default=""):
+    if isinstance(item, dict):
+        return item.get(key, default)
+    return getattr(item, key, default)
+
+
+def headline(items, *, port: str, port_type=None, ls_default_on=()) -> dict:
+    """THE aggregation of one (port, cell): what the delivered model does BY DEFAULT.
+
+    `items` are grades for the blocks of one port in one cell (a `Grade`, or any dict with
+    `block` / `grade` / `detail`).  The headline is the worst of the blocks that are ON in the
+    delivered model; a block that ships switched off (an `ls` term that did not pass the HB
+    check) is still graded and still reported -- in `off_by_default`, with the switch that
+    turns it on -- but it never drags the cell's colour, because a consumer who instantiates
+    the model as delivered never meets it.
+
+    Returns `{grade, block, detail, held, held_by, off_by_default: [{block, grade, detail,
+    switch, note}]}`.  `held` is True when the headline block's grade was held at yellow by the
+    identifiability rule.  The web shell's grid, the cell view and the rail roll-up all call
+    this, and `deliverable.render_report` should too, so they cannot disagree.
+    """
+    on, off = [], []
+    for it in items:
+        blk = str(_get(it, "block"))
+        if default_off(blk, port, port_type, ls_default_on):
+            off.append(it)
+        else:
+            on.append(it)
+    worst = None
+    for it in on:
+        if worst is None or _HEAD_RANK.get(str(_get(it, "grade")), 0) > \
+                _HEAD_RANK.get(str(_get(worst, "grade")), 0):
+            worst = it
+    if worst is None:
+        head = {"grade": "not_run", "block": "",
+                "detail": "only blocks that are off by default were graded here"}
+    else:
+        head = {"grade": str(_get(worst, "grade")), "block": str(_get(worst, "block")),
+                "detail": str(_get(worst, "detail") or "")}
+    held = [str(_get(it, "block")) for it in on
+            if str(_get(it, "grade")) == head["grade"] and is_held(_get(it, "detail"))]
+    head["held"] = bool(held) and head["grade"] == "yellow"
+    head["held_by"] = held if head["held"] else []
+    seen, off_rows = set(), []
+    for it in sorted(off, key=lambda x: -_HEAD_RANK.get(str(_get(x, "grade")), 0)):
+        blk = str(_get(it, "block"))
+        if blk in seen:
+            continue
+        seen.add(blk)
+        g = str(_get(it, "grade"))
+        off_rows.append({"block": blk, "grade": g, "detail": str(_get(it, "detail") or ""),
+                         "switch": switch_for(blk, port), "note": off_note(blk, port, g)})
+    head["off_by_default"] = off_rows
+    return head
 
 
 #: Contract 0c: report.md's rail table may carry NO internal score.  `deliverable.py`'s own
@@ -550,8 +704,13 @@ def _never_planned(plan, corner_list, have) -> list[Grade]:
 
 
 # --------------------------------------------------------------------------- roll-up
-def rollup(grades) -> dict:
-    """`{port: {corner: {grade, block, detail}}}` -- max() over the blocks of that cell.
+def rollup(grades, *, ls_default_on=(), port_types=None) -> dict:
+    """`{port: {corner: {grade, block, detail, held, held_by, off_by_default}}}`.
+
+    The headline of each cell is `headline()`: max() over the blocks that are ON in the
+    delivered model.  A block that ships switched off (`ls_default_on` names the rails whose
+    load-event term passed the HB check; everything else in the `ls` tier is off) is listed in
+    `off_by_default` with its own grade, and does not colour the cell.
 
     ADDING COVERAGE CAN ONLY LOWER THIS.  The roll-up is a maximum over everything that was
     characterized, so a rail that was green on one corner and turns yellow once a second
@@ -559,26 +718,36 @@ def rollup(grades) -> dict:
     did not change, the question got harder.  METHODOLOGY records the same effect on the real
     part, where a single-operating-point fit is silently optimistic at the light-load edge.
     """
-    out: dict[str, dict[str, dict]] = {}
+    types = dict(port_types or {})
+    cells: dict[tuple[str, str], list] = {}
+    order: list[tuple[str, str]] = []
     for g in grades:
-        cell = out.setdefault(g.port, {})
-        cur = cell.get(g.corner)
-        if cur is None or _rank(g.grade) > _rank(cur["grade"]):
-            cell[g.corner] = {"grade": g.grade, "block": g.block, "detail": g.detail}
+        key = (g.port, g.corner)
+        if key not in cells:
+            cells[key] = []
+            order.append(key)
+        cells[key].append(g)
+    out: dict[str, dict[str, dict]] = {}
+    for (port, corner) in order:
+        out.setdefault(port, {})[corner] = headline(
+            cells[(port, corner)], port=port, port_type=types.get(port),
+            ls_default_on=ls_default_on)
     return out
 
 
-def worst(grades) -> str:
-    """The one colour for the whole deliverable."""
+def worst(grades, *, ls_default_on=(), port_types=None) -> str:
+    """The one colour for the whole deliverable, as delivered (default-off blocks excluded)."""
     if not grades:
         return "not_run"
-    return max((g.grade for g in grades), key=_rank)
+    roll = rollup(grades, ls_default_on=ls_default_on, port_types=port_types)
+    heads = [c["grade"] for cells in roll.values() for c in cells.values()]
+    return max(heads, key=_rank) if heads else "not_run"
 
 
-def rollup_table(grades) -> str:
+def rollup_table(grades, *, ls_default_on=(), port_types=None) -> str:
     """The roll-up as fixed-width text -- what `pmukit verify` prints and what goes in the
     report.  No scores: contract 0c."""
-    roll = rollup(grades)
+    roll = rollup(grades, ls_default_on=ls_default_on, port_types=port_types)
     ports = sorted(roll)
     corners = sorted({c for cells in roll.values() for c in cells})
     if not ports:
@@ -586,6 +755,7 @@ def rollup_table(grades) -> str:
     wide = max([len(p) for p in ports] + [4])
     head = "rail".ljust(wide) + "".join(f"  {c:>10}" for c in corners) + "   worst block"
     lines = [head, "-" * len(head)]
+    off_lines: list[str] = []
     for p in ports:
         row = p.ljust(wide)
         bad = None
@@ -594,6 +764,12 @@ def rollup_table(grades) -> str:
             row += f"  {(cell['grade'] if cell else '--'):>10}"
             if cell and (bad is None or _rank(cell["grade"]) > _rank(bad["grade"])):
                 bad = cell
-        lines.append(row + f"   {bad['block'] if bad else '--'}")
-    lines += ["", f"worst overall: {worst(grades)}"]
+            for o in (cell or {}).get("off_by_default") or []:
+                if o["grade"] != "green":
+                    off_lines.append(f"  {p} at {c}: {o['note']}")
+        lines.append(row + f"   {(bad['block'] or '--') if bad else '--'}")
+    overall = worst(grades, ls_default_on=ls_default_on, port_types=port_types)
+    lines += ["", f"worst overall: {overall}"]
+    if off_lines:
+        lines += ["", "Off by default (graded, not part of the grades above):"] + off_lines
     return "\n".join(lines) + "\n"
