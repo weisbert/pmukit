@@ -140,6 +140,27 @@ def test_wrong_master_for_a_prefix_is_a_hard_error():
     assert "isource" in str(e.value) and "IL_" in str(e.value)
 
 
+@pytest.mark.parametrize("cap", ["Cdec (VDD0P8_A 0) capacitor c=1u",
+                                 "Cdec (0 VDD0P8_A) capacitor c=1u",
+                                 "Cdec (VDD0P8_A 0) mimcap_hd w=20u l=20u"])
+def test_a_decap_on_a_rail_is_refused(cap):
+    """The rail is characterized intrinsic; a bench decap would be fitted into Zout and then
+    counted again in the system bench."""
+    with pytest.raises(PmuError) as e:
+        Netlist(DEMO.replace("dcOp dc", cap + "\ndcOp dc")).scan("PMU_TOP")
+    assert "Cdec" in e.value.what and "VDD0P8_A" in e.value.what
+
+
+def test_only_top_level_rail_loads_count():
+    """The PMU's own output cap (ca1, inside the subckt) is the circuit, not a bench decap; a
+    cap on a bias or supply net is not a rail load; anything else on a rail is only noted."""
+    text = DEMO.replace("dcOp dc", "Cb (IB_PTAT 0) capacitor c=1p\n"
+                                   "Rld (VDD0P8_B 0) resistor r=10k\ndcOp dc")
+    t = Netlist(text).scan("PMU_TOP")
+    assert any("Rld" in n and "VDD0P8_B" in n for n in t.notes)
+    assert not any("ca1" in n or "Cb" in n for n in t.notes)
+
+
 def test_missing_pmu_instance_lists_candidates():
     with pytest.raises(PmuError) as e:
         nl().scan("NOT_THERE")

@@ -491,6 +491,7 @@ class Netlist:
                 p.fate = "ignore"
             table.pins[pin] = p
 
+        self._check_rail_loads(table, pmu_inst)
         self._attach_grounds(table, master)
 
         table.sections = {f: s for f, s in self.includes() if s is not None}
@@ -499,6 +500,44 @@ class Netlist:
         if ports:
             table.apply_fates(ports)
         return table
+
+    def _check_rail_loads(self, table: PinTable, pmu_inst: str) -> None:
+        """A rail is characterized INTRINSIC: nothing but its IL_ source may hang on its net.
+
+        A decap on a rail is fitted INTO the model's Zout, and the designer then adds the same
+        decap again in the system bench -- counted twice. That is refused. Anything else found
+        there (a probe, a resistor) is named in the notes: it becomes part of what is measured.
+        """
+        rails = {p.net: p for p in table.pins.values() if p.role == "rail"}
+        if not rails:
+            return
+        caps, others = [], []
+        for name, nodes, master, _rest in self.instances(0):
+            if name == pmu_inst or not nodes:
+                continue
+            hit = [rails[n] for n in dict.fromkeys(nodes) if n in rails]
+            for p in hit:
+                if name == p.src:
+                    continue
+                if master == "capacitor" or "cap" in master.lower():
+                    caps.append((name, master, p))
+                elif master != "iprobe":
+                    others.append((name, master, p))
+        if caps:
+            raise PmuError(
+                what="decap on a rail: " + ", ".join(
+                    f"{n} ({m}) on rail {p.name} (net {p.net})" for n, m, p in caps) + ".",
+                why="Rails are characterized without any decap and the delivered model contains "
+                    "none. A decap in this bench is fitted into the model's Zout, and the one in "
+                    "your system bench then counts a second time.",
+                do=[f"Remove {', '.join(n for n, _m, _p in caps)} from the bench and re-export; "
+                    "put the decap in the system bench that uses the model."],
+                where=f"{self.path or 'netlist'}: rail net(s) "
+                      f"{', '.join(sorted({p.net for _n, _m, p in caps}))}")
+        for n, m, p in others:
+            table.notes.append(
+                f"{n} ({m}) also hangs on rail {p.name} (net {p.net}): it is part of what gets "
+                "characterized and fitted into the model; remove it unless that is intended")
 
     def _subckt_ports(self, master: str) -> list[str] | None:
         """Port list of `subckt <master> (a b c)` / `subckt <master> a b c`, or None if absent."""
