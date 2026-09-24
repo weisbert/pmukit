@@ -106,6 +106,11 @@ table.t{width:100%;border-collapse:collapse;font-size:12.5px}
 .code{font-family:var(--mono);font-size:11.5px;background:var(--code-bg);color:var(--code-ink);padding:10px 12px;border-radius:4px;white-space:pre;overflow:auto;line-height:1.5}
 .code.wrap{white-space:pre-wrap}
 .code .e{color:#e3944a}.code .a{color:#7fb98b}.code .d{color:#d98b84}.code .c{color:#8a867d}
+.md{font-size:13px;line-height:1.55;overflow:auto;overflow-wrap:anywhere}
+.md h1{font-size:16px;margin:4px 0 10px}.md h2{font-size:14px;margin:16px 0 8px}.md h3,.md h4{font-size:13px;margin:12px 0 6px}
+.md p{margin:0 0 10px}.md ul,.md ol{margin:0 0 10px;padding-left:20px}.md li{margin:2px 0}
+.md code{font-family:var(--mono);font-size:11.5px;background:var(--line2);padding:0 3px;border-radius:3px}
+.md table.t{margin:0 0 12px}.md table.t td{vertical-align:top}.md hr{border:0;border-top:1px solid var(--line);margin:14px 0}
 .bar{display:flex;height:9px;border-radius:5px;overflow:hidden;background:var(--line2)}
 .seg{height:100%}
 .grid{display:grid;gap:4px;min-width:0}
@@ -900,7 +905,8 @@ SCREENS.home = {
         { style: "flex:none" });
     } else {
       var probes = (md.probes || []).map(function(pr){
-        var badge = pr.ok ? '<span class="badge b-ok">' + ICON.ok + " ok</span>"
+        var badge = pr.needed === false ? '<span class="badge b-mute">not needed</span>'
+                  : pr.ok ? '<span class="badge b-ok">' + ICON.ok + " ok</span>"
                           : '<span class="badge b-bad">' + ICON.x + " no</span>";
         var why = pr.ok ? esc(pr.detail)
           : '<span class="hint">' + esc((pr.reason || {}).what || "") + "</span>";
@@ -1856,7 +1862,12 @@ SCREENS.model = {
                + '</span><div class="hint">' + esc(u.note || "") + "</div></div>"; }).join("")
         : '<span class="badge b-ok">' + ICON.ok + " everything was run</span>") + "</div>"
       + '<div class="box"><div class="h">HB health check</div>'
-      + (sum.hb ? '<span class="badge b-' + (sum.hb.ok ? "ok" : "bad") + '">'
+      + (sum.hb && sum.hb.ran === false
+        ? '<span class="badge b-mute">' + esc(sum.hb.detail || "not run") + "</span>"
+          + '<div class="hint">' + esc(sum.hb.note || "") + " Every large-signal term stays off.</div>"
+          + '<button class="btn sm" style="margin-top:6px" data-act="'
+          + regAction(function(){ doVerify(); }) + '">Run the HB health check again</button>'
+        : sum.hb ? '<span class="badge b-' + (sum.hb.ok ? "ok" : "bad") + '">'
           + (sum.hb.ok ? ICON.ok : ICON.x) + " " + esc(sum.hb.detail || "") + "</span>"
           + '<div class="hint">' + esc(sum.hb.note || "") + "</div>"
         : '<span class="badge b-mute">not checked</span><div class="hint">Run verify to drive the '
@@ -1911,7 +1922,7 @@ function gradesGrid(gr){
     + '<span><span class="badge b-acc">FIT</span> fitted, not yet judged</span>'
     + '<span><span class="badge b-mute">N/R</span> the data behind it was never run</span></div>'
     + (gr.why ? '<div class="callout warn" style="margin-top:10px">' + ICON.warn + " "
-        + esc(gr.why) + (gr.graded_by === "fit"
+        + esc(gr.why) + (gr.graded_by !== "verify"
           ? ' <button class="btn sm" style="margin-left:8px" data-act="'
             + regAction(function(){ doVerify(); }) + '">Run verify</button>' : "") + "</div>" : ""));
 }
@@ -1919,7 +1930,7 @@ function pickCell(port, corner, temp){
   S.sel.port = port; S.sel.corner = corner;
   S.sel.temp = (temp === null || temp === undefined) ? "" : temp;
   S.sel.cell = corner + (S.sel.temp === "" ? "" : "/" + S.sel.temp + "C");
-  S.sel.block = null;
+  S.sel.block = null; S.sel.blockCell = null;
   forget("cell:"); forget("curve:");
   render(); refreshCli();
 }
@@ -1934,24 +1945,35 @@ function cellDetail(){
     + "&temp=" + encodeURIComponent(temp), "model");
   if (d === undefined) return panel("Cell", "", loadingBlock(key, "collecting the block scores"),
     { style: "flex:1" });
-  var block = S.sel.block || (d.blocks[0] || {}).name || "zout";
-  var blockRow = (d.blocks || []).filter(function(b){ return b.name === block; })[0]
-              || (d.blocks || [])[0] || {};
-  var rows = (d.blocks || []).map(function(b){
+  /* One block is fitted once per load and per VSET, so a row is (block, cell), not the block:
+     the selected ROW is what the chart draws. */
+  var blocks = d.blocks || [];
+  var blockRow = blocks.filter(function(b){
+      return b.name === S.sel.block && (!S.sel.blockCell || b.cell_key === S.sel.blockCell); })[0]
+    || blocks[0] || {};
+  var rows = blocks.map(function(b){
     var ctx = regCtx({ row: b });
-    var id = regAction(function(){ S.sel.block = b.name; forget("curve:"); render(); refreshCli(); });
+    var id = regAction(function(){
+      S.sel.block = b.name; S.sel.blockCell = b.cell_key; forget("curve:"); render(); refreshCli(); });
+    var own = b.row_grade || b.grade;
+    var badge = '<span class="badge b-' + gradeCls(own) + '"'
+      + (b.detail ? ' title="' + esc(b.detail) + '"' : "") + ">" + gradeLabel(own) + "</span>"
+      + (own !== b.grade ? '<div class="hint" title="verify grades a block once per corner: the '
+          + 'worst of its loads, VSETs and temperatures">corner: ' + gradeLabel(b.grade) + "</div>" : "");
     return "<tr" + rc("block", "block " + b.name, ctx) + ' class="click rc'
-      + (b.name === block ? " sel" : "") + '" data-act="' + id + '">'
-      + '<td class="mono">' + esc(b.name)
-      + (b.load ? ' <span class="hint">@ ' + esc(b.load) + "</span>" : "") + "</td>"
-      + '<td class="hint">' + esc(b.metric) + "</td>"
+      + (b === blockRow ? " sel" : "") + '" data-act="' + id + '">'
+      + '<td class="mono">' + esc(b.name) + "</td>"
+      + '<td class="num">' + (b.vset === null || b.vset === undefined ? '<span class="hint">all</span>' : esc(b.vset)) + "</td>"
+      + '<td class="num">' + (b.load ? esc(b.load) : '<span class="hint">' + (b.temp === "sweep" ? "-" : "all") + "</span>") + "</td>"
+      + '<td class="hint">' + esc(b.metric) + (b.temp === "sweep" ? " &middot; temperature sweep" : "") + "</td>"
       + '<td class="num">' + esc(b.value) + "</td>"
-      + '<td class="num" style="color:var(--ink3)">' + esc(b.limit) + "</td>"
-      + '<td><span class="badge b-' + gradeCls(b.grade) + '">' + gradeLabel(b.grade) + "</span></td></tr>";
+      + '<td class="num" style="color:var(--ink3)" title="green / yellow upper bound">' + esc(b.limit) + "</td>"
+      + "<td>" + badge + "</td></tr>";
   }).join("");
   return panel('<span class="mono">' + esc(S.sel.port) + "</span> &middot; " + esc(S.sel.corner)
     + " / " + esc(S.sel.temp) + " C",
-    "", '<table class="t"><thead><tr><th>Block</th><th>Metric</th><th class="num">Model vs GT</th>'
+    "", '<table class="t"><thead><tr><th>Block</th><th class="num">VSET</th><th class="num">Load</th>'
+    + '<th>Metric</th><th class="num">Model vs GT</th>'
     + '<th class="num">Limit</th><th>Grade</th></tr></thead><tbody>' + rows + "</tbody></table>"
     + curveBlock(blockRow),
     { style: "flex:1", right: '<span class="badge b-' + gradeCls(d.grade) + '">'
@@ -1977,6 +1999,7 @@ function curveBlock(row){
   var ctx = regCtx({ curve: c });
   var head = '<div class="rowflex" style="margin-top:14px;justify-content:space-between">'
     + "<b>" + esc(c.label) + " &middot; " + esc(c.unit) + "</b>"
+    + (c.cell_label ? ' <span class="hint">' + esc(c.cell_label) + "</span>" : "")
     + '<div class="rowflex">'
     + (c.metric ? '<span class="hint mono">' + esc(c.metric) + " " + num(c.score, 3) + "</span>" : "")
     + verbButtons("chart", CTXS[ctx]) + "</div></div>";
@@ -1985,15 +2008,15 @@ function curveBlock(row){
     var rows = "";
     for (var i = 0; i < n; i += step){
       var g = c.gt.mag[i], m = c.model.mag[i];
-      var d = (g && m) ? (20 * Math.log10(m / g)) : NaN;
       rows += "<tr><td class=\"mono\">"
             + (c.x_log === false ? num(c.x[i], 1) : eng(c.x[i], "Hz")) + '</td><td class="num">'
             + (g === null ? "-" : g.toPrecision(4)) + '</td><td class="num">'
-            + (m === null ? "-" : m.toPrecision(4)) + '</td><td class="num">' + num(d, 2) + "</td></tr>";
+            + (m === null ? "-" : m.toPrecision(4)) + '</td><td class="num">' + curveDelta(c, g, m) + "</td></tr>";
     }
     return head + '<table class="t" style="margin-top:8px"><thead><tr><th>'
       + esc(c.x_label || "x") + '</th>'
-      + '<th class="num">GT</th><th class="num">Model</th><th class="num">delta dB</th></tr></thead><tbody>'
+      + '<th class="num">GT</th><th class="num">Model</th><th class="num">'
+      + (c.y_log === false ? "model - GT" : "delta dB") + "</th></tr></thead><tbody>"
       + rows + "</tbody></table>";
   }
   return head + '<div class="rc" data-chart="' + ctx + '"' + rc("chart", "chart " + c.label, ctx)
@@ -2004,17 +2027,32 @@ function curveBlock(row){
     + '<span class="hint">' + c.points + " points, the same ones on both sides"
     + (c.source ? " &middot; " + esc(c.source) : "") + " &middot; hover for values</span></div>";
 }
-/* Hand-rolled SVG: magnitude above, phase below. Log x, log y for magnitude, linear phase. */
+/* Model minus measurement at one point: dB for a spectrum, the plain difference in the curve's
+   own unit for a temperature law (a few mV on 0.8 V is not a dB quantity). */
+function curveDelta(c, g, m){
+  if (g === null || m === null || g === undefined || m === undefined) return "-";
+  if (c.y_log === false) return eng(m - g, c.unit);
+  return (g && m) ? num(20 * Math.log10(m / g), 2) : "-";
+}
+/* Hand-rolled SVG: magnitude above, phase below. Log x, log y for magnitude, linear phase.
+   A temperature law (y_log false) is drawn linear on both axes, in its own unit. */
 function chartSvg(c){
   var W = 520, H = 210, PH = (c.complex && S.sel.showPhase !== false) ? 92 : 0;
   var X0 = 52, X1 = W - 8, Y0 = 12, Y1 = H - 26;
   var xs = c.x, gm = c.gt.mag, mm = c.model.mag;
+  var logy = c.y_log !== false;
   var lo = Infinity, hi = -Infinity;
   [gm, mm].forEach(function(a){ a.forEach(function(v){
-    if (v !== null && v > 0 && isFinite(v)){ if (v < lo) lo = v; if (v > hi) hi = v; } }); });
-  if (!isFinite(lo) || !isFinite(hi) || lo <= 0){ lo = 1e-3; hi = 1; }
-  lo = Math.pow(10, Math.floor(Math.log10(lo))); hi = Math.pow(10, Math.ceil(Math.log10(hi)));
-  if (hi <= lo) hi = lo * 10;
+    if (v !== null && isFinite(v) && (v > 0 || !logy)){ if (v < lo) lo = v; if (v > hi) hi = v; } }); });
+  if (logy){
+    if (!isFinite(lo) || !isFinite(hi) || lo <= 0){ lo = 1e-3; hi = 1; }
+    lo = Math.pow(10, Math.floor(Math.log10(lo))); hi = Math.pow(10, Math.ceil(Math.log10(hi)));
+    if (hi <= lo) hi = lo * 10;
+  } else {
+    if (!isFinite(lo) || !isFinite(hi)){ lo = 0; hi = 1; }
+    var pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.01 || 1e-3;
+    lo -= pad; hi += pad;
+  }
   var logx = c.x_log !== false;
   var fx0 = logx ? Math.log10(Math.max(xs[0], 1e-12)) : xs[0];
   var fx1 = logx ? Math.log10(Math.max(xs[xs.length - 1], 1e-11)) : xs[xs.length - 1];
@@ -2024,6 +2062,10 @@ function chartSvg(c){
     return X0 + (X1 - X0) * (v - fx0) / (fx1 - fx0);
   };
   var Y = function(v){
+    if (!logy){
+      if (v === null || !isFinite(v)) v = lo;
+      return Y1 - (Y1 - Y0) * (v - lo) / (hi - lo);
+    }
     if (v === null || !isFinite(v) || v <= 0) v = lo;
     return Y1 - (Y1 - Y0) * (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo));
   };
@@ -2056,11 +2098,20 @@ function chartSvg(c){
         + '" text-anchor="middle" fill="var(--ink3)">' + tk[1] + "</text>";
   });
   var hg = "";
-  for (var p = Math.log10(lo); p <= Math.log10(hi) + 1e-9; p += 1){
-    var v = Math.pow(10, p);
+  var hline = function(v, label){
     hg += '<line x1="' + X0 + '" x2="' + X1 + '" y1="' + Y(v).toFixed(1) + '" y2="' + Y(v).toFixed(1)
        + '" stroke="var(--line2)"/><text x="' + (X0 - 6) + '" y="' + (Y(v) + 3.5).toFixed(1)
-       + '" text-anchor="end" fill="var(--ink3)">1e' + Math.round(p) + "</text>";
+       + '" text-anchor="end" fill="var(--ink3)">' + label + "</text>";
+  };
+  if (logy){
+    for (var p = Math.log10(lo); p <= Math.log10(hi) + 1e-9; p += 1){
+      hline(Math.pow(10, p), "1e" + Math.round(p));
+    }
+  } else {
+    for (var k3 = 0; k3 <= 4; k3++){
+      var v3 = lo + (hi - lo) * k3 / 4;
+      hline(v3, esc(eng(v3, "")));
+    }
   }
   var phase = "";
   if (PH){
@@ -2119,12 +2170,12 @@ function hoverChart(node){
       if (dd < best){ best = dd; i = k; }
     }
     var g = c.gt.mag[i], m = c.model.mag[i];
-    var db = (g && m) ? (20 * Math.log10(m / g)).toFixed(2) : "-";
+    var db = curveDelta(c, g, m) + (c.y_log === false ? "" : " dB");
     box.style.display = "block";
     box.style.left = Math.min(Math.max(8, e.clientX - r.left + 10), r.width - 230) + "px";
-    box.textContent = (lg ? eng(c.x[i], "Hz") : num(c.x[i], 1) + " " + (c.x_label || ""))
+    box.textContent = (lg ? eng(c.x[i], "Hz") : num(c.x[i], 1) + " C")
       + "   GT " + (g === null ? "-" : g.toPrecision(4))
-      + "   model " + (m === null ? "-" : m.toPrecision(4)) + "   " + db + " dB";
+      + "   model " + (m === null ? "-" : m.toPrecision(4)) + "   " + db;
     var xv = X0 + (X1 - X0) * ((lg ? Math.log10(c.x[i]) : c.x[i]) - f0) / (f1 - f0);
     svg.querySelector(".hov").innerHTML = '<line x1="' + xv.toFixed(1) + '" x2="' + xv.toFixed(1)
       + '" y1="12" y2="184" stroke="var(--ink3)" stroke-dasharray="3 3"/>';
@@ -2145,6 +2196,88 @@ function doVerify(){
 function doDeliver(){
   startJob(api("/api/p/" + P() + "/deliver", { method:"POST", body:{} }), "writing the deliverable",
     function(j){ forget("deliverables"); if (j.status !== "failed") go("deliver"); });
+}
+
+/* A nested object as key/value rows: `extra: {user: x}` becomes the row "extra.user  x", never
+   "[object Object]"; an empty value says so instead of leaving a blank. */
+function kvRows(obj, prefix){
+  return Object.keys(obj || {}).map(function(k){
+    var v = obj[k], name = prefix ? prefix + "." + k : k;
+    if (v !== null && typeof v === "object" && !(v instanceof Array)){
+      return Object.keys(v).length ? kvRows(v, name)
+        : '<span class="k">' + esc(name) + '</span><span class="hint">(none)</span>';
+    }
+    var txt = v instanceof Array ? v.join(", ") : v;
+    return '<span class="k">' + esc(name) + "</span>"
+      + (txt === "" || txt === null || txt === undefined
+         ? '<span class="hint">(not recorded)</span>' : '<span class="mono">' + esc(txt) + "</span>");
+  }).join("");
+}
+/* A minimal, SAFE markdown subset for report.md: headings, paragraphs, lists, tables, rules,
+   fenced code, `code` and **bold**. Every character of the source is escaped first; only the
+   tags written here are ever emitted, so a report can never inject markup into the page. */
+function mdInline(s){
+  var parts = String(s).split("`");
+  return parts.map(function(p, i){
+    if (i % 2 === 1 && i < parts.length - 1) return "<code>" + esc(p) + "</code>";
+    return esc(i % 2 === 1 ? "`" + p : p).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  }).join("");
+}
+function mdRender(text){
+  var lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  var out = [], para = [], i = 0;
+  var cells = function(ln){
+    return ln.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|")
+      .map(function(c){ return c.trim(); });
+  };
+  var flush = function(){
+    if (para.length) out.push("<p>" + mdInline(para.join(" ")) + "</p>");
+    para = [];
+  };
+  while (i < lines.length){
+    var ln = lines[i], m;
+    if (/^\s*```/.test(ln)){
+      flush();
+      var code = [];
+      for (i++; i < lines.length && !/^\s*```/.test(lines[i]); i++) code.push(lines[i]);
+      i++;
+      out.push('<div class="code">' + esc(code.join("\n")) + "</div>");
+      continue;
+    }
+    if ((m = /^(#{1,6})\s+(.*)$/.exec(ln))){
+      flush();
+      var lvl = Math.min(m[1].length, 4);
+      out.push("<h" + lvl + ">" + mdInline(m[2]) + "</h" + lvl + ">");
+      i++; continue;
+    }
+    if (/^\s*(-{3,}|\*{3,})\s*$/.test(ln)){ flush(); out.push("<hr>"); i++; continue; }
+    if (/^\s*\|/.test(ln) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])){
+      flush();
+      var head = cells(ln), body = [];
+      for (i += 2; i < lines.length && /^\s*\|/.test(lines[i]); i++) body.push(cells(lines[i]));
+      out.push('<table class="t"><thead><tr>' + head.map(function(c){
+          return "<th>" + mdInline(c) + "</th>"; }).join("") + "</tr></thead><tbody>"
+        + body.map(function(r){ return "<tr>" + r.map(function(c){
+            return "<td>" + mdInline(c) + "</td>"; }).join("") + "</tr>"; }).join("")
+        + "</tbody></table>");
+      continue;
+    }
+    if (/^\s*([-*]|\d+\.)\s+/.test(ln)){
+      flush();
+      var ordered = /^\s*\d+\./.test(ln), items = [];
+      for (; i < lines.length && /^\s*([-*]|\d+\.)\s+/.test(lines[i]); i++){
+        items.push(lines[i].replace(/^\s*([-*]|\d+\.)\s+/, ""));
+      }
+      var tag = ordered ? "ol" : "ul";
+      out.push("<" + tag + ">" + items.map(function(t){ return "<li>" + mdInline(t) + "</li>"; }).join("")
+        + "</" + tag + ">");
+      continue;
+    }
+    if (!ln.trim()){ flush(); i++; continue; }
+    para.push(ln.trim()); i++;
+  }
+  flush();
+  return out.join("");
 }
 
 /* ------------------------------------------------------------- Deliver -- */
@@ -2212,12 +2345,11 @@ SCREENS.deliver = {
       var fd = need(key, "/api/p/" + P() + "/deliverables/" + encodeURIComponent(dv.stamp)
         + "/files/" + encodeURIComponent(file), "deliver");
       body = fd === undefined ? skeleton(8, "reading the file")
+        : /\.md$/i.test(file) ? '<div class="md" style="max-height:52vh">' + mdRender(fd.text) + "</div>"
         : '<div class="code" style="max-height:52vh">' + esc(fd.text) + "</div>";
     } else body = '<div class="hint">Pick a file.</div>';
     var prov = panel("Provenance", '<span class="badge b-ok">' + ICON.ok + " reproducible</span>",
-      '<div class="kv">' + Object.keys(dv.provenance || {}).map(function(k){
-        return '<span class="k">' + esc(k) + '</span><span class="mono">' + esc(dv.provenance[k]) + "</span>";
-      }).join("") + "</div>", { style: "flex:none" });
+      '<div class="kv">' + kvRows(dv.provenance || {}, "") + "</div>", { style: "flex:none" });
     return '<div class="col" style="flex:0 0 560px">' + errBlock("deliver") + jobBlock() + left + use + "</div>"
          + '<div class="col grow">' + panel('<span class="mono">' + esc(file || "") + "</span>", "", body)
          + prov + "</div>";

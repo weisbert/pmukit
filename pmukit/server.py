@@ -289,37 +289,53 @@ def _run_cmd(argv, timeout: float) -> tuple[int, str, str]:
         return 126, "", str(exc)
 
 
-def probe_engine() -> dict:
+def _probe_site():
+    from .site import SiteConfig
+    try:
+        return SiteConfig.load()
+    except PmuError:
+        return SiteConfig()
+
+
+#: Engines that start no simulator: a probe of a simulator, queue, PDK or licence answers
+#: "not needed" for them instead of reporting a machine it will never use as broken.
+NO_SIM_ENGINES = {"fake": "synthesizes results analytically", "dry_run": "writes the decks, "
+                  "runs nothing"}
+
+
+def _not_needed(name: str, site, detail: str) -> dict:
+    return {"name": name, "ok": True, "needed": False, "detail": detail, "ms": 0,
+            "how": f"site engine {site.engine}", "reason": None}
+
+
+def probe_engine(site=None) -> dict:
     """The simulator the SITE says to use.  On the box (donau_alps) that is the ALPS wrapper the
     environment points at -- or Spectre, if the site picked it; on the desk (spectre_ssh) it is
     Spectre on the VM, whose Cadence environment lives only in `~/.cshrc`, so the remote command
-    must be a tcsh that sources it."""
-    from .site import SiteConfig
-    try:
-        site = SiteConfig.load()
-    except PmuError:
-        site = SiteConfig()
+    must be a tcsh that sources it.  `fake` and `dry_run` start no simulator: nothing to probe."""
+    site = site if site is not None else _probe_site()
+    if site.engine in NO_SIM_ENGINES:
+        return _not_needed("engine", site, f"{site.engine}: {NO_SIM_ENGINES[site.engine]} -- "
+                                           f"no simulator is started")
     if site.engine == "donau_alps":
         return _probe_local_simulator(site)
-    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", SSH_HOST,
+    host = str(getattr(site, "ssh_host", "") or SSH_HOST)
+    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host,
            'tcsh -c "source ~/.cshrc; which spectre"']
     t0 = time.time()
     rc, out, errtext = _run_cmd(cmd, SSH_PROBE_TIMEOUT)
     ms = int((time.time() - t0) * 1000)
     if rc == 0 and out and "not found" not in out.lower():
-        return {"name": "engine", "ok": True, "detail": out.splitlines()[-1].strip(),
+        return {"name": "engine", "ok": True,
+                "detail": f"{out.splitlines()[-1].strip()}  (on {host})",
                 "ms": ms, "how": " ".join(cmd), "reason": None}
-    local = shutil.which("spectre") or shutil.which("alps")
-    if local:
-        return {"name": "engine", "ok": True, "detail": f"{local} (local)", "ms": ms,
-                "how": "shutil.which", "reason": None}
     why = errtext or out or f"exit code {rc}"
     return {"name": "engine", "ok": False, "detail": "", "ms": ms, "how": " ".join(cmd),
-            "reason": _err(f"no simulator answered on {SSH_HOST}.",
-                           f"`ssh {SSH_HOST} 'tcsh -c \"source ~/.cshrc; which spectre\"'` said: "
+            "reason": _err(f"no simulator answered on {host}.",
+                           f"`ssh {host} 'tcsh -c \"source ~/.cshrc; which spectre\"'` said: "
                            f"{why}. The Cadence environment is only in ~/.cshrc, so a plain bash "
                            f"login finds nothing.",
-                           [f"Check that {SSH_HOST} is up and that BatchMode ssh works",
+                           [f"Check that {host} is up and that BatchMode ssh works",
                             "Or set the site engine to `fake` / `dry_run` to plan without "
                             "simulating"],
                            "pmukit/site.py: engine").to_dict()["error"]}
@@ -359,15 +375,20 @@ def _probe_local_simulator(site) -> dict:
                            "site simulator").to_dict()["error"]}
 
 
-def probe_queue() -> dict:
+def probe_queue(site=None) -> dict:
     """Is the Donau scheduler answering, and does it know the site's queue?
 
     `dqueue` (queue list, ~ LSF bqueues) is the probe: it has to reach the scheduler to print
     anything, and its listing says whether `site.queue` exists.  NOT `dsub --version` -- Donau's
     parser has no such flag ("invalid option or param. Unexpected argument \"version\""), which
     made a healthy box report the queue as down.  `dversion` is the fallback when `dqueue` is
-    not on PATH.  Neither submits anything.
+    not on PATH.  Neither submits anything.  Only the donau_alps engine submits to a queue.
     """
+    if site is not None and site.engine in NO_SIM_ENGINES:
+        return _not_needed("queue", site, f"not needed: {site.engine} submits nothing")
+    if site is not None and site.engine == "spectre_ssh":
+        return _not_needed("queue", site, f"not needed: spectre_ssh runs straight on "
+                                          f"{site.ssh_host}, no batch queue")
     from .site import SiteConfig
     t0 = time.time()
     if not shutil.which("dsub"):
@@ -380,7 +401,7 @@ def probe_queue() -> dict:
                                 "On the box, log in to a submit host"],
                                "PATH").to_dict()["error"]}
     try:
-        want = SiteConfig.load().queue.strip()
+        want = (site if site is not None else SiteConfig.load()).queue.strip()
     except PmuError:
         want = ""
     tool = shutil.which("dqueue") or shutil.which("dversion")
@@ -412,13 +433,20 @@ def probe_queue() -> dict:
             "reason": None}
 
 
-def probe_pdk() -> dict:
+def probe_pdk(site=None) -> dict:
+    if site is not None and site.engine in NO_SIM_ENGINES:
+        return _not_needed("pdk", site, f"not needed: {site.engine} simulates nothing")
     t0 = time.time()
     from . import sitenv
     raw = sitenv.pdk_root().value
     ms = int((time.time() - t0) * 1000)
     if raw and pathlib.Path(raw).expanduser().is_dir():
         return {"name": "pdk", "ok": True, "detail": raw, "ms": ms, "how": "$PDK", "reason": None}
+    if site is not None and site.engine == "spectre_ssh":
+        # the VM resolves the model includes itself; here the PDK only lets the planner
+        # double-check that a corner's section exists
+        return _not_needed("pdk", site, f"not set here -- {site.ssh_host} resolves the model "
+                                        f"includes; set $PDK only to check section names locally")
     return {"name": "pdk", "ok": False, "detail": raw, "ms": ms, "how": "$PDK",
             "reason": _err("the PDK directory is not set.",
                            f"$PDK is {raw!r}, which is not a directory; the corner rewriter needs "
@@ -428,15 +456,16 @@ def probe_pdk() -> dict:
                            "environment: PDK").to_dict()["error"]}
 
 
-def probe_license() -> dict:
+def probe_license(site=None) -> dict:
     from . import sitenv
-    from .site import SiteConfig
     t0 = time.time()
-    try:
-        site = SiteConfig.load()
-    except PmuError:
-        site = SiteConfig()
-    lic = sitenv.license_(sim=sitenv.simulator(site).value)     # Empyrean for ALPS, CDS for Spectre
+    site = site if site is not None else _probe_site()
+    if site.engine in NO_SIM_ENGINES:
+        return _not_needed("license", site, f"not needed: {site.engine} checks out no license")
+    if site.engine == "spectre_ssh":
+        return _not_needed("license", site, f"not needed here: Spectre checks out its license "
+                                            f"on {site.ssh_host}, from its ~/.cshrc")
+    lic =sitenv.license_(sim=sitenv.simulator(site).value)     # Empyrean for ALPS, CDS for Spectre
     if lic.ok:
         return {"name": "license", "ok": True, "detail": f"{lic.source[1:]}={lic.value}",
                 "ms": int((time.time() - t0) * 1000), "how": lic.source, "reason": None}
@@ -460,10 +489,13 @@ def machine(deadline: float = MACHINE_DEADLINE) -> dict:
               "license": probe_license}
     out: dict[str, dict] = {}
     threads = []
+    # Every probe follows the SITE engine: fake / dry_run need no simulator, queue, PDK or
+    # licence, spectre_ssh asks the VM over ssh, donau_alps reads this box's ALPS / Donau facts.
+    site = _probe_site()
 
     def go(name, fn):
         try:
-            out[name] = fn()
+            out[name] = fn(site)
         except Exception as exc:                                       # pragma: no cover - defence
             out[name] = {"name": name, "ok": False, "detail": "", "ms": 0, "how": fn.__name__,
                          "reason": _err(f"the {name} probe crashed: {type(exc).__name__}: {exc}",
@@ -492,7 +524,7 @@ def machine(deadline: float = MACHINE_DEADLINE) -> dict:
     return {"checked_at": _now(), "ready": ready, "probes": [out[n] for n in probes],
             "data_root": str(paths.data_root()),
             "pmukit": _version(), "python": sys.version.split()[0],
-            "host": socket.gethostname()}
+            "host": socket.gethostname(), "engine": site.engine}
 
 
 def _version() -> str:
@@ -826,6 +858,24 @@ class Project:
         except (OSError, ValueError):
             return None
 
+    def verify_stale(self) -> bool:
+        """True when fit.json was rewritten AFTER verify.json: its grades judge a fit that no
+        longer exists, and showing them as the verdict on the new one would be a lie."""
+        try:
+            return self.fit_path.stat().st_mtime > self.verify_path.stat().st_mtime
+        except OSError:
+            return False
+
+    def verify_current(self) -> tuple[dict, str]:
+        """(verify.json, "") -- or ({}, why) when there is none or it predates the fit."""
+        ver = self.verify_result()
+        if not ver:
+            return {}, ""
+        if self.verify_stale():
+            return {}, ("the fit was re-run after the last verify, so its grades judge a model "
+                        "that no longer exists; re-run verify to grade this one")
+        return ver, ""
+
 
 #: Spectre primitives: a top-level instance of one is a bench source, probe or passive, never
 #: the PMU, so it is not offered as a candidate.
@@ -1156,12 +1206,12 @@ endlibrary PMU_demo_pmu
     "envelope.json": """{
   "load_a": {"VDD0P8_A": [2e-06, 0.001], "VDD0P8_B": [2e-05, 0.004]},
   "temp_c": [-40, 125],
-  "freq_hz_max": 2e10,
+  "freq_max_hz": 2e10,
   "corners": ["tt", "ss", "ff"],
-  "vset": [3],
-  "large_signal_default_on": {"load_en_A": true, "load_en_B": true},
-  "usable_not_signoff": ["en_ramp"],
-  "not_run": [["tran_load.VDD0P8_B", "ss", 125, 3]]
+  "vset_codes": [3],
+  "ls_default_on": ["VDD0P8_A", "VDD0P8_B"],
+  "ports": ["EN", "IB_PTAT", "VDD0P8_A", "VDD0P8_B"],
+  "notes": ["EN power-up ramp: usable, not signed off"]
 }
 """,
     "report.md": """# demo_pmu -- can I trust this model in my simulation?
@@ -1568,7 +1618,7 @@ class Api:
         if self.demo:
             return {"a": a, "b": b, "diff": {
                 "provenance": {"dataset_sha": ["a91fc3", "c07d12"]},
-                "envelope": {"freq_hz_max": [1e10, 2e10]},
+                "envelope": {"freq_max_hz": [1e10, 2e10]},
                 "files": {"added": [], "removed": [], "changed": ["PMU_demo_pmu_ss.va",
                                                                   "report.md"]},
                 "grades": {"VDD0P8_B|ss|noise": ["yellow", "green"]}}}
@@ -2280,11 +2330,24 @@ class Api:
         def work(job):
             fit_mod = _lazy("pmukit.fit", "Fitting the model")
             fn = _attr(fit_mod, "fit_project", "Fitting the model")
-            job.say("opening the dataset", 0.1)
+            job.say("opening the dataset", 0.05)
             ds = pr.dataset()
             der = pr.derived()
-            job.say("fitting every block, corner by corner", 0.3)
-            result = fn(ds, der, tiers=tiers)
+            fitted = {"n": 0}
+
+            def on_event(ev):
+                fitted["n"] += 1
+
+            def on_progress(done, total, port, cell):
+                # one line per (port, cell) step: the bar moves with the real work instead of
+                # sitting at one number for the minutes a full fit takes
+                job.say(f"fitting {port} at {_cell_label(cell)} -- step {done + 1} of {total}, "
+                        f"{fitted['n']} blocks so far",
+                        0.08 + 0.87 * (done / max(1, total)))
+
+            job.say("fitting every block, corner by corner", 0.08)
+            result = fn(ds, der, tiers=tiers, on_event=on_event, on_progress=on_progress)
+            job.say(f"fitted {fitted['n']} blocks; writing fit.json", 0.97)
             payload = _clean(result.to_dict() if hasattr(result, "to_dict") else result)
             jsonio.write(pr.fit_path, payload)
             st = pr.state()
@@ -2312,13 +2375,14 @@ class Api:
                     "not_run": [
                         {"item": "tran_load.VDD0P8_B at ss / 125 C",
                          "note": "failed twice; load_en.B at that cell uses the ss / 25 C fit"}],
-                    "hb": {"ok": True, "detail": "first-step residual 7.7e-3",
+                    "hb": {"status": "pass", "ran": True, "ok": True,
+                           "detail": "first-step residual 7.7e-3",
                            "note": "driven HB, every large-signal term toggled one at a time; "
                                    "none exceeds 10x the all-off residual"},
                     "dataset": "a91fc3", "runs_consumed": 280}
         pr = Project(project, self.root)
         fit = pr.fit_result()
-        ver = pr.verify_result() or {}
+        ver, stale = pr.verify_current()
         if fit is None:
             not_run, done, total = [], 0, 0
             try:
@@ -2368,10 +2432,13 @@ class Api:
                                     if r.status in ("done", "imported", "skipped_cached"))
         except PmuError:                                               # pragma: no cover - no db
             pass
+        grid = _grade_grid(fit, ver, stale)
         return {"fitted": True, "valid": valid,
-                "graded_by": "verify" if ver.get("grades") else "fit",
+                "graded_by": grid["graded_by"], "verify_stale": bool(stale),
                 "usable_not_signoff": uniq, "not_run": missing[:30],
-                "hb": ver.get("hb"), "dataset": fit.get("dataset_sha", ""),
+                # verify_project writes the HB report under `hb_check`; reading "hb" returned
+                # None forever, so the tile said "not checked" after every check.
+                "hb": _hb_summary(ver.get("hb_check")), "dataset": fit.get("dataset_sha", ""),
                 "spec_sha": fit.get("spec_sha", ""), "runs_consumed": runs_consumed,
                 "blocks": len(blocks)}
 
@@ -2398,68 +2465,15 @@ class Api:
                     "graded_by": "demo"}
         pr = Project(project, self.root)
         fit = pr.fit_result()
-        ver = pr.verify_result() or {}
+        ver, stale = pr.verify_current()
         if fit is None:
             return {"cells": [], "rows": [], "grades": [], "fitted": False, "graded_by": "",
                     "why": "nothing is fitted yet"}
-        vgrades = {}
-        for g in (ver.get("grades") or []):
-            vgrades[(str(g.get("port")), str(g.get("corner") or g.get("process") or ""),
-                     _numstr(g.get("temp_c")), str(g.get("block")))] = str(g.get("grade"))
-        rank = {"green": 0, "fitted": 1, "yellow": 2, "not_run": 3, "red": 4}
-        blocks = _fit_blocks(fit)
-        # The grid's columns are the (corner, temperature) cells that were actually measured.
-        # A block fitted on FEWER axes than that is not a column of its own: `dc` is fitted once
-        # per corner against the whole temperature sweep, and an emitter constant has no cell at
-        # all. Such a block covers every column it is compatible with, which is what the user
-        # means by "is this corner good".
-        cells, order = {}, []
-        for bf in blocks:
-            cell = bf.get("cell") or {}
-            corner, temp = str(cell.get("process") or ""), _numstr(cell.get("temp_c"))
-            if not corner or not temp:
-                continue
-            ck = (corner, temp)
-            if ck not in cells:
-                cells[ck] = {"corner": corner, "temp_c": cell.get("temp_c"),
-                             "label": (corner + " " + temp).strip()}
-                order.append(ck)
-        if not order:                       # nothing carries a temperature: one column per corner
-            for bf in blocks:
-                corner = str((bf.get("cell") or {}).get("process") or "")
-                ck = (corner, "")
-                if corner and ck not in cells:
-                    cells[ck] = {"corner": corner, "temp_c": None, "label": corner}
-                    order.append(ck)
-        if not order:
-            ck = ("", "")
-            cells[ck] = {"corner": "", "temp_c": None, "label": "all cells"}
-            order.append(ck)
-        ports = {}
-        for bf in blocks:
-            cell = bf.get("cell") or {}
-            corner, temp = str(cell.get("process") or ""), _numstr(cell.get("temp_c"))
-            covers = [k for k in order
-                      if (not corner or k[0] == corner) and (not temp or k[1] == temp)]
-            slot = ports.setdefault(bf["port"], {})
-            for ck in covers:
-                grade = vgrades.get((bf["port"], ck[0], ck[1], bf["block"]))
-                if grade is None:
-                    grade = "not_run" if bf.get("missing") else "fitted"
-                prev = slot.get(ck)
-                if prev is None or rank.get(grade, 0) > rank.get(prev, 0):
-                    slot[ck] = grade
-        order.sort(key=lambda k: (k[0], float(k[1]) if k[1] else 1e9))
-        rows = [{"port": port,
-                 "cells": [{"corner": cells[k]["corner"], "temp_c": cells[k]["temp_c"],
-                            "grade": ports[port].get(k, "not_run")} for k in order]}
-                for port in sorted(ports)]
-        return {"cells": [cells[k] for k in order], "rows": rows,
+        grid = _grade_grid(fit, ver, stale)
+        return {"cells": grid["cells"], "rows": grid["rows"],
                 "grades": ver.get("grades") or [], "fitted": True,
-                "graded_by": "verify" if vgrades else "fit",
-                "why": ("" if vgrades else
-                        "provisional: the pass/fail limits come from `verify`. Until it runs, a "
-                        "cell says only whether every block it covers was fitted at all.")}
+                "graded_by": grid["graded_by"], "verify_stale": bool(stale),
+                "ungraded": grid["ungraded"], "why": grid["why"]}
 
     def model_cell(self, project: str, port: str, corner: str, temp: str) -> dict:
         if self.demo:
@@ -2472,16 +2486,13 @@ class Api:
                     "runs": [r["run_id"] for r in _demo_ledger_rows()[:4]]}
         pr = Project(project, self.root)
         fit = pr.fit_result()
-        ver = pr.verify_result() or {}
+        ver, stale = pr.verify_current()
         if fit is None:
             raise _err("%s has no fitted model yet." % project,
                        "The per-cell block table is read from the fit; nothing has been fitted.",
                        ["Run the fit from the Run screen"], str(pr.fit_path))
-        vgrades = {}
-        for g in (ver.get("grades") or []):
-            vgrades[(str(g.get("port")), str(g.get("corner") or g.get("process") or ""),
-                     _numstr(g.get("temp_c")), str(g.get("block")))] = g
-        rank = {"green": 0, "fitted": 1, "yellow": 2, "not_run": 3, "red": 4}
+        vgrades = _verify_index(ver)
+        port_type = str((fit.get("ports") or {}).get(port) or "rail")
         blocks, worst = [], "green"
         for bf in _fit_blocks(fit):
             if bf["port"] != port:
@@ -2493,25 +2504,34 @@ class Api:
             btemp = _numstr(cell.get("temp_c"))
             if temp not in ("", None) and btemp and btemp != _numstr(temp):
                 continue
-            gv = vgrades.get((port, corner, _numstr(temp), bf["block"]))
+            # The SAME join as the grid, so a cell's badge and its rows cannot disagree.
+            gv = _verify_lookup(vgrades, port, corner or bcorner, _numstr(temp), bf["block"])
             grade = str(gv.get("grade")) if gv else ("not_run" if bf.get("missing") else "fitted")
+            # verify grades a block per CORNER (the worst of its cells). The row's own verdict,
+            # against the same limit table, says WHICH load / VSET / temperature is the one.
+            own = _row_grade(bf, port_type) if gv else ""
             blocks.append({"name": bf["block"], "metric": bf.get("metric", ""),
                            "value": ("not run" if bf.get("missing")
                                      else _numstr(bf.get("score"), 3)),
                            "score": bf.get("score"),
-                           "limit": (gv or {}).get("limit", "-"),
-                           "grade": grade, "missing": bool(bf.get("missing")),
+                           "limit": _limit_text(bf.get("metric", "")),
+                           "grade": grade, "row_grade": own or grade,
+                           "detail": (gv or {}).get("detail", ""),
+                           "missing": bool(bf.get("missing")),
                            "n_points": bf.get("n_points", 0),
                            # A block is fitted on the axes ITS parameters vary over, so one
                            # cell of the grid can hold several rows of the same block -- one
-                           # per load. The load is named here so the rows are telling apart.
+                           # per load and per VSET. Both are named so the rows tell apart.
                            "load_a": cell.get("load_a"),
                            "load": ("" if cell.get("load_a") is None
                                     else _eng(cell.get("load_a"), "A")),
+                           "vset": cell.get("vset"),
+                           "temp": ("" if cell.get("temp_c") is not None else
+                                    ("sweep" if bf["block"] in ("dc", "idc") else "")),
                            "cell_key": _cell_key_of(cell),
                            "notes": bf.get("notes") or [],
                            "identifiability": bf.get("identifiability") or {}})
-            if rank.get(grade, 0) > rank.get(worst, 0):
+            if _GRADE_RANK.get(grade, 0) > _GRADE_RANK.get(worst, 0):
                 worst = grade
         runs = []
         try:
@@ -2521,7 +2541,10 @@ class Api:
             pass
         return {"port": port, "corner": corner, "temp_c": temp,
                 "grade": worst if blocks else "not_run", "blocks": blocks, "runs": runs,
-                "graded_by": "verify" if vgrades else "fit",
+                "graded_by": ("verify" if vgrades and not any(
+                    b["grade"] == "fitted" for b in blocks) else
+                    "partial" if vgrades else "fit"),
+                "verify_stale": bool(stale),
                 "why": "" if blocks else "no fitted block for this port at this cell"}
 
     def model_curve(self, project: str, port: str, cell: str, block: str) -> dict:
@@ -2599,10 +2622,12 @@ class Api:
                            str(pr.fit_path))
             kwargs["zout"] = zbf.get("params") or {}
         model = predict(bf.get("params") or {}, **kwargs)
-        unit, label = _curve_units(obs)
+        unit, label = _curve_units(obs, port_type)
         return {"port": port, "block": block, "cell": _cell_key_of(full),
+                "cell_label": _cell_label(full),
                 "x": _clean(x), "x_label": ("frequency [Hz]" if spectral else "temperature [C]"),
-                "x_log": bool(spectral), "unit": unit, "label": label,
+                # a temperature law is a few percent around one value: linear on both axes
+                "x_log": bool(spectral), "y_log": bool(spectral), "unit": unit, "label": label,
                 "complex": bool(obs.startswith("ac_")),
                 "gt": _split_complex(gt), "model": _split_complex(model),
                 "points": int(len(x)), "source": var,
@@ -3030,22 +3055,234 @@ def _file_desc(name: str) -> str:
 
 
 def _envelope_text(env: dict) -> dict:
+    """envelope.json (pmukit.deliverable.Envelope.to_json) as the Valid-range box's lines.
+
+    The keys are the Envelope's own -- `freq_max_hz`, `vset_codes`. Reading `freq_hz_max` /
+    `vset` (the demo's old spelling) silently dropped both lines the moment verify ran."""
     out = {}
     for rail, rng in sorted((env.get("load_a") or {}).items()):
         try:
-            out[f"load {rail}"] = f"{_eng(rng[0], 'A')} - {_eng(rng[1], 'A')}"
+            out[f"load {rail}"] = _range_text(rng[0], rng[1], "A")
         except (TypeError, IndexError):
             continue
     t = env.get("temp_c")
     if isinstance(t, (list, tuple)) and len(t) == 2:
-        out["temp"] = f"{t[0]:g} - {t[1]:g} C (continuous)"
-    if env.get("freq_hz_max"):
-        out["freq"] = f"<= {_eng(env['freq_hz_max'], 'Hz')}"
+        out["temp"] = _temp_text(t[0], t[1])
+    if env.get("freq_max_hz"):
+        out["freq"] = f"<= {_eng(env['freq_max_hz'], 'Hz')}"
     if env.get("corners"):
         out["corners"] = ", ".join(str(c) for c in env["corners"])
-    if env.get("vset"):
-        out["VSET"] = ", ".join(str(v) for v in env["vset"])
+    if env.get("vset_codes"):
+        out["VSET"] = ", ".join(str(v) for v in env["vset_codes"])
     return out
+
+
+def _range_text(lo, hi, unit: str) -> str:
+    try:
+        if float(lo) == float(hi):
+            return f"{_eng(lo, unit)} only"
+    except (TypeError, ValueError):
+        pass
+    return f"{_eng(lo, unit)} - {_eng(hi, unit)}"
+
+
+def _temp_text(lo, hi) -> str:
+    """One measured temperature is not a range; saying "25 - 25 C (continuous)" invites a
+    user to trust the model at 125 C."""
+    try:
+        lo, hi = float(lo), float(hi)
+    except (TypeError, ValueError):
+        return f"{lo} - {hi} C"
+    if lo == hi:
+        return f"{lo:g} C only"
+    return f"{lo:g} - {hi:g} C (continuous)"
+
+
+# ------------------------------------------------------------------ grades on the Model screen
+_GRADE_RANK = {"green": 0, "fitted": 1, "yellow": 2, "not_run": 3, "red": 4}
+
+
+def _verify_index(ver: dict) -> dict:
+    """verify.json's grades keyed (port, corner, temp, block). verify grades per CORNER, so
+    `temp` is "" for every row it writes today; a temperature-specific row keeps its own key."""
+    out = {}
+    for g in ((ver or {}).get("grades") or []):
+        if not isinstance(g, dict):
+            continue
+        key = (str(g.get("port")), str(g.get("corner") or g.get("process") or ""),
+               _numstr(g.get("temp_c")), str(g.get("block")))
+        prev = out.get(key)
+        if prev is None or _GRADE_RANK.get(str(g.get("grade")), 0) > \
+                _GRADE_RANK.get(str(prev.get("grade")), 0):
+            out[key] = g
+    return out
+
+
+def _verify_lookup(index: dict, port: str, corner: str, temp: str, block: str):
+    """The verify grade that judges one (port, corner, temperature, block).
+
+    A temperature-specific grade wins; otherwise the per-corner grade applies to EVERY
+    temperature of that corner. (Keying the lookup by the cell's temperature alone never found
+    a per-corner grade, so after verify the grid still said FIT everywhere.)  A column with no
+    corner at all takes the worst grade the block has on any corner."""
+    g = index.get((port, corner, temp, block)) if temp else None
+    if g is None:
+        g = index.get((port, corner, "", block))
+    if g is None and not corner:
+        cands = [v for (p, _c, _t, b), v in index.items() if p == port and b == block]
+        if cands:
+            g = max(cands, key=lambda v: _GRADE_RANK.get(str(v.get("grade")), 0))
+    return g
+
+
+def _row_grade(bf: dict, port_type: str) -> str:
+    """One fitted block's own verdict against verify's limit table ('' if it cannot say)."""
+    try:
+        from .fit._base import BlockFit
+        from .verify.grades import grade_block
+        grade, _detail = grade_block(BlockFit.from_dict(bf), port_type=port_type or "rail")
+        return str(grade)
+    except Exception:                                                  # noqa: BLE001 - decoration
+        return ""
+
+
+def _limit_text(metric: str) -> str:
+    """The green / yellow bounds verify applies to this metric, e.g. '<= 0.5 / 1 dB'."""
+    try:
+        from .verify.grades import limit_for
+        lim, _exact = limit_for(metric)
+    except Exception:                                                  # noqa: BLE001 - decoration
+        return "-"
+    if lim is None:
+        return "-"
+    return f"<= {_numstr(lim.green, 3)} / {_numstr(lim.yellow, 3)} {lim.unit}".strip()
+
+
+def _grade_grid(fit: dict, ver: dict, stale: str = "") -> dict:
+    """The grade grid: the worst block per port and (corner, temperature) cell.
+
+    When `verify` has run its green / yellow / red are joined onto EVERY temperature cell of
+    their corner (`_verify_lookup`). A block verify did not grade still shows `fitted`, and the
+    grid stays `partial` -- provisional -- while any such block is on screen: the banner goes
+    away only when every cell shown is judged by verify's limits.
+    """
+    vgrades = _verify_index(ver)
+    blocks = _fit_blocks(fit)
+    # The grid's columns are the (corner, temperature) cells that were actually measured.
+    # A block fitted on FEWER axes than that is not a column of its own: `dc` is fitted once
+    # per corner against the whole temperature sweep, and an emitter constant has no cell at
+    # all. Such a block covers every column it is compatible with, which is what the user
+    # means by "is this corner good".
+    cells, order = {}, []
+    for bf in blocks:
+        cell = bf.get("cell") or {}
+        corner, temp = str(cell.get("process") or ""), _numstr(cell.get("temp_c"))
+        if not corner or not temp:
+            continue
+        ck = (corner, temp)
+        if ck not in cells:
+            cells[ck] = {"corner": corner, "temp_c": cell.get("temp_c"),
+                         "label": (corner + " " + temp).strip()}
+            order.append(ck)
+    if not order:                           # nothing carries a temperature: one column per corner
+        for bf in blocks:
+            corner = str((bf.get("cell") or {}).get("process") or "")
+            ck = (corner, "")
+            if corner and ck not in cells:
+                cells[ck] = {"corner": corner, "temp_c": None, "label": corner}
+                order.append(ck)
+    if not order:
+        ck = ("", "")
+        cells[ck] = {"corner": "", "temp_c": None, "label": "all cells"}
+        order.append(ck)
+    ports, ungraded, seen_pb = {}, [], set()
+    for bf in blocks:
+        cell = bf.get("cell") or {}
+        corner, temp = str(cell.get("process") or ""), _numstr(cell.get("temp_c"))
+        covers = [k for k in order
+                  if (not corner or k[0] == corner) and (not temp or k[1] == temp)]
+        slot = ports.setdefault(bf["port"], {})
+        seen_pb.add((bf["port"], bf["block"]))
+        for ck in covers:
+            gv = _verify_lookup(vgrades, bf["port"], ck[0], ck[1], bf["block"])
+            if gv is not None:
+                grade = str(gv.get("grade"))
+            else:
+                grade = "not_run" if bf.get("missing") else "fitted"
+                if vgrades and grade == "fitted":
+                    label = "%s.%s" % (bf["port"], bf["block"])
+                    if label not in ungraded:
+                        ungraded.append(label)
+            prev = slot.get(ck)
+            if prev is None or _GRADE_RANK.get(grade, 0) > _GRADE_RANK.get(prev, 0):
+                slot[ck] = grade
+    # A block verify graded that has no fitted record at all (a group ticked off before the
+    # fit) is `not_run` in verify.json; it still belongs on its corner's cells.
+    for (p, c, t, b), g in vgrades.items():
+        if (p, b) in seen_pb or p not in ports:
+            continue
+        for ck in order:
+            if (not c or ck[0] == c) and (not t or ck[1] == t):
+                grade = str(g.get("grade"))
+                prev = ports[p].get(ck)
+                if prev is None or _GRADE_RANK.get(grade, 0) > _GRADE_RANK.get(prev, 0):
+                    ports[p][ck] = grade
+    order.sort(key=lambda k: (k[0], float(k[1]) if k[1] else 1e9))
+    rows = [{"port": port,
+             "cells": [{"corner": cells[k]["corner"], "temp_c": cells[k]["temp_c"],
+                        "grade": ports[port].get(k, "not_run")} for k in order]}
+            for port in sorted(ports)]
+    if not vgrades:
+        graded_by = "fit"
+        why = ("provisional: the pass/fail limits come from `verify`. Until it runs, a cell says "
+               "only whether every block it covers was fitted at all.")
+        if stale:
+            why = "provisional: " + stale + "."
+    elif ungraded:
+        # Even a cell that shows yellow may hide an unjudged block that would be red.
+        graded_by = "partial"
+        why = ("provisional in part: verify has no grade for %s, so every cell those cover is "
+               "not fully judged (FIT, or at best the colour of the blocks that were). Re-run "
+               "verify to grade them." % (", ".join(ungraded[:6])
+                                          + (" and %d more" % (len(ungraded) - 6)
+                                             if len(ungraded) > 6 else "")))
+    else:
+        graded_by, why = "verify", ""
+    return {"cells": [cells[k] for k in order], "rows": rows, "graded_by": graded_by,
+            "why": why, "ungraded": ungraded}
+
+
+def _hb_summary(hbr) -> dict | None:
+    """verify.json's `hb_check` as the HB tile: {status, ran, ok, detail, note, ...}.
+
+    None only when verify has not run at all. A check that ran on no simulator is NOT a pass:
+    it comes back `ran: False` with the reason, and every large-signal term stays off."""
+    if not isinstance(hbr, dict) or not hbr:
+        return None
+    status = str(hbr.get("status") or "not_run")
+    terms = [t for t in (hbr.get("terms") or []) if isinstance(t, dict)]
+    notes = [str(n) for n in (hbr.get("notes") or [])]
+    on = [str(p) for p in (hbr.get("ls_default_on") or [])]
+    engine = str(hbr.get("engine") or "")
+    if status == "not_run":
+        detail = "not run" + (f" (engine {engine})" if engine else "")
+        note = notes[0] if notes else "the HB health check did not run"
+    elif not terms:
+        detail = "passed: no large-signal term to check"
+        note = notes[0] if notes else ""
+    else:
+        failing = [str(t.get("term")) for t in terms if not t.get("pass")]
+        base = (hbr.get("baseline") or {}).get("first_step")
+        head = (f"{len(terms) - len(failing)} of {len(terms)} large-signal terms pass"
+                if failing else f"all {len(terms)} large-signal terms pass")
+        detail = head + (f"; all-off first-step residual {_numstr(base, 3)}"
+                         if isinstance(base, (int, float)) and math.isfinite(base) else "")
+        note = ("on by default: " + (", ".join(on) or "none")
+                + ("; opt-in only: " + ", ".join(failing) if failing else "")
+                + ". Each term toggled one at a time in a driven HB on " + (engine or "?") + ".")
+    return {"status": status, "ran": status != "not_run", "ok": status == "pass",
+            "detail": detail, "note": note, "engine": engine, "ls_default_on": on,
+            "corner": hbr.get("corner", "")}
 
 
 def _fit_summary(payload: dict) -> dict:
@@ -3131,7 +3368,12 @@ def _observable_for(block: str, port_type: str):
     return CURVE_OBSERVABLE.get((port_type, block))
 
 
-def _curve_units(obs: str) -> tuple:
+def _curve_units(obs: str, port_type: str = "") -> tuple:
+    if obs == "dc_temp":            # rail `dc` is the output voltage, bias `idc` the current
+        if port_type == "rail":
+            return ("V", "output voltage versus temperature")
+        if port_type == "bias":
+            return ("A", "bias current versus temperature")
     return CURVE_UNITS.get(obs, ("", obs))
 
 
@@ -3245,10 +3487,13 @@ def _valid_from_derived(der) -> dict:
     for rail, info in sorted((der.loads or {}).items()):
         pts = [float(a) for a in (info.get("points_a") or [])]
         if pts:
-            out[f"load {rail}"] = f"{_eng(min(pts), 'A')} - {_eng(max(pts), 'A')}"
+            out[f"load {rail}"] = _range_text(min(pts), max(pts), "A")
+    temps = [float(t) for t in ((der.temps_c or {}).get("points") or [])]
     sweep = der.dc_temp_sweep or {}
-    if sweep.get("start_c") is not None:
-        out["temp"] = f"{sweep['start_c']:g} - {sweep['stop_c']:g} C (continuous)"
+    if temps:
+        out["temp"] = _temp_text(min(temps), max(temps))
+    elif sweep.get("start_c") is not None:
+        out["temp"] = _temp_text(sweep["start_c"], sweep["stop_c"])
     freq = der.freq or {}
     if freq.get("stop_hz"):
         out["freq"] = "<= " + _eng(freq["stop_hz"], "Hz")

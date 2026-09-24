@@ -55,6 +55,33 @@ def _load_derived(project: str, derived, root) -> DerivedConfig:
     return DerivedConfig.load(p)
 
 
+def _netlist_sha(project: str, root) -> str:
+    """12 hex of the netlist the runs were planned from -- the same number the New screen shows
+    for the project's copy -- or "" when the project has none on disk.
+
+    Looked up in the order the web shell's `Project.netlist_path()` uses: the copy the New screen
+    last read (state.json), config.json's `netlist` (relative to the project, then to the current
+    directory), then `netlists/input.scs`."""
+    base = (pathlib.Path(root) if root is not None else paths.data_root()) / project
+    cands: list[pathlib.Path] = []
+    for name, key in (("state.json", "netlist"), ("config.json", "netlist")):
+        try:
+            val = str((jsonio.read(base / name) or {}).get(key) or "")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if val:
+            p = pathlib.Path(val)
+            cands += [p] if p.is_absolute() else [base / p, p]
+    cands.append(base / "netlists" / "input.scs")
+    for p in cands:
+        try:
+            if p.is_file():
+                return jsonio.sha_file(p, 12)
+        except OSError:
+            continue
+    return ""
+
+
 def verify_inputs(verify) -> dict:
     """What `pmukit verify` decided (verify.json), as keyword arguments for `deliver()`.
 
@@ -142,7 +169,7 @@ def _envelope(d: DerivedConfig, rails, corners, ls_default_on, notes, ports=None
 def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, grades=None,
             provenance=None, stamp=None, hb_robust: bool = True, harmonic: int = lint.HARMONIC,
             flicker_mode: str = "bank", ls_default_on=(), not_run=(), dataset_sha: str = "",
-            tb_state_note: str = "") -> pathlib.Path:
+            tb_state_note: str = "", netlist_sha: str = "") -> pathlib.Path:
     """Write the whole contract-4 deliverable and return its stamped directory.
 
     One `.va` per process corner, the Spectre section library, `envelope.json`, `report.md` (with
@@ -171,6 +198,7 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
         config_sha=d.config_sha or "",
         dataset_sha=dataset_sha or str(getattr(fit, "dataset_sha", "") or ""),
         spec_sha=str(getattr(fit, "spec_sha", "") or spec.SPEC_SHA),
+        netlist_sha=netlist_sha or _netlist_sha(project, root),
         tb_state_note=tb_state_note, host=sitenv.host().value,
         extra={"user": who} if who else {})
 

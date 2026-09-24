@@ -259,7 +259,9 @@ def cmd_site(a) -> int:
     machine's environment -- ALPS root, user id, PDK, license -- and from which variable.
     """
     smod = _need("site", "site")
-    site = smod.SiteConfig.load()
+    # Changes are applied to what site.json STORES. Loading with the environment overrides and
+    # saving that wrote `PMUKIT_ENGINE=fake pmukit site --cpus 4`'s engine=fake into the file.
+    site = smod.SiteConfig.load(env=False)
     changed = []
     for name in ("engine", "simulator", "queue", "ssh_host", "remote_workdir", "spectre_cmd"):
         val = getattr(a, name, None)
@@ -280,17 +282,28 @@ def cmd_site(a) -> int:
         site.cpus = int(a.cpus)
         changed.append(f"cpus={a.cpus}")
     if changed:
-        site.validate() if hasattr(site, "validate") else None
+        site.validate()
         path = site.save()
         print(f"site updated ({', '.join(changed)}) -> {path}")
+    stored = site
+    site = smod.SiteConfig.load()                   # the EFFECTIVE values: file + environment
+    overrides = {k: v for k, v in smod.SiteConfig.env_overrides().items()
+                 if getattr(site, k) != getattr(stored, k)}
     from . import sitenv
     facts = sitenv.facts(site)
     if a.json:
         _out({**site.to_dict(),
+              "overrides": {k: {"from": var, "stored": getattr(stored, k)}
+                            for k, var in overrides.items()},
               "environment": {f.name: {"value": f.value, "source": f.source} for f in facts}}, True)
         return 0
-    rows = [[k, v] for k, v in sorted(site.to_dict().items()) if k not in ("provenance", "accounts")]
+    rows = [[k, (f"{v}   (from {overrides[k]}; site.json says {getattr(stored, k)})"
+                 if k in overrides else v)]
+            for k, v in sorted(site.to_dict().items()) if k not in ("provenance", "accounts")]
     print(_table(rows, ["setting", "value"]))
+    if overrides:
+        print(f"  {len(overrides)} setting(s) overridden by this shell's environment for this "
+              f"process only; site.json keeps its own value.")
     print()
     if site.accounts:
         print("  Donau accounts (* = runs are charged to this one; the Plan screen's dropdown):")
@@ -741,7 +754,8 @@ def cmd_ui(a) -> int:
     smod = _need("server", "ui")
     return smod.main(host=getattr(a, "host", "127.0.0.1"), port=getattr(a, "port", 8765),
                      demo=getattr(a, "demo", False), open_browser=getattr(a, "open", False),
-                     project=getattr(a, "project", None))
+                     project=getattr(a, "project", None),
+                     verbose=bool(getattr(a, "verbose", False)))
 
 
 def cmd_help(a) -> int:
@@ -887,6 +901,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--demo", action="store_true", help="fake data, no $PMUKIT_DATA needed")
     p.add_argument("--open", action="store_true", help="also launch a browser")
+    p.add_argument("-v", "--verbose", action="store_true", help="log every request")
     p.set_defaults(fn=cmd_ui, project=None)
 
     p = sub.add_parser("help", help="the same text the `? Help` panel shows")
