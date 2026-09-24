@@ -353,6 +353,11 @@ def test_13_the_fit_turns_the_dataset_into_model_parameters(api):
     assert "zout" in summary["blocks"] and "psrr" in summary["blocks"]
     assert summary["fitted"] > 0
     assert pathlib.Path(job["result"]["fit"]).is_file()
+    # the bar moves with the work: one step per (port, cell), not one number for minutes
+    steps = [e for e in job["events"] if " -- step " in e["text"]]
+    assert len(steps) > 3, [e["text"] for e in job["events"]]
+    fr = [e["progress"] for e in steps]
+    assert fr == sorted(fr) and fr[-1] > fr[0]
     STATE["fit"] = summary
 
 
@@ -441,6 +446,36 @@ def test_18_verify_grades_the_model_and_runs_the_hb_health_check(api):
     STATE["verify"] = job["result"]
 
 
+def test_18b_the_verify_colours_reach_the_grid_the_cell_and_the_tiles(api):
+    """After verify the grid shows verify's colours -- not FIT everywhere -- and the tiles read
+    what verify wrote: the HB check under `hb_check`, the envelope under its own keys."""
+    requires("verify")
+    ver = json.loads((api.root / PROJECT / "verify.json").read_text(encoding="utf-8"))
+    worst = {}
+    rank = {"green": 0, "yellow": 1, "not_run": 2, "red": 3}
+    for gr in ver["grades"]:
+        if rank.get(gr["grade"], 0) >= rank.get(worst.get(gr["port"], "green"), 0):
+            worst[gr["port"]] = gr["grade"]
+    g = api.need("GET", f"/api/p/{PROJECT}/model/grades")
+    shown = {row["port"]: {c["grade"] for c in row["cells"]} for row in g["rows"]}
+    assert "fitted" not in set().union(*shown.values()), \
+        f"verify ran, yet a cell still says only FIT: {shown}"
+    assert not g["why"], "every block is graded, so the provisional banner must be gone"
+    for port, grade in worst.items():
+        if port in shown and grade in ("red", "yellow"):
+            assert grade in shown[port], f"{port}: verify says {grade}, the grid shows {shown[port]}"
+    red = [gr for gr in ver["grades"] if gr["grade"] == "red"]
+    if red:
+        cell = g["cells"][0]
+        d = api.need("GET", f"/api/p/{PROJECT}/model/cell?port={red[0]['port']}"
+                            f"&corner={cell['corner']}&temp={cell['temp_c']}")
+        assert any(b["name"] == red[0]["block"] and b["grade"] == "red" for b in d["blocks"])
+    s = api.need("GET", f"/api/p/{PROJECT}/model/summary")
+    assert s["hb"] is not None, "verify wrote hb_check; the HB tile must not say 'not checked'"
+    assert s["hb"]["status"] == ver["hb_check"]["status"]
+    assert "freq" in s["valid"] and "VSET" in s["valid"], s["valid"]
+
+
 # ========================================================================= 9  deliver
 def test_19_deliver_writes_one_stamped_folder(api):
     requires("fit")
@@ -453,6 +488,10 @@ def test_19_deliver_writes_one_stamped_folder(api):
     assert any(n.endswith(".va") for n in names), "no model was emitted"
     assert "envelope.json" in names and "report.md" in names
     assert dv["provenance"], "a deliverable that cannot be traced back is not a deliverable"
+    # the netlist it was characterized from, the same 12 hex the New screen shows for the copy
+    nl = api.need("GET", f"/api/p/{PROJECT}/netlist")["copy"]
+    assert dv["provenance"]["netlist_sha"] == nl["sha"]
+    assert isinstance(dv["provenance"]["extra"], dict)
     STATE["deliver"] = dv
 
 
@@ -462,6 +501,9 @@ def test_20_a_delivered_file_can_be_previewed_but_not_escaped(api):
     report = api.need("GET", f"/api/p/{PROJECT}/deliverables/{dv['stamp']}/files/report.md")
     assert report["text"].strip()
     assert report["bytes"] > 0
+    valid = next(ln for ln in report["text"].splitlines() if "**Valid range:**" in ln)
+    assert "e-0" not in valid and "e+0" not in valid, f"not engineering notation: {valid}"
+    assert " GHz" in valid or " MHz" in valid
     status, payload = api.call("GET", f"/api/p/{PROJECT}/deliverables/{dv['stamp']}"
                                       f"/files/{urllib.parse.quote('../config.json', safe='')}")
     assert status != 200

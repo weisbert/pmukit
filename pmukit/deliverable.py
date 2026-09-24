@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import hashlib
+import math
 import pathlib
 import re
 from dataclasses import dataclass, field
@@ -80,6 +81,22 @@ def _oneline(text: str) -> str:
 def _num(x: float) -> str:
     """Compact, stable number text for the report (no internal scores are ever formatted here)."""
     return f"{float(x):g}"
+
+
+def _eng(x: float, unit: str) -> str:
+    """Engineering notation for the prose of report.md: 2e-06 A -> '2 uA', 1e+09 Hz -> '1 GHz'.
+
+    Only the human-read report uses it; envelope.json, grades.json and provenance.json keep
+    plain floats so a script reads exactly what was characterized."""
+    v = float(x)
+    if v == 0 or not math.isfinite(v):
+        return f"{_num(v)} {unit}".strip()
+    sign, a = ("-" if v < 0 else ""), abs(v)
+    for exp, prefix in ((12, "T"), (9, "G"), (6, "M"), (3, "k"), (0, ""), (-3, "m"), (-6, "u"),
+                        (-9, "n"), (-12, "p"), (-15, "f")):
+        if a >= 10.0 ** exp * (1 - 1e-12) or exp == -15:
+            return f"{sign}{a / 10.0 ** exp:.4g} {prefix}{unit}".strip()
+    return f"{_num(v)} {unit}".strip()                                 # pragma: no cover
 
 
 def _stamp_now() -> str:
@@ -478,10 +495,13 @@ class DeliverableWriter:
 def _fixed_paragraph(project: str, envelope: Envelope, not_run: list[str],
                      stubs: list[str]) -> list[str]:
     """Contract 0c: the first paragraph is fixed -- four items, in this order."""
-    loads = "; ".join(f"{port} {_num(lo)} to {_num(hi)} A"
+    loads = "; ".join((f"{port} {_eng(lo, 'A')} only" if lo == hi else
+                       f"{port} {_eng(lo, 'A')} to {_eng(hi, 'A')}")
                       for port, (lo, hi) in envelope.load_a.items()) or "no rail characterized"
-    valid = (f"load per rail {loads}; temperature {_num(envelope.temp_c[0])} to "
-             f"{_num(envelope.temp_c[1])} C; frequency up to {_num(envelope.freq_max_hz)} Hz; "
+    t_lo, t_hi = envelope.temp_c
+    temp = (f"{_num(t_lo)} C only" if t_lo == t_hi else f"{_num(t_lo)} to {_num(t_hi)} C")
+    valid = (f"load per rail {loads}; temperature {temp}; "
+             f"frequency up to {_eng(envelope.freq_max_hz, 'Hz')}; "
              f"corners {', '.join(envelope.corners) or '(none)'}; "
              f"VSET codes {', '.join(str(v) for v in envelope.vset_codes) or '(none)'}.")
     # The "en" tier (usable, not signed off) has no dedicated field in the envelope dataclass,

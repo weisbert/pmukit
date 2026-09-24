@@ -322,6 +322,41 @@ def test_site_persists_a_change(workspace, capsys):
     assert (tmp / "data" / "site.json").exists()
 
 
+def test_site_never_writes_an_environment_override_into_site_json(workspace, capsys,
+                                                                   monkeypatch):
+    """`PMUKIT_ENGINE=fake pmukit site --cpus 4` changes the CPUs; the engine override is this
+    shell's, and it must not end up in the file every later shell reads."""
+    tmp, _nl = workspace
+    monkeypatch.delenv("PMUKIT_ENGINE", raising=False)
+    monkeypatch.delenv("PMUKIT_CPUS", raising=False)
+    run(["site", "--engine", "spectre_ssh"])
+    capsys.readouterr()
+    monkeypatch.setenv("PMUKIT_ENGINE", "fake")
+    run(["site", "--cpus", "4"])
+    out = capsys.readouterr().out
+    stored = json.loads((tmp / "data" / "site.json").read_text(encoding="utf-8"))
+    assert stored["engine"] == "spectre_ssh", "the env override leaked into site.json"
+    assert stored["cpus"] == 4
+    # what is printed is the EFFECTIVE value, marked as an override
+    assert "fake" in out and "$PMUKIT_ENGINE" in out and "site.json says spectre_ssh" in out
+    run(["--json", "site"])
+    d = json.loads(capsys.readouterr().out)
+    assert d["engine"] == "fake"
+    assert d["overrides"]["engine"] == {"from": "$PMUKIT_ENGINE", "stored": "spectre_ssh"}
+
+
+def test_ui_accepts_verbose(monkeypatch):
+    """`pmukit ui -v` logs every request; the server has the flag, the CLI refused it."""
+    got = {}
+    from pmukit import server
+    monkeypatch.setattr(server, "main", lambda **kw: got.update(kw) or 0)
+    run(["ui", "-v", "--port", "0"])
+    assert got["verbose"] is True
+    got.clear()
+    run(["ui", "--port", "0"])
+    assert got["verbose"] is False
+
+
 def test_site_is_not_part_of_a_project(workspace, capsys):
     """Which simulator this machine can reach is a property of the MACHINE, not the project."""
     tmp, nl = workspace

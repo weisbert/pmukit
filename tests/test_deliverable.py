@@ -223,7 +223,8 @@ def test_report_first_paragraph_has_the_four_fixed_items(tmp_path):
     head = text.split("\n## ", 1)[0]
     for item in FIXED_ITEMS:
         assert item in head, item
-    assert "load per rail VDD0P8_A 2e-06 to 0.001 A" in head
+    assert "load per rail VDD0P8_A 2 uA to 1 mA" in head
+    assert "frequency up to 20 GHz" in head
     assert "**Usable, not signed off:** EN power-up ramp is usable, not signed off." in head
     assert "temperature -40 to 125 C" in head
     assert "corners tt, ss, ff" in head

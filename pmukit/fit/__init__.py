@@ -295,7 +295,7 @@ def _axis(dataset, name, port=None, default=(None,)):
 
 
 def fit_project(dataset, derived=None, *, tiers=("hb", "ls", "en"), on_event=None,
-                ports=None) -> FitResult:
+                ports=None, on_progress=None) -> FitResult:
     """Fit every block of every modeled port over every cell of the dataset.
 
     Each block is fitted ONCE per distinct cell OF ITS OWN granularity (`_base.block_cell`), so
@@ -304,6 +304,8 @@ def fit_project(dataset, derived=None, *, tiers=("hb", "ls", "en"), on_event=Non
 
     `on_event(dict)` is called after every block with `{"port", "block", "cell", "score",
     "metric", "missing"}`, so a UI can show progress without this module knowing about a UI.
+    `on_progress(done, total, port, cell)` is called before every (port, cell) step, `total`
+    being the number of steps the whole fit takes -- the fraction a progress bar needs.
     """
     if not (hasattr(dataset, "variables") and hasattr(dataset, "axis")):
         raise PmuError(
@@ -328,12 +330,22 @@ def fit_project(dataset, derived=None, *, tiers=("hb", "ls", "en"), on_event=Non
     temps = _axis(dataset, "temp_c")
     vsets = _axis(dataset, "vset")
 
+    loads_of = {port: (_axis(dataset, "load_a", port) if ptype == "rail" else [None])
+                for port, ptype in table.items()}
+    total = sum(len(processes) * len(temps) * len(vsets) * len(loads_of[p]) for p in table)
+    step = 0
     for port, ptype in sorted(table.items()):
-        loads = _axis(dataset, "load_a", port) if ptype == "rail" else [None]
+        loads = loads_of[port]
         for proc in processes:
             for temp in temps:
                 for vset in vsets:
                     for load in loads:
+                        if on_progress is not None:
+                            on_progress(step, total, port,
+                                        {k: v for k, v in (("process", proc), ("temp_c", temp),
+                                                           ("vset", vset), ("load_a", load))
+                                         if v is not None})
+                        step += 1
                         cell = {}
                         if proc is not None:
                             cell["process"] = proc
