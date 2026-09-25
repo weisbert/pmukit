@@ -417,12 +417,20 @@ def test_a_source_wired_the_normal_way_round_wins():
 
 
 def test_two_convention_sources_on_one_net_is_ambiguous():
+    """Neither source is named after the pin or its net: nothing to prefer, so refuse."""
     text = REVERSED + "VB_OTHER (IBIAS 0) vsource dc=0.5\n"
-    text = text.replace("VB_IBIAS (0 IBIAS)", "VB_IBIAS (IBIAS 0)")
+    text = text.replace("VB_IBIAS (0 IBIAS)", "VB_THIRD (IBIAS 0)")
     with pytest.raises(PmuError) as e:
         Netlist(text).scan("X1")
     assert "more than one convention source" in str(e.value)
-    assert "VB_IBIAS" in str(e.value) and "VB_OTHER" in str(e.value)
+    assert "VB_THIRD" in str(e.value) and "VB_OTHER" in str(e.value)
+
+
+def test_of_two_sources_on_one_net_the_one_named_after_it_owns_the_pin():
+    text = REVERSED + "VB_OTHER (IBIAS 0) vsource dc=0.5\n"
+    text = text.replace("VB_IBIAS (0 IBIAS)", "VB_IBIAS (IBIAS 0)")
+    t = Netlist(text).scan("X1")
+    assert t.pins["ib"].src == "VB_IBIAS" and t.pins["ib"].dc == pytest.approx(0.4)
 
 
 # --------------------------------------------- the simple corner must not over-reach

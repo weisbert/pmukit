@@ -213,8 +213,8 @@ def test_a_reload_rebuilds_the_new_screen_command_strip(page_run):
     assert st["loads"]["VDD0P8_A"]["on_a"] == 5e-4
     cli = server.cli_echo("new", st, "p")
     for flag in ("--netlist /w/tb/input.scs", "--pmu-inst PMU_TOP", "--corners ss,ff",
-                 "--temps -40,125", "--vset 2,3", "--load VDD0P8_A=500uA/2uA/switch",
-                 "--stub VDD0P8_C", "--ignore TESTMODE", "--fmax 3GHz"):
+                 "--temps -40,125", "--vset 2,3", "--load VDD0P8_A=0.0005,",
+                 "--port VDD0P8_C=stub", "--care-up-to 3e+09"):
         assert flag in cli, (flag, cli)
 
 

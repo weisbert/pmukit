@@ -158,6 +158,8 @@ def cmd_new(a) -> int:
     nlmod = _need("netlist", "new")
 
     nl = nlmod.Netlist.from_file(a.netlist)
+    corner_include = _corner_lines(getattr(a, "corner_line", None))
+    nl.corner_choice = dict(corner_include)
     table = nl.scan(a.pmu_inst)
 
     ports: dict[str, str] = {}
@@ -208,6 +210,7 @@ def cmd_new(a) -> int:
         "my_load": my_load,
         "care_up_to_hz": float(a.care_up_to),
         "stub_dc": stub_dc,
+        "corner_include": corner_include,
     })
     table.apply_fates(cfg.ports)
     der = cfgmod.derive(cfg, table, _site())     # before anything is written: it can refuse
@@ -332,6 +335,23 @@ def cmd_site(a) -> int:
     return 0
 
 
+def _corner_lines(specs) -> dict:
+    """`--corner-line toplevel.scs=0` -> {"toplevel.scs": 0} (config.corner_include)."""
+    out: dict = {}
+    for spec_ in specs or []:
+        f, _, idx = str(spec_).partition("=")
+        try:
+            out[f.strip()] = int(idx)
+        except ValueError:
+            raise PmuError(
+                what=f"--corner-line {spec_}: {idx!r} is not a line index.",
+                why="The index counts the `include FILE section=` lines of that file from 0, in "
+                    "file order; `pmukit check --json` lists them under `includes`.",
+                do=[f"Write it as --corner-line {f.strip() or 'toplevel.scs'}=0"],
+                where="command line") from None
+    return out
+
+
 def cmd_check(a) -> int:
     """Read a netlist and say whether it satisfies the convention -- before any project exists.
 
@@ -341,6 +361,8 @@ def cmd_check(a) -> int:
     """
     nlmod = _need("netlist", "check")
     nl = nlmod.Netlist.from_file(a.netlist)
+    corner_include = _corner_lines(getattr(a, "corner_line", None))
+    nl.corner_choice = dict(corner_include)
     table = nl.scan(a.pmu_inst)
     problems: list[str] = []
     if not any(s for _f, s in nl.includes()):
@@ -359,7 +381,8 @@ def cmd_check(a) -> int:
         problems.append("no IL_* rail and no VB_* bias source -- there is nothing to model")
     payload = {"pins": table.to_dict(), "unclassified": [p.name for p in table.unclassified()],
                "notes": table.notes, "problems": problems,
-               "sections": dict(nl.includes()), "parameters": nl.parameters(),
+               "sections": table.sections, "includes": table.includes,
+               "parameters": nl.parameters(),
                "analyses_to_strip": table.analyses}
     if a.json:
         _out(payload, True)
@@ -809,6 +832,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="PIN=<value> -- the DC level to emit a stub pin at: VOLTS for a rail, "
                         "AMPS for a bias. Without it the pin is weakly tied, not driven "
                         "(repeatable)")
+    p.add_argument("--corner-line", action="append", metavar="FILE=INDEX",
+                   help="which `include FILE section=` line is the process corner, counted from "
+                        "0 in file order -- only needed when the section names do not say "
+                        "(the other lines, e.g. Noise_Worst, are kept as exported)")
     p.add_argument("--note", help="what state the testbench was in (goes into provenance)")
     p.set_defaults(fn=cmd_new)
 
@@ -834,6 +861,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pmu-inst", required=True)
     p.add_argument("--vset-param", default="VSET", metavar="NAME",
                    help="the design variable that selects the output code (default VSET)")
+    p.add_argument("--corner-line", action="append", metavar="FILE=INDEX",
+                   help="which `include FILE section=` line is the process corner (from 0)")
     p.set_defaults(fn=cmd_check)
 
     p = sub.add_parser("pins", help="the pin table read out of the testbench")

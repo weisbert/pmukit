@@ -138,7 +138,7 @@ const out = {};
       foot_now: pg.nodes.foot.innerHTML,
       put_sent: count(pg, 'PUT', '/api/p/p/pins/VRAIL_A'),
       cli_asked: pg.calls.filter(c => c.path.indexOf('/api/cli') === 0).length > cli0,
-      cli_stubs: (cliState(pg) || {}).stubs,
+      cli_stubs: (function(p){ return Object.keys(p).filter(function(k){ return p[k] === "stub"; }); })((cliState(pg) || {}).ports || {}),
     };
     await settle();
     t.skeleton_waiting = skel(pg.nodes.main.innerHTML);
@@ -188,7 +188,7 @@ const out = {};
       all_unticked: ['VRAIL_A', 'VRAIL_B', 'IBIAS'].every(p => hasBox(during, p) && !checked(during, p)),
       skeleton: skel(during),
       foot: pg.nodes.foot.innerHTML,
-      cli_stubs: ((cliState(pg) || {}).stubs || []).slice().sort(),
+      cli_stubs: (function(p){ return Object.keys(p).filter(function(k){ return p[k] === "stub"; }); })((cliState(pg) || {}).ports || {}).sort(),
     };
     release(pg, 'PUT /api/p/p/pins', 200, putAnswer({ VRAIL_A:'stub', VRAIL_B:'stub', IBIAS:'stub' }));
     await settle();

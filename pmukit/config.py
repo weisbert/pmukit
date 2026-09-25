@@ -168,6 +168,12 @@ class ProjectConfig:
     #: `parameters <vset_param>=<code>`. Absent in configs written before it existed, which all
     #: meant `VSET`.
     vset_param: str = "VSET"
+    #: Optional. Which `include "<file>" section=` line of a file is the PROCESS CORNER, when
+    #: ADE wrote several for one file (the corner row plus fixed model-library rows such as a
+    #: noise or pre-sim section): {file as written in the include: index among that file's
+    #: section= lines, 0-based}. Absent, the netlist reads it from the section names
+    #: (`Netlist.corner_lines`). Every other section= line is a constant, kept as exported.
+    corner_include: dict = field(default_factory=dict)
 
     # ---------------------------------------------------------------- serialization
     @classmethod
@@ -177,7 +183,8 @@ class ProjectConfig:
                        "Contract 0a is a single JSON object with the ten intake keys.",
                        ["Start from the example in docs/CONTRACTS.md section 0a"], where)
         known = {"project", "netlist", "pmu_inst", "corners", "temps_c", "vset_codes",
-                 "vset_param", "ports", "my_load", "care_up_to_hz", "state_note", "stub_dc"}
+                 "vset_param", "ports", "my_load", "care_up_to_hz", "state_note", "stub_dc",
+                 "corner_include"}
         unknown = set(d) - known
         if unknown:
             raise _err(f"The project config has unknown key(s): {sorted(unknown)}.",
@@ -212,7 +219,10 @@ class ProjectConfig:
                   vset_param=d.get("vset_param", "VSET"),
                   ports=ports, my_load=loads, care_up_to_hz=d.get("care_up_to_hz"),
                   state_note=d.get("state_note", ""),
-                  stub_dc={str(k): float(v) for k, v in (d.get("stub_dc") or {}).items()})
+                  stub_dc={str(k): float(v) for k, v in (d.get("stub_dc") or {}).items()},
+                  corner_include=(dict(d["corner_include"])
+                                  if isinstance(d.get("corner_include"), Mapping)
+                                  else d.get("corner_include") or {}))
         cfg.source_path = where
         cfg.validate()
         return cfg
@@ -239,6 +249,8 @@ class ProjectConfig:
         # key existed keeps its sha.
         if self.vset_param != "VSET":
             out["vset_param"] = str(self.vset_param)
+        if self.corner_include:
+            out["corner_include"] = {str(k): int(v) for k, v in self.corner_include.items()}
         return out
 
     @classmethod
@@ -315,6 +327,16 @@ class ProjectConfig:
                        "rewrites `parameters <vset_param>=<code>` in the netlist.",
                        ['Set "vset_param" to the variable as it appears in the netlist '
                         '`parameters` line, e.g. "VSET" or "vout_sel"'], where)
+
+        ci = self.corner_include
+        if not isinstance(ci, Mapping) or any(
+                not isinstance(k, str) or not k.strip() or isinstance(v, bool)
+                or not isinstance(v, int) or v < 0 for k, v in ci.items()):
+            raise _err(f"'corner_include' is not a {{file: line index}} map ({ci!r}).",
+                       "It names, per include file, which of its section= lines is the process "
+                       "corner (0 = the first); the other lines are kept as exported.",
+                       ['Set "corner_include": {"toplevel.scs": 0}, or drop it to let pmukit '
+                        'read the corner line from the section names'], where)
 
         if not isinstance(self.ports, Mapping) or not self.ports:
             raise _err(f"'ports' is empty or not an object ({self.ports!r}).",

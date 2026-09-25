@@ -495,8 +495,9 @@ def test_cli_echo_mirrors_what_the_user_did():
                                   "stubs": ["VDD0P8_C"], "fmax": 2e10}, "demo_pmu")
     assert "--netlist tb/input.scs" in cmd
     assert "--corners tt,ss" in cmd
-    assert "--load VDD0P8_A=500uA/2uA/switch" in cmd
-    assert "--stub VDD0P8_C" in cmd
+    assert "--load VDD0P8_A=0.0005,2e-06" in cmd
+    assert "--port VDD0P8_C=stub" in cmd
+    assert "--care-up-to 2e+10" in cmd
     assert server.cli_echo("run", {"run": "abc123", "action": "retry"}, "p") \
         == "pmukit run p --retry abc123"
 
@@ -870,3 +871,27 @@ def test_a_route_whose_client_went_away_is_not_a_500(monkeypatch, capsys):
     finally:
         c.close()
     assert "Traceback" not in capsys.readouterr().err
+
+
+def test_the_new_screen_command_strip_is_a_command_pmukit_new_accepts():
+    """The strip says "every action on this screen has this command": it must parse, flag for
+    flag, with the real `pmukit new` -- no invented --fmax / --ignore / 500uA/2uA/switch."""
+    import shlex
+    from pmukit import cli
+    cmd = server.cli_echo("new", {
+        "netlist": "/w/tb/input.scs", "pmu_inst": "PMU_TOP", "corners": ["tt", "ss"],
+        "temps": [-40, 125], "vset": [3, 1], "vset_param": "LDO_SEL",
+        "corner_include": {"toplevel.scs": 0}, "fmax": 1e10,
+        "loads": {"VDD0P8_A": {"on_a": 5e-4, "off_a": 2e-6, "switches": True,
+                               "edge_s": 1e-9}},
+        "ports": {"VDD0P8_C": "stub", "TESTMODE": "model"}, "stub_dc": {"VDD0P8_C": 0.8}},
+        "p")
+    argv = shlex.split(cmd)
+    assert argv[0] == "pmukit"
+    a = cli.build_parser().parse_args(cli._fixup_negative_numbers(argv[1:]))
+    assert a.fn is cli.cmd_new and a.pmu_inst == "PMU_TOP" and a.vset_param == "LDO_SEL"
+    assert a.corner_line == ["toplevel.scs=0"] and cli._corner_lines(a.corner_line) ==         {"toplevel.scs": 0}
+    assert float(a.care_up_to) == 1e10 and a.load == ["VDD0P8_A=0.0005,2e-06,1e-09"]
+    assert sorted(a.port) == ["TESTMODE=model", "VDD0P8_C=stub"]
+    assert a.stub == ["VDD0P8_C=0.8"]
+    assert cli._num_list(a.load[0].split("=")[1]) == [5e-4, 2e-6, 1e-9]

@@ -579,19 +579,29 @@ def cli_echo(screen: str, st, project: str = "") -> str:
             bits.append("--corners " + join(st["corners"]))
         if st.get("temps"):
             bits.append("--temps " + join(st["temps"]))
+        # Exactly the flags `pmukit new` parses (cli.py): pasting the strip must work.
         if st.get("vset"):
             bits.append("--vset " + join(st["vset"]))
-        for rail, ld in sorted((st.get("loads") or {}).items()):
-            on = _eng(ld.get("on_a"), "A").replace(" ", "")
-            off = _eng(ld.get("off_a"), "A").replace(" ", "")
-            sw = "/switch" if ld.get("switches") else ""
-            bits.append(f"--load {rail}={on}/{off}{sw}")
-        if st.get("stubs"):
-            bits.append("--stub " + join(st["stubs"]))
-        if st.get("ignored"):
-            bits.append("--ignore " + join(st["ignored"]))
+        if st.get("vset_param") and st["vset_param"] != "VSET":
+            bits.append(f"--vset-param {st['vset_param']}")
+        for f, idx in sorted((st.get("corner_include") or {}).items()):
+            bits.append(f"--corner-line {f}={int(idx)}")
         if st.get("fmax"):
-            bits.append("--fmax " + _eng(st["fmax"], "Hz").replace(" ", ""))
+            bits.append(f"--care-up-to {float(st['fmax']):g}")
+        for rail, ld in sorted((st.get("loads") or {}).items()):
+            vals = [f"{float(ld.get('on_a') or 0):g}", f"{float(ld.get('off_a') or 0):g}"]
+            if ld.get("edge_s"):
+                vals.append(f"{float(ld['edge_s']):g}")
+            bits.append(f"--load {rail}=" + ",".join(vals))
+        # Model answers that differ from what `pmukit new` assumes (a classified pin is
+        # modeled, an unclassified or ground pin ignored); older pages send stub/ignore lists.
+        fates = st.get("ports") if isinstance(st.get("ports"), dict) else {
+            **{p: "ignore" for p in st.get("ignored") or []},
+            **{p: "stub" for p in st.get("stubs") or []}}
+        for pin, fate in sorted(fates.items()):
+            bits.append(f"--port {pin}={fate}")
+        for pin, val in sorted((st.get("stub_dc") or {}).items()):
+            bits.append(f"--stub {pin}={float(val):g}")
         return " ".join(bits)
     if scr == "plan":
         off = [g for g, on in sorted((st.get("ticks") or {}).items()) if not on]
@@ -759,13 +769,18 @@ class _Scanned:
             return cands[0]["name"]
         return guess_pmu_inst(self.nl)            # raises the four-part error with them
 
-    def table(self, inst: str):
+    def table(self, inst: str, corner_choice: dict | None = None):
         """The base PinTable of `inst` (fates as the scan seeds them), a private deep copy.
-        A refusal (a decap on a rail, an instance that is not there) is remembered too."""
+        A refusal (a decap on a rail, an instance that is not there) is remembered too.
+        The config's `corner_include` choice changes which include line the table calls the
+        process corner, so it is part of the key."""
         import copy as _copy
+        choice = dict(corner_choice or {})
+        key = (inst, tuple(sorted((str(k), int(v)) for k, v in choice.items())))
         with self.lock:
-            hit = self._tables.get(inst)
+            hit = self._tables.get(key)
             if hit is None:
+                self.nl.corner_choice = choice
                 try:
                     if self.nl.find_instance(inst) is None:
                         if self._cands is None:
@@ -776,7 +791,7 @@ class _Scanned:
                 except PmuError as exc:
                     hit = exc
                 self._note_deps()
-                self._tables[inst] = hit
+                self._tables[key] = hit
         if isinstance(hit, PmuError):              # a fresh one: a raise grows a traceback
             raise PmuError(what=hit.what, why=hit.why, do=list(hit.do), where=hit.where,
                            extra=_copy.deepcopy(hit.extra))
@@ -1063,16 +1078,18 @@ class Project:
         served from the scan cache unless `nl` is a netlist of the caller's own making."""
         cfg = self.config_or_none()
         ports = dict(cfg.ports) if cfg is not None else {}
+        choice = dict(cfg.corner_include) if cfg is not None else {}
         ent = getattr(nl, "_scan_entry", None) if nl is not None else self.scanned()
         if ent is not None and nl is not None and nl.text is not ent.nl.text:
             ent = None                    # rewritten since it left the cache: scan what it is
         if ent is None:
             inst = cfg.pmu_inst if cfg is not None else guess_pmu_inst(nl)
+            nl.corner_choice = choice
             if nl.find_instance(inst) is None:
                 raise _inst_gone(nl, inst)
             return nl.scan(inst, ports=ports or None)
         inst = cfg.pmu_inst if cfg is not None else ent.guess()
-        table = ent.table(inst)
+        table = ent.table(inst, choice)
         if ports:
             table.apply_fates(ports)
         return table
@@ -1289,6 +1306,7 @@ def _pins_payload(ent: "_Scanned", table) -> dict:
     return {"pmu_inst": table.pmu_inst, "pmu_master": table.pmu_master, "pins": pins,
             "candidates": ent.candidates(),
             "sections": table.sections, "params": table.params,
+            **_include_payload(ent.nl, table),
             "analyses": table.analyses, "notes": table.notes,
             "summary": {"rails": len(rails), "biases": len(biases),
                         "stubs": len([p for p in pins if p["fate"] == "stub"]),
@@ -2068,7 +2086,14 @@ class Api:
                            do=e.get("do") or ["Fix the bench and re-read it"],
                            where=e.get("where") or "", extra=extra)
         ent = pr.scanned()
-        return _pins_payload(ent, pr.pins(ent.netlist()))
+        table = pr.pins(ent.netlist())
+        corner_fix = _fix_old_seed(pr, table)
+        if corner_fix:                       # the corner-line choice may have moved with it
+            table = pr.pins(ent.netlist())
+        out = _pins_payload(ent, table)
+        if corner_fix:                       # only when it happened: a GET equals a PUT's table
+            out["corner_fix"] = corner_fix
+        return out
 
     def netlist_info(self, project: str) -> dict:
         """The New screen's Netlist row, readable even when the pins are not: where the file
@@ -2195,6 +2220,8 @@ class Api:
         # name the user's file and line, never pmukit's copy.
         nl = Netlist(new_text, target)
         nl.origin = meta["path"]
+        if cfg is not None:
+            nl.corner_choice = dict(cfg.corner_include)
         if not meta["path"]:
             nl.label = f"{meta['name']} (dropped in the browser)"
         # scanned once, here: when it is adopted, this scan becomes the working copy's
@@ -2236,6 +2263,8 @@ class Api:
         pr.clear_netlist_attempt()
         st = pr.state()
         st.netlist = str(target)
+        if changes.get("first"):
+            st.answers.pop("vset_confirmed", None)      # a fresh seed is a fresh suggestion
         st.go("new").note(f"netlist read: {changes['text']}", "new")
         st.save()
         with _CACHE_LOCK:
@@ -2435,15 +2464,23 @@ class Api:
         raw = dict(raw)
         raw.setdefault("project", project)
         cfg = ProjectConfig.from_dict(raw, where=str(pr.config_path))
-        pr.save_config(cfg, str(body.get("note") or "edited on the New screen"))
+        old = pr.config_or_none()
+        # A seeded code variable (`CORE_VSET`, read from the parameters) is a suggestion until
+        # the user picks a code variable or confirms that one; `confirm` alone saves nothing.
+        confirm = body.get("confirm") == "vset_param"
+        if not (confirm and old is not None and old.sha() == cfg.sha()):
+            pr.save_config(cfg, str(body.get("note") or "edited on the New screen"))
         with _CACHE_LOCK:
             _PLAN_CACHE.pop(project, None)
         st = pr.state()
         if isinstance(body.get("answers"), dict):
             st.answers = body["answers"]
-        st.note("configuration saved", "new")
+        if confirm or (old is not None and old.vset_param != cfg.vset_param):
+            st.answers["vset_confirmed"] = cfg.vset_param
+        st.note("code variable confirmed" if confirm else "configuration saved", "new")
         st.save()
-        return {"config": cfg.to_dict(), "sha": cfg.sha(), "undoable": st.undoable()}
+        return {"config": cfg.to_dict(), "sha": cfg.sha(), "undoable": st.undoable(),
+                "answers": st.answers}
 
     def derived(self, project: str) -> dict:
         if self.demo:
@@ -3614,6 +3651,82 @@ def _set_fates(cfg, fates: dict, table=None) -> None:
     cfg.validate()
 
 
+def _include_payload(nl, table) -> dict:
+    """What the New screen shows of the include lines and the code variable.
+
+    `includes`: every include line in order, the corner one marked (the others are left alone
+    by a corner). `section_choices`: the sections the corner include's file really declares,
+    when this machine can read it (next to the original netlist, or under the PDK / model root)
+    -- None when it cannot, and the screen keeps its default corner names. `code_var`: the
+    output-code variable read from the parameters (a suggestion to confirm when it is not
+    VSET), and `param_followers` the parameters that are expressions of each parameter."""
+    from .netlist import looks_like_corner
+    corner = next((i for i in table.includes if i.get("corner")), None)
+    choices = None
+    if corner is not None:
+        try:
+            names = nl.section_names(corner["file"])
+        except OSError:
+            names = None
+        # Only process corners are offered: never a section a fixed line uses (Noise_Worst,
+        # pre_Sim), never a declared name that does not read as a corner -- except the corner
+        # line's own current section, which is always there.
+        fixed = {i["section"] for i in table.includes if i.get("section") and not i["corner"]}
+        pool = sorted(names) if names else ["tt", "ss", "ff"]
+        choices = [s for s in pool if looks_like_corner(s) and s not in fixed]
+        if corner["section"] not in choices:
+            choices.insert(0, corner["section"])
+    return {"includes": table.includes, "section_choices": choices,
+            "code_var": table.code_var, "param_followers": table.param_followers}
+
+
+def _fix_old_seed(pr, table) -> str:
+    """A config seeded before the corner line was read properly may hold a FIXED model-library
+    section as its only corner (`["Noise_Worst"]`): re-seed it from the real process-corner line,
+    through the config history, and say so. The same old seed left the default code variable
+    `VSET` with code 0 on a netlist that declares no VSET; when the parameters now suggest one
+    (`code_variable`), it is re-suggested too (the New screen asks to confirm it).
+    Returns the change text, or ''."""
+    cfg = pr.config_or_none()
+    if cfg is None:
+        return ""
+    d = cfg.to_dict()
+    texts = []
+    corner = next((i for i in table.includes if i.get("corner")), None)
+    fixed = {i["section"] for i in table.includes if i.get("section") and not i["corner"]}
+    if isinstance(cfg.corners, list) and len(cfg.corners) == 1 and corner is not None:
+        was = cfg.corners[0]
+        if was in fixed and was != corner["section"]:
+            d["corners"] = [corner["section"]]
+            texts.append(f"corner {was} is a fixed model-library section of {corner['file']}, "
+                         f"not a process corner: corners re-seeded to {corner['section']} from "
+                         f"its process-corner line")
+    cv = table.code_var or {}
+    if (cfg.vset_param == "VSET" and "VSET" not in table.params and cfg.vset_codes == [0]
+            and cv.get("suggested") and cv.get("value") is not None):
+        d["vset_param"], d["vset_codes"] = cv["param"], [cv["value"]]
+        texts.append(f"code variable {cv['param']}={cv['value']} suggested from the parameters "
+                     "(the netlist declares no VSET) -- confirm it on the New screen")
+    if not texts:
+        return ""
+    from .config import ProjectConfig
+    new = ProjectConfig.from_dict(d, where=getattr(cfg, "source_path", "") or "project config")
+    text = "; ".join(texts)
+    pr.save_config(new, text)
+    meta = pr.netlist_source()
+    if meta is not None:
+        ch = dict(meta.get("changes") or {})
+        ch["text"] = (str(ch.get("text") or "") + "; " if ch.get("text") else "") + text
+        meta["changes"] = ch
+        pr.save_netlist_source(meta)
+    st = pr.state()
+    st.note(text, "new")
+    st.save()
+    with _CACHE_LOCK:
+        _PLAN_CACHE.pop(pr.name, None)
+    return text
+
+
 def _seed_config(project: str, netlist: pathlib.Path, inst: str, table):
     """A first config straight from the netlist, so the New screen has something to show.
 
@@ -3636,17 +3749,26 @@ def _seed_config(project: str, netlist: pathlib.Path, inst: str, table):
         if pin.role == "rail" and pin.dc:
             on = abs(float(pin.dc))
             loads[name] = {"on_a": on, "off_a": max(on / 250.0, 1e-9), "switches": True}
-    corners = sorted({s for s in table.sections.values() if s}) or ["tt"]
-    vset = table.params.get("VSET")
-    try:
-        codes = [int(float(vset))] if vset is not None else [0]
-    except (TypeError, ValueError):
-        codes = [0]
+    # The corner is the section of the FIRST include line that carries one: ADE writes the
+    # process-corner row first and extra model libraries (a noise or pre-sim section) after it,
+    # and only that first line is ever rewritten per corner.
+    first = next((i["section"] for i in (getattr(table, "includes", None) or [])
+                  if i.get("corner") and i.get("section")), None)
+    corners = [first] if first else (sorted({s for s in table.sections.values() if s})[:1]
+                                      or ["tt"])
+    # The code variable: VSET when declared; else the one `*vset*` parameter holding a plain
+    # integer, seeded as a SUGGESTION the New screen asks to confirm; else nothing is guessed.
+    from .netlist import code_variable
+    cv = getattr(table, "code_var", None) or code_variable(table.params)
+    extra = {}
+    if cv.get("param") and cv["param"] != "VSET":
+        extra["vset_param"] = cv["param"]
+    codes = [cv["value"]] if cv.get("value") is not None else [0]
     return ProjectConfig.from_dict({
         "project": project, "netlist": str(netlist), "pmu_inst": inst,
-        "corners": corners[:1], "temps_c": [-40.0, 25.0, 125.0], "vset_codes": codes,
+        "corners": corners, "temps_c": [-40.0, 25.0, 125.0], "vset_codes": codes,
         "ports": ports, "my_load": loads, "care_up_to_hz": 1e10,
-        "state_note": ""}, where=str(netlist))
+        "state_note": "", **extra}, where=str(netlist))
 
 
 def _carry_over(cfg, table, old, inst: str):

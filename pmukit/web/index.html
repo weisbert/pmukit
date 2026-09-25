@@ -1289,8 +1289,24 @@ SCREENS.new = {
       pmu_inst: pins.pmu_inst || cfg.pmu_inst || "",
       corners: cfg.corners || [], temps: cfg.temps_c || [], vset: cfg.vset_codes || [],
       loads: cfg.my_load || {}, fmax: cfg.care_up_to_hz || 0,
-      stubs: Object.keys(cfg.ports || {}).filter(function(k){ return cfg.ports[k] === "stub"; }),
-      ignored: Object.keys(cfg.ports || {}).filter(function(k){ return cfg.ports[k] === "ignore"; })
+      vset_param: cfg.vset_param || "VSET", corner_include: cfg.corner_include || {},
+      stub_dc: cfg.stub_dc || {},
+      // only the answers `pmukit new` would not assume by itself (it models a classified pin
+      // and ignores an unclassified or ground one) -- not 60 --port flags for tied-off pins
+      ports: (function(){
+        var out = {}, rows = pins.pins || [];
+        if (!rows.length){               // pins not read yet: a stub is never a default answer
+          Object.keys(cfg.ports || {}).forEach(function(k){
+            if (cfg.ports[k] === "stub") out[k] = "stub"; });
+          return out;
+        }
+        rows.forEach(function(p){
+          var fate = (cfg.ports || {})[p.name];
+          var dflt = (p.is_ground || p.role === "none") ? "ignore" : "model";
+          if (fate && fate !== dflt) out[p.name] = fate;
+        });
+        return out;
+      })()
     };
   },
   main: function(){
@@ -1304,6 +1320,10 @@ SCREENS.new = {
     var noNetlist = !!(src && !src.copy);
     var pins = noNetlist || (src === undefined && !S.failed["netlistsrc"]) ? undefined
              : need("pins", "/api/p/" + P() + "/pins", "new");
+    /* reading the pins re-seeded a corner that was a fixed model-library section: re-read config */
+    if (pins && pins.corner_fix && S.sel.cornerFix !== pins.corner_fix){
+      S.sel.cornerFix = pins.corner_fix; forget("config");
+    }
     var cfgd = need("config", "/api/p/" + P() + "/config", "new");
     var left;
     if (noNetlist && !pins){
@@ -1576,9 +1596,7 @@ function netlistBody(pins, info){
     + '<span class="k">PMU instance</span><span class="rowflex">' + instPicker(pins)
     + '<span>cell <span class="mono">' + esc(pins.pmu_master) + "</span> &middot; "
     + (pins.pins || []).length + " pins</span></span>"
-    + '<span class="k">PDK includes</span><span class="mono">'
-    + esc(Object.keys(pins.sections || {}).map(function(k){ return k + " section=" + pins.sections[k]; }).join(" · ") || "-")
-    + "</span>"
+    + '<span class="k">PDK includes</span><span class="mono">' + pdkIncludes(pins) + "</span>"
     + '<span class="k">Parameters</span><span class="mono">'
     + esc(Object.keys(pins.params || {}).map(function(k){ return k + "=" + pins.params[k]; }).join(" ") || "-") + "</span>"
     + '<span class="k">Analyses in file</span><span>' + (pins.analyses || []).length
@@ -1625,11 +1643,57 @@ function pinToolbar(rows){
     + btn("none", "none", "untick every rail and bias: each becomes a stub", !(nRail + nBias))
     + "</span></div>";
 }
+/* One entry per included file: the ONE section= line a corner rewrites (the process corner) and
+   the fixed model-library lines of the same file (Noise_Worst, pre_Sim...), kept as exported.
+   When the section names do not say which line is the corner, the user picks it here. */
+function pdkIncludes(pins){
+  var inc = (pins && pins.includes) || null;
+  if (!inc) return esc(Object.keys(pins.sections || {}).map(function(k){ return k + " section=" + pins.sections[k]; }).join(" · ") || "-");
+  var order = [], by = {};
+  inc.forEach(function(i){
+    if (!i.section) return;
+    if (!by[i.file]){ by[i.file] = { corner: null, fixed: [], lines: [], how: i.how, sure: i.sure !== false }; order.push(i.file); }
+    by[i.file].lines.push(i);
+    if (i.corner) by[i.file].corner = i; else by[i.file].fixed.push(i.section);
+  });
+  return order.map(function(f){
+    var e = by[f], out = esc(f);
+    out += e.corner ? " section=" + esc(e.corner.section) + " &mdash; process corner (varied)" : "";
+    if (e.fixed.length) out += (e.corner ? " &middot; " : " ") + "section=" + esc(e.fixed.join(", "))
+      + " &mdash; fixed, kept as exported";
+    if (e.lines.length > 1 && (!e.sure || e.how === "chosen" || e.how === "none")){
+      var act = regAction(function(v){ pickCornerLine(f, e, parseInt(v, 10)); });
+      out += ' <span class="hint">' + (e.sure ? "corner line:" : "which line is the process corner?")
+        + '</span> <select class="inp mono" data-change="' + act + '">'
+        + e.lines.map(function(l){
+            return '<option value="' + l.index + '"' + (l.corner ? " selected" : "") + ">section="
+              + esc(l.section) + "</option>"; }).join("") + "</select>";
+    }
+    return out;
+  }).join("<br>") || "-";
+}
+/* The corner line of a file is the user's answer (config.corner_include); a corner list that
+   was just the old line's section follows the new line. */
+function pickCornerLine(file, e, idx){
+  var cur = (S.data["config"] || {}).config;
+  if (!cur || isNaN(idx)) return;
+  var next = JSON.parse(JSON.stringify(cur));
+  next.corner_include = next.corner_include || {};
+  next.corner_include[file] = idx;
+  var line = e.lines.filter(function(l){ return l.index === idx; })[0];
+  var was = e.corner ? e.corner.section : null;
+  if (line && next.corners instanceof Array && next.corners.length === 1 && next.corners[0] === was)
+    next.corners = [line.section];
+  putConfig(next, "process-corner include line of " + file + " chosen", null,
+            function(){ forget("pins"); });
+}
 function vsetParamPicker(cfg, pins){
   // The name is the designer's, not pmukit's: offer what the netlist declares, keep a name the
   // netlist does not declare visible (plan refuses it when more than one code is asked for).
+  // The default VSET, when the netlist has none, is not an answer: the picker asks "(choose)".
   var cur = cfg.vset_param || "VSET";
   var names = Object.keys((pins && pins.params) || {});
+  var choose = cur === "VSET" && names.length && names.indexOf(cur) < 0;
   var act = regAction(function(v){
     var name = String(typeof v === "string" ? v : el("vsetparam").value).trim();
     var bad = !name ? "type the name of the design variable, e.g. VSET"
@@ -1644,13 +1708,37 @@ function vsetParamPicker(cfg, pins){
       + esc(typed("in:vsetparam", cur)) + '">'
       + '<button class="btn sm" data-act="' + act + '">Set</button>' + badMsg("in:vsetparam");
   }
-  if (names.indexOf(cur) < 0) names.unshift(cur);
+  if (!choose && names.indexOf(cur) < 0) names.unshift(cur);
   return '<select class="inp mono" id="vsetparam" data-change="' + act + '">'
+    + (choose ? '<option value="" selected disabled>(choose)</option>' : "")
     + names.map(function(n){
         var val = (pins.params || {})[n];
         return '<option value="' + esc(n) + '"' + (n === cur ? " selected" : "") + ">" + esc(n)
           + (val === undefined ? "  (not in netlist)" : " = " + esc(val)) + "</option>";
       }).join("") + "</select>";
+}
+/* A code variable read from the parameters (not VSET) is a suggestion until confirmed; the
+   parameters that are expressions of the chosen one are named, so the sweep's reach is seen. */
+function vsetSuggestion(cfgd, pins){
+  var cfg = cfgd.config, cv = (pins && pins.code_var) || {};
+  var cur = cfg.vset_param || "VSET";
+  var fol = ((pins && pins.param_followers) || {})[cur] || [];
+  var out = "";
+  if (cv.suggested && cv.param === cur && ((cfgd.answers || {}).vset_confirmed !== cur)){
+    var ok = regAction(function(){
+      api("/api/p/" + P() + "/config", { method:"PUT",
+          body:{ config: cfg, note: "code variable confirmed", confirm: "vset_param" } })
+        .then(function(d){
+          S.data["config"] = { exists:true, config:d.config, sha:d.sha, answers:d.answers || {},
+                               undoable:d.undoable, history:[] };
+          render(); refreshCli();
+        }, showErr);
+    });
+    out += '<span class="badge b-warn">suggested &mdash; confirm</span>'
+      + '<button class="btn sm" data-act="' + ok + '">Confirm</button>';
+  }
+  if (fol.length) out += '<span class="hint">follows ' + esc(cur) + ": " + esc(fol.join(", ")) + "</span>";
+  return out;
 }
 function threeQuestions(cfgd, pins){
   var cfg = cfgd.config;
@@ -1717,7 +1805,9 @@ function threeQuestions(cfgd, pins){
     if (r.bad){ S.sel["in:fmax"] = txt; render(); return; }
     patchConfig("care_up_to_hz", r.v, "in:fmax");
   });
-  var known = ["tt","ss","ff","fs","sf"];
+  /* the sections the corner include's file declares, when the server could read it */
+  var known = (pins && pins.section_choices && pins.section_choices.length)
+    ? pins.section_choices.slice() : ["tt","ss","ff","fs","sf"];
   var kt = [-40, 0, 25, 85, 125];
   return '<div style="display:flex;flex-direction:column;gap:16px">'
     + '<div class="field"><span class="lbl">1 &middot; Corners, temperatures and VSET codes'
@@ -1729,7 +1819,7 @@ function threeQuestions(cfgd, pins){
               .sort(function(a, b){ return a - b; }).map(String),
             cfg.temps_c.map(String), "temps_c") + "</div>"
     + '<div class="rowflex"><span class="hint" style="width:66px">code var</span>'
-    + vsetParamPicker(cfg, pins)
+    + vsetParamPicker(cfg, pins) + vsetSuggestion(cfgd, pins)
     + '<span class="hint">the design variable that selects the output code; rewritten as '
     + '<span class="mono">parameters ' + esc(cfg.vset_param || "VSET") + '=&lt;code&gt;</span></span></div>'
     + '<div class="rowflex"><span class="hint" style="width:66px">codes</span>'
@@ -2030,7 +2120,7 @@ function buildPlan(){
 function putConfig(cfg, note, typedKey, after){
   api("/api/p/" + P() + "/config", { method:"PUT", body:{ config: cfg, note: note } })
     .then(function(d){
-      S.data["config"] = { exists:true, config:d.config, sha:d.sha, answers:{}, undoable:d.undoable, history:[] };
+      S.data["config"] = { exists:true, config:d.config, sha:d.sha, answers:d.answers || {}, undoable:d.undoable, history:[] };
       S.undoable = d.undoable;
       if (typedKey) dropTyped(typedKey);
       settled(S.screen);
