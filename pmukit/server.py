@@ -646,6 +646,236 @@ _PLAN_CACHE: dict[str, tuple] = {}
 _CACHE_LOCK = threading.Lock()
 
 
+# ------------------------------------------------------------------------------- scan cache
+# A real bench is a few MB, and every walk of `Netlist` re-reads the whole text: one scan of a
+# 4 MB deck with a 99-pin PMU is ~1 s, and the PMU candidates another ~0.5 s. The New screen asks
+# for the pins on every render that lacks them, and a Model tick used to re-read and re-scan the
+# deck twice -- the screen went blank for 1-3 s per click. So a working copy is read and scanned
+# ONCE per (file content, include files, origin, PMU instance): the base table (no fates) is kept
+# here, and each request copies it and stamps the config's model/stub/ignore onto the copy,
+# which is exactly what `Netlist.scan(inst, ports=...)` does last.
+#
+# Validity: the file's (mtime_ns, size) and those of every include the scan read. A file whose
+# mtime is within _RACY_S of when it was read is re-hashed on each hit (git's "racy clean": a
+# same-size rewrite inside one timestamp tick is not missed). Every server write to a working
+# copy (a load, a re-read, an instance switch, a role written into the deck) drops the
+# project's entries outright. Bounded (_SCAN_CAP entries, LRU); one lock guards the map and
+# one lock per entry makes concurrent requests for the same deck scan it once, not N times.
+_SCAN_CACHE: "dict[tuple, _Scanned]" = {}
+_SCAN_LOCK = threading.Lock()
+_SCAN_BUILDING: dict[tuple, threading.Lock] = {}
+_SCAN_CAP = 6
+_RACY_S = 3.0
+
+
+_PROJECT_LOCKS: dict[str, threading.RLock] = {}
+
+
+def _project_lock(pr: "Project") -> threading.RLock:
+    """Serializes the read-modify-write of one project's config (the server is threaded: two
+    Model ticks, or a tick and a Set, arriving together must not both write from the same
+    config read and drop one of the answers)."""
+    with _SCAN_LOCK:
+        return _PROJECT_LOCKS.setdefault(str(pr.dir), threading.RLock())
+
+
+def _locked(fn):
+    """An Api method `(self, project, ...)` that rewrites the project's config or state runs
+    under the project's lock."""
+    def wrapped(self, project, *args, **kw):
+        if getattr(self, "demo", False) or not PROJECT_RE.match(project or ""):
+            return fn(self, project, *args, **kw)      # refused inside, as before
+        with _project_lock(Project(project, self.root)):
+            return fn(self, project, *args, **kw)
+    wrapped.__name__, wrapped.__doc__ = fn.__name__, fn.__doc__
+    return wrapped
+
+
+def _stat_sig(p) -> tuple | None:
+    try:
+        st = os.stat(p)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+class _Scanned:
+    """One working copy, read once: its bytes' sha, and the scans / candidates asked of it."""
+
+    def __init__(self, path: pathlib.Path, origin: str, nl, sha: str, nbytes: int,
+                 sig: tuple | None) -> None:
+        self.path = path
+        self.origin = origin
+        self.sig = sig
+        self.read_ns = time.time_ns()
+        self.sha = sha
+        self.bytes = nbytes
+        self.nl = nl
+        self.lock = threading.Lock()
+        self._tables: dict = {}             # inst -> PinTable (no fates) | PmuError
+        self._cands: list | None = None
+        self._deps: dict[str, tuple | None] = {}
+
+    # ---- validity
+    def _note_deps(self) -> None:
+        for val in (getattr(self.nl, "_inc_texts", None) or {}).values():
+            if val and len(val) > 1 and val[1] and val[1] not in self._deps:
+                self._deps[val[1]] = _stat_sig(val[1])
+
+    def valid(self) -> bool:
+        sig = _stat_sig(self.path)
+        if sig is None or sig != self.sig:
+            return False
+        if self.sig[0] >= self.read_ns - int(_RACY_S * 1e9):
+            try:                                   # racy: same stat, maybe other bytes
+                if jsonio.sha_file(self.path, 12) != self.sha:
+                    return False
+            except OSError:
+                return False
+            if time.time_ns() - self.sig[0] > int(_RACY_S * 1e9):
+                self.read_ns = time.time_ns()      # settled: trust the stat from now on
+        return all(_stat_sig(p) == s for p, s in list(self._deps.items()))
+
+    # ---- what is asked of it
+    def netlist(self):
+        """A private copy (the caller may rewrite it); the text is shared, not re-read."""
+        nl = self.nl.copy()
+        nl.text = self.nl.text                     # the same object: pins(nl) knows it unedited
+        if hasattr(self.nl, "_inc_texts"):
+            nl._inc_texts = dict(self.nl._inc_texts)
+        nl._scan_entry = self
+        return nl
+
+    def candidates(self) -> list[dict]:
+        with self.lock:
+            if self._cands is None:
+                self._cands = pmu_candidates(self.nl)
+                self._note_deps()
+            return [dict(c) for c in self._cands]
+
+    def guess(self) -> str:
+        cands = self.candidates()
+        if cands and cands[0]["guess"]:
+            return cands[0]["name"]
+        return guess_pmu_inst(self.nl)            # raises the four-part error with them
+
+    def table(self, inst: str):
+        """The base PinTable of `inst` (fates as the scan seeds them), a private deep copy.
+        A refusal (a decap on a rail, an instance that is not there) is remembered too."""
+        import copy as _copy
+        with self.lock:
+            hit = self._tables.get(inst)
+            if hit is None:
+                try:
+                    if self.nl.find_instance(inst) is None:
+                        if self._cands is None:
+                            self._cands = pmu_candidates(self.nl)
+                        hit = _inst_gone(self.nl, inst, self._cands)
+                    else:
+                        hit = self.nl.scan(inst, ports=None)
+                except PmuError as exc:
+                    hit = exc
+                self._note_deps()
+                self._tables[inst] = hit
+        if isinstance(hit, PmuError):              # a fresh one: a raise grows a traceback
+            raise PmuError(what=hit.what, why=hit.why, do=list(hit.do), where=hit.where,
+                           extra=_copy.deepcopy(hit.extra))
+        return _copy.deepcopy(hit)
+
+
+def _scan_hit(key: tuple) -> "_Scanned | None":
+    with _SCAN_LOCK:
+        ent = _SCAN_CACHE.get(key)
+    if ent is None or not ent.valid():
+        return None
+    with _SCAN_LOCK:                               # LRU: most recently used last
+        if _SCAN_CACHE.get(key) is ent:
+            _SCAN_CACHE.pop(key)
+            _SCAN_CACHE[key] = ent
+    return ent
+
+
+def _scanned(path: pathlib.Path, origin: str, root_dir: pathlib.Path) -> _Scanned:
+    key = (str(root_dir), str(path), origin)
+    ent = _scan_hit(key)
+    if ent is not None:
+        return ent
+    # One reader per deck: requests arriving together for a deck not read yet wait for the
+    # first one's entry (and then share its scans) instead of each reading and scanning it.
+    with _SCAN_LOCK:
+        build = _SCAN_BUILDING.setdefault(key, threading.Lock())
+    with build:
+        ent = _scan_hit(key)
+        if ent is not None:
+            return ent
+        from .netlist import Netlist
+        try:
+            sig = _stat_sig(path)
+            data = path.read_bytes()
+        except OSError:
+            Netlist.from_file(path)                # the four-part "netlist not found"
+            raise
+        nl = Netlist(data.decode("utf-8", errors="replace"), path)
+        nl.origin = origin
+        ent = _Scanned(path, origin, nl, jsonio.sha_bytes(data, 12), len(data), sig)
+        _scan_put(key, ent)
+    with _SCAN_LOCK:
+        if len(_SCAN_BUILDING) > 4 * _SCAN_CAP:
+            _SCAN_BUILDING.clear()
+    return ent
+
+
+def _scan_adopt(root_dir, ent: _Scanned) -> None:
+    """A deck just written as the working copy was scanned before it was written: keep that
+    scan as the copy's, instead of reading and scanning the same bytes again."""
+    _scan_forget(root_dir)
+    ent.sig = _stat_sig(ent.path)
+    ent.read_ns = time.time_ns()
+    ent.nl.label = ""                  # read back from the copy from now on, as from_file would
+    with ent.lock:                     # a refusal named the dropped file; ask again if asked
+        ent._tables = {k: v for k, v in ent._tables.items() if not isinstance(v, PmuError)}
+    if ent.sig is not None:
+        _scan_put((str(root_dir), str(ent.path), ent.origin), ent)
+
+
+_SRC_SHA: dict[str, tuple] = {}
+
+
+def _source_sha(sp: pathlib.Path) -> str:
+    """sha of the exported netlist as a load reads it (text, LF) -- remembered per (mtime, size)
+    once the file has settled, since the Netlist row asks on every return to the window and
+    the export may sit on a slow network disk."""
+    sig = _stat_sig(sp)
+    with _SCAN_LOCK:
+        hit = _SRC_SHA.get(str(sp))
+    if hit and sig is not None and hit[0] == sig:
+        return hit[1]
+    data = sp.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+    sha = jsonio.sha_bytes(data.encode("utf-8"), 12)
+    if sig is not None and time.time_ns() - sig[0] > int(_RACY_S * 1e9):
+        with _SCAN_LOCK:
+            if len(_SRC_SHA) > 64:
+                _SRC_SHA.clear()
+            _SRC_SHA[str(sp)] = (sig, sha)
+    return sha
+
+
+def _scan_put(key: tuple, ent: _Scanned) -> None:
+    with _SCAN_LOCK:
+        _SCAN_CACHE.pop(key, None)
+        _SCAN_CACHE[key] = ent
+        while len(_SCAN_CACHE) > _SCAN_CAP:
+            _SCAN_CACHE.pop(next(iter(_SCAN_CACHE)))
+
+
+def _scan_forget(root_dir) -> None:
+    """Drop every scan of one project (its working copy was rewritten, or its instance moved)."""
+    d = str(root_dir)
+    with _SCAN_LOCK:
+        for k in [k for k in _SCAN_CACHE if k[0] == d]:
+            _SCAN_CACHE.pop(k, None)
+
+
 class Project:
     """Everything a route needs about one project, assembled from the landed contract modules.
 
@@ -813,20 +1043,39 @@ class Project:
             except OSError:
                 pass
 
+    def scanned(self) -> _Scanned:
+        """The working copy, read and scanned once per content (see _SCAN_CACHE)."""
+        return _scanned(self.netlist_path(),
+                        str((self.netlist_source() or {}).get("path") or ""), self.dir)
+
+    def forget_scans(self) -> None:
+        _scan_forget(self.dir)
+
     def netlist(self):
-        from .netlist import Netlist
-        nl = Netlist.from_file(self.netlist_path())
-        nl.origin = str((self.netlist_source() or {}).get("path") or "")
-        return nl
+        """The working copy, as a private Netlist the caller may rewrite."""
+        return self.scanned().netlist()
+
+    def candidates(self) -> list[dict]:
+        return self.scanned().candidates()
 
     def pins(self, nl=None):
-        nl = nl if nl is not None else self.netlist()
+        """The pin table with the config's fates stamped on -- `nl.scan(inst, ports=...)`,
+        served from the scan cache unless `nl` is a netlist of the caller's own making."""
         cfg = self.config_or_none()
-        inst = cfg.pmu_inst if cfg is not None else guess_pmu_inst(nl)
         ports = dict(cfg.ports) if cfg is not None else {}
-        if nl.find_instance(inst) is None:
-            raise _inst_gone(nl, inst)
-        return nl.scan(inst, ports=ports or None)
+        ent = getattr(nl, "_scan_entry", None) if nl is not None else self.scanned()
+        if ent is not None and nl is not None and nl.text is not ent.nl.text:
+            ent = None                    # rewritten since it left the cache: scan what it is
+        if ent is None:
+            inst = cfg.pmu_inst if cfg is not None else guess_pmu_inst(nl)
+            if nl.find_instance(inst) is None:
+                raise _inst_gone(nl, inst)
+            return nl.scan(inst, ports=ports or None)
+        inst = cfg.pmu_inst if cfg is not None else ent.guess()
+        table = ent.table(inst)
+        if ports:
+            table.apply_fates(ports)
+        return table
 
     # ---- derived + plan
     def site(self, engine: str = "", account: str = ""):
@@ -871,7 +1120,7 @@ class Project:
         # The origin and the engine are in the key too: the run decks carry the relative includes
         # made absolute against the ORIGINAL netlist's directory, and only when the engine runs
         # on this filesystem (plan.absolute_includes).
-        key = (cfg.sha(), der.sha(), jsonio.sha_file(self.netlist_path(), 12),
+        key = (cfg.sha(), der.sha(), self.scanned().sha,
                str((self.netlist_source() or {}).get("path") or ""), self.site().engine)
         with _CACHE_LOCK:
             hit = _PLAN_CACHE.get(self.name)
@@ -1022,9 +1271,38 @@ def _one_rail(measured: dict, rail: str, where: str) -> dict:
     return {"rails": {rail: rails[rail]}, "biases": {}}
 
 
-def _inst_gone(nl, inst: str) -> PmuError:
+def _pins_payload(ent: "_Scanned", table) -> dict:
+    """GET /pins, and the answer of every PUT that changes a pin: the table the New screen
+    draws, its footer summary and the working copy it was read from."""
+    pins = []
+    for name, entry in table.to_dict().items():
+        row = dict(entry)
+        row["name"] = name
+        pins.append(row)
+    pins.sort(key=lambda r: r.get("index", 0))
+    rails = [p for p in pins if p["role"] == "rail" and p["fate"] == "model"]
+    biases = [p for p in pins if p["role"] == "bias" and p["fate"] == "model"]
+    roles: dict[str, int] = {}
+    for p in pins:
+        k = "ground" if p["is_ground"] else p["role"]
+        roles[k] = roles.get(k, 0) + 1
+    return {"pmu_inst": table.pmu_inst, "pmu_master": table.pmu_master, "pins": pins,
+            "candidates": ent.candidates(),
+            "sections": table.sections, "params": table.params,
+            "analyses": table.analyses, "notes": table.notes,
+            "summary": {"rails": len(rails), "biases": len(biases),
+                        "stubs": len([p for p in pins if p["fate"] == "stub"]),
+                        "grounds": len([p for p in pins if p["is_ground"]]),
+                        "roles": roles,
+                        "unclassified": [p["name"] for p in pins
+                                         if p["role"] == "none" and not p["is_ground"]
+                                         and p["fate"] != "ignore"]},
+            "netlist": {"path": str(ent.path), "sha": ent.sha, "bytes": ent.bytes}}
+
+
+def _inst_gone(nl, inst: str, cands: list | None = None) -> PmuError:
     """The configured PMU instance is not in this netlist: offer the ones that are."""
-    cands = pmu_candidates(nl)
+    cands = [dict(c) for c in cands] if cands is not None else pmu_candidates(nl)
     return PmuError(
         what=f"there is no top-level instance named {inst!r} in the netlist.",
         why="The PMU instance is named in the project config (or was just picked); the netlist "
@@ -1789,30 +2067,8 @@ class Api:
                            why=e.get("why") or "The scan refused it.",
                            do=e.get("do") or ["Fix the bench and re-read it"],
                            where=e.get("where") or "", extra=extra)
-        nl = pr.netlist()
-        table = pr.pins(nl)
-        d = table.to_dict()
-        pins = []
-        for name, entry in d.items():
-            row = dict(entry)
-            row["name"] = name
-            pins.append(row)
-        pins.sort(key=lambda r: r.get("index", 0))
-        rails = [p for p in pins if p["role"] == "rail" and p["fate"] == "model"]
-        biases = [p for p in pins if p["role"] == "bias" and p["fate"] == "model"]
-        path = pr.netlist_path()
-        return {"pmu_inst": table.pmu_inst, "pmu_master": table.pmu_master, "pins": pins,
-                "candidates": pmu_candidates(nl),
-                "sections": table.sections, "params": table.params,
-                "analyses": table.analyses, "notes": table.notes,
-                "summary": {"rails": len(rails), "biases": len(biases),
-                            "stubs": len([p for p in pins if p["fate"] == "stub"]),
-                            "grounds": len([p for p in pins if p["is_ground"]]),
-                            "unclassified": [p["name"] for p in pins
-                                             if p["role"] == "none" and not p["is_ground"]
-                                             and p["fate"] != "ignore"]},
-                "netlist": {"path": str(path), "sha": jsonio.sha_file(path, 12),
-                            "bytes": path.stat().st_size}}
+        ent = pr.scanned()
+        return _pins_payload(ent, pr.pins(ent.netlist()))
 
     def netlist_info(self, project: str) -> dict:
         """The New screen's Netlist row, readable even when the pins are not: where the file
@@ -1828,22 +2084,20 @@ class Api:
                 src["on_disk"] = "missing"
             else:
                 try:
-                    data = sp.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
-                    same = jsonio.sha_bytes(data.encode("utf-8"), 12) == src.get("sha")
+                    same = _source_sha(sp) == src.get("sha")
                     src["on_disk"] = "same" if same else "changed"
                 except OSError:
                     src["on_disk"] = "missing"
         cfg = pr.config_or_none()
-        try:
-            path = pr.netlist_path()
-        except PmuError:
-            path = None
         copy, cands = None, []
-        if path is not None:
-            copy = {"path": str(path), "sha": jsonio.sha_file(path, 12),
-                    "bytes": path.stat().st_size}
+        try:
+            ent = pr.scanned()
+        except PmuError:
+            ent = None
+        if ent is not None:
+            copy = {"path": str(ent.path), "sha": ent.sha, "bytes": ent.bytes}
             try:
-                cands = pmu_candidates(pr.netlist())
+                cands = ent.candidates()
             except PmuError:
                 cands = []
         # the last load the scan refused (staged, never the working copy), with its error
@@ -1912,7 +2166,8 @@ class Api:
         meta.update(sha=jsonio.sha_bytes(data, 12), bytes=len(data), loaded_at=_now())
 
         def work(job):
-            out = self._adopt_netlist(pr, new_text, meta, pmu_inst, job.say)
+            with _project_lock(pr):
+                out = self._adopt_netlist(pr, new_text, meta, pmu_inst, job.say)
             job.say("done", 1.0)
             return out
 
@@ -1942,12 +2197,12 @@ class Api:
         nl.origin = meta["path"]
         if not meta["path"]:
             nl.label = f"{meta['name']} (dropped in the browser)"
+        # scanned once, here: when it is adopted, this scan becomes the working copy's
+        ent = _Scanned(target, meta["path"], nl, meta["sha"], meta["bytes"], None)
         try:
-            inst = pmu_inst or (cfg.pmu_inst if cfg is not None else guess_pmu_inst(nl))
-            if nl.find_instance(inst) is None:
-                raise _inst_gone(nl, inst)
+            inst = pmu_inst or (cfg.pmu_inst if cfg is not None else ent.guess())
             say(f"resolving the pins of {inst}", 0.5)
-            table = nl.scan(inst, ports=None)
+            table = ent.table(inst)
         except PmuError as exc:
             pr.stage_netlist_attempt(dict(meta, pmu_inst=pmu_inst), new_text, exc)
             raise
@@ -1962,6 +2217,7 @@ class Api:
         if not unchanged:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(new_text, encoding="utf-8", newline="\n")
+            _scan_adopt(pr.dir, ent)
         if cfg is None:
             pr.save_config(_seed_config(project, target, inst, table), "seeded from the netlist")
             changes = {"first": True, "unchanged": False, "pmu_inst": inst,
@@ -1988,6 +2244,7 @@ class Api:
         out["changes"] = changes
         return out
 
+    @_locked
     def set_instance(self, project: str, body: dict) -> dict:
         """The PMU instance picker: re-scan with another instance.
 
@@ -2015,10 +2272,9 @@ class Api:
             meta["loaded_at"] = _now()
             out = self._adopt_netlist(pr, staged, meta, inst)
             return {"pmu_inst": inst, "changes": out["changes"], "pins": self.pins(project)}
-        nl = pr.netlist()
-        if nl.find_instance(inst) is None:
-            raise _inst_gone(nl, inst)
-        table = nl.scan(inst, ports=None)
+        # The instance is part of the scan cache's key: the other instance's scan is its own,
+        # and switching back is a hit, not a second scan.
+        table = pr.scanned().table(inst)
         cfg = pr.config_or_none()
         if cfg is None:
             new_cfg = _seed_config(project, pr.netlist_path(), inst, table)
@@ -2043,21 +2299,27 @@ class Api:
             _PLAN_CACHE.pop(project, None)
         return {"pmu_inst": inst, "changes": changes, "pins": self.pins(project)}
 
+    @_locked
     def set_pin(self, project: str, pin: str, body: dict) -> dict:
         """The Model column and the right-click 'set role'.
 
         `fate` writes the ports map of the config (undoable). `role` is different: a role comes
         from the netlist, so assigning one WRITES the convention source into the netlist -- the
         netlist stays the single source of truth for roles.
+
+        The answer carries everything the New screen redraws from -- the pin table and its
+        summary, the config, what Ctrl-Z now undoes -- so the page never re-asks for them. A fate
+        change is stamped onto the cached scan: the deck is not read again.
         """
         pr = Project(project, self.root)
         cfg = pr.config()
         changed = []
         role = body.get("role")
+        fate = body.get("fate")
         if role:
             path = pr.netlist_path()
-            nl = pr.netlist()
-            table = nl.scan(cfg.pmu_inst, ports=dict(cfg.ports))
+            ent = pr.scanned()
+            table = ent.table(cfg.pmu_inst)
             if pin not in table.pins:
                 raise _err(f"{pin!r} is not a pin of {cfg.pmu_inst}.",
                            "Roles are assigned to pins of the PMU instance named in the config.",
@@ -2065,19 +2327,21 @@ class Api:
             dc = body.get("dc")
             if dc is None:
                 dc = 0.0 if role in ("rail", "bias") else 1.0
+            nl = ent.netlist()
             name = nl.insert_role_source(table.pins[pin], str(role), dc=float(dc))
             nl.write(path)
+            pr.forget_scans()                   # the deck changed: its scan is re-read below
             with _CACHE_LOCK:
                 _PLAN_CACHE.pop(project, None)
             changed.append(f"role {role} (wrote {name} into the netlist)")
-        fate = body.get("fate")
         if fate:
-            ports = dict(cfg.ports)
-            ports[pin] = str(fate)
-            cfg.ports = ports
-            if str(fate) != "model":
-                cfg.my_load = {k: v for k, v in cfg.my_load.items() if k != pin}
-            cfg.validate()
+            table = pr.scanned().table(cfg.pmu_inst) if not role else None
+            if table is not None and pin not in table.pins:
+                raise _err(f"{pin!r} is not a pin of {cfg.pmu_inst}.",
+                           "The Model column lists the pins of the PMU instance named in the "
+                           "config.", [f"Pick one of: {', '.join(sorted(table.pins))}"],
+                           f"PUT /api/p/{project}/pins/{pin}")
+            _set_fates(cfg, {pin: str(fate)}, table)
             pr.save_config(cfg, f"{pin} -> {fate}")
             changed.append(f"fate {fate}")
         if not changed:
@@ -2089,7 +2353,66 @@ class Api:
         st = pr.state()
         st.note(f"pin {pin}: {', '.join(changed)}", "new")
         st.save()
-        return {"pin": pin, "changed": changed, "pins": self.pins(project)}
+        return dict(self._after_pins(pr, st), pin=pin, changed=changed)
+
+    @_locked
+    def set_pins(self, project: str, body: dict) -> dict:
+        """Several Model answers at once -- "model all rails", "all biases", "none" -- as ONE
+        config change: one history entry, so one Ctrl-Z puts every one of them back.
+
+        `{"fates": {"<pin>": "model" | "stub" | "ignore", ...}, "note": "..."}`. Every pin must
+        be a pin of the PMU instance; nothing is written unless all of them are.
+        """
+        where = f"PUT /api/p/{project}/pins"
+        if self.demo:
+            raise _err("--demo cannot change the Model column.",
+                       "Demo mode serves a fixed synthetic PMU and never touches $PMUKIT_DATA.",
+                       ["Restart without --demo to work on real projects"], where)
+        fates = body.get("fates")
+        if not isinstance(fates, dict) or not fates:
+            raise _err("no pins were given.",
+                       "A bulk Model change sends {\"fates\": {\"<pin>\": \"model\" | \"stub\" | "
+                       "\"ignore\"}} with at least one pin.",
+                       ["Use the model all rails / all biases / none buttons on the New screen"],
+                       where)
+        pr = Project(project, self.root)
+        cfg = pr.config()
+        table = pr.scanned().table(cfg.pmu_inst)
+        bad = [p for p in fates if p not in table.pins]
+        if bad:
+            raise _err(f"{', '.join(map(repr, bad[:5]))} "
+                       f"{'is not a pin' if len(bad) == 1 else 'are not pins'} of {cfg.pmu_inst}.",
+                       "The Model column lists the pins of the PMU instance named in the config.",
+                       [f"Pick from: {', '.join(sorted(table.pins)[:12])}"
+                        + (" ..." if len(table.pins) > 12 else "")], where)
+        want = {str(p): str(f) for p, f in fates.items()}
+        diff = {p: f for p, f in want.items() if cfg.ports.get(p) != f}
+        st = pr.state()
+        if diff:
+            _set_fates(cfg, diff, table)
+            counts: dict[str, int] = {}
+            for f in diff.values():
+                counts[f] = counts.get(f, 0) + 1
+            note = str(body.get("note") or "") or ", ".join(
+                f"{n} pin(s) -> {f}" for f, n in sorted(counts.items()))
+            pr.save_config(cfg, note)
+            st = pr.state()
+            st.note(f"Model column: {note}", "new")
+            st.save()
+        return dict(self._after_pins(pr, st), changed=sorted(diff))
+
+    def _after_pins(self, pr: "Project", st) -> dict:
+        """What a pin change answers with: the new table (from the cached scan), the config the
+        three questions redraw from, and what one Ctrl-Z now undoes."""
+        cfg = pr.config_or_none()
+        ent = pr.scanned()
+        return {"pins": _pins_payload(ent, pr.pins(ent.netlist())),
+                "config": {"exists": cfg is not None,
+                           "config": cfg.to_dict() if cfg is not None else None,
+                           "sha": cfg.sha() if cfg is not None else "",
+                           "answers": st.answers, "undoable": st.undoable(),
+                           "history": st.history().entries()[-10:]},
+                "undoable": st.undoable()}
 
     def get_config(self, project: str) -> dict:
         if self.demo:
@@ -2104,6 +2427,7 @@ class Api:
                 "answers": st.answers, "undoable": st.undoable(),
                 "history": st.history().entries()[-10:]}
 
+    @_locked
     def put_config(self, project: str, body: dict) -> dict:
         from .config import ProjectConfig
         pr = Project(project, self.root).ensure()
@@ -2129,6 +2453,7 @@ class Api:
         d = pr.derived()
         return {"derived": d.to_dict(), "sha": d.sha()}
 
+    @_locked
     def undo_config(self, project: str) -> dict:
         pr = Project(project, self.root)
         st = pr.state()
@@ -2261,6 +2586,7 @@ class Api:
                            for s in plan.states],
                 "notes": plan.notes}
 
+    @_locked
     def set_plan_groups(self, project: str, body: dict) -> dict:
         pr = Project(project, self.root)
         ticks = body.get("ticks")
@@ -3268,6 +3594,26 @@ class Api:
 
 
 # ============================================================================== small helpers
+def _set_fates(cfg, fates: dict, table=None) -> None:
+    """Write Model answers into `cfg` (validated; not saved). A pin that stops being modeled
+    takes its load with it; a rail ticked back to Model gets its load back the way the first
+    read seeded it (the dc of its IL_ source), so its row in question 2 does not go missing."""
+    from .config import MyLoad
+    ports, loads = dict(cfg.ports), dict(cfg.my_load)
+    for pin, fate in fates.items():
+        ports[pin] = str(fate)
+        if str(fate) != "model":
+            loads.pop(pin, None)
+            continue
+        p = table.pins.get(pin) if table is not None else None
+        if p is not None and p.role == "rail" and p.dc and pin not in loads:
+            on = abs(float(p.dc))
+            loads[pin] = MyLoad(on_a=on, off_a=max(on / 250.0, 1e-9), switches=True)
+    cfg.ports = ports
+    cfg.my_load = loads
+    cfg.validate()
+
+
 def _seed_config(project: str, netlist: pathlib.Path, inst: str, table):
     """A first config straight from the netlist, so the New screen has something to show.
 
@@ -4365,6 +4711,11 @@ def _r_pin(api, h, a, q, b):
     return api.set_pin(a["project"], a["pin"], b)
 
 
+@route("PUT", r"/api/p/<project>/pins")
+def _r_pins_bulk(api, h, a, q, b):
+    return api.set_pins(a["project"], b)
+
+
 @route("GET", r"/api/p/<project>/config")
 def _r_get_config(api, h, a, q, b):
     return api.get_config(a["project"])
@@ -4573,16 +4924,18 @@ def _r_state(api, h, a, q, b):
 def _r_put_state(api, h, a, q, b):
     if api.demo:
         return {"ok": True, "demo": True}
-    st = Project(a["project"], api.root).state()
-    if b.get("screen"):
-        st.go(str(b["screen"]))
-    if isinstance(b.get("answers"), dict):
-        st.answers = b["answers"]
-    if b.get("last_job"):
-        st.last_job = str(b["last_job"])
-    if b.get("note"):
-        st.note(str(b["note"]))
-    st.save()
+    pr = Project(a["project"], api.root)
+    with _project_lock(pr):              # a screen change must not drop a pin's undo entry
+        st = pr.state()
+        if b.get("screen"):
+            st.go(str(b["screen"]))
+        if isinstance(b.get("answers"), dict):
+            st.answers = b["answers"]
+        if b.get("last_job"):
+            st.last_job = str(b["last_job"])
+        if b.get("note"):
+            st.note(str(b["note"]))
+        st.save()
     return {"project": st.project, "screen": st.screen}
 
 

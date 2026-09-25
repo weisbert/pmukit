@@ -120,6 +120,7 @@ ROUTE_TABLE = [
     ("POST", "/api/p/demo_pmu/import", {"dirs": []}),
     ("GET", "/api/p/demo_pmu/pins", None),
     ("PUT", "/api/p/demo_pmu/pins/VDD0P8_A", {"fate": "model"}),
+    ("PUT", "/api/p/demo_pmu/pins", {"fates": {"VDD0P8_A": "model"}}),
     ("GET", "/api/p/demo_pmu/config", None),
     ("PUT", "/api/p/demo_pmu/config", {"config": {}}),
     ("GET", "/api/p/demo_pmu/config/derived", None),

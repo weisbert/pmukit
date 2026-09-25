@@ -170,6 +170,8 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--acc);margin:0}
 .empty .t{font-weight:600;color:var(--ink)}
 .skel{height:11px;border-radius:3px;background:linear-gradient(90deg,var(--line2),var(--soft),var(--line2));background-size:200% 100%;animation:sk 1.2s infinite}
 @keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.t tr.saving>td{opacity:.72}
+.upd{font-style:italic}
 .q{display:inline-flex;width:14px;height:14px;border-radius:50%;border:1px solid var(--line3);color:var(--ink3);font-size:10px;align-items:center;justify-content:center;margin-left:6px;cursor:help;vertical-align:middle}
 .prog{display:flex;align-items:center;gap:10px;padding:7px 13px;border:1px solid var(--acc-line);background:var(--acc-bg);border-radius:4px;font-size:12.5px;margin-bottom:12px}
 .prog .bar{flex:1;max-width:260px}
@@ -208,7 +210,8 @@ var S = {
   project: "",
   demo: false,
   data: {},          /* cache key -> payload                                */
-  loading: {},       /* cache key -> true while in flight                   */
+  loading: {},       /* cache key -> request token while in flight          */
+  stale: {},         /* cache key -> true: shown as it is, asked again       */
   slow: {},          /* cache key -> true after 2 s (the "what is happening")*/
   failed: {},        /* cache key -> {screen, status, error}: not asked again */
   errs: {},          /* screen   -> {status, error, retry}                  */
@@ -410,30 +413,45 @@ function api(path, opts){
    would otherwise re-request it (hundreds a second) and rebuild the page under the cursor.
    It is asked again only when the user acts: Try again, going to a screen, a reload, or a
    forget() by whatever changed the answer (a netlist load, a saved config). */
+/* Stale-while-revalidate: data an action made out of date is refresh()ed, not forgotten -- the
+   screen keeps drawing what it has (an "updating" mark at most) and swaps in the answer when it
+   lands. Only data that was never there, or that belongs to something else now (another
+   project), is a skeleton. Each request carries a token in S.loading[key]: an answer to a
+   request that a refresh() or forget() superseded is dropped, never drawn over a newer one. */
+var REQN = 0;
 function need(key, path, screen){
-  if (S.data[key] !== undefined || S.loading[key]) return S.data[key];
+  var have = S.data[key] !== undefined;
+  if (S.loading[key] || (have && !S.stale[key])) return S.data[key];
   if (S.failed[key]){
     if (!S.errs[screen]) S.errs[screen] = failErr(key, screen);   /* still unresolved: say so */
-    return undefined;
+    return S.data[key];
   }
-  S.loading[key] = true;
-  var timer = setTimeout(function(){ S.slow[key] = true; render(); }, 2000);
+  var tok = S.loading[key] = ++REQN;
+  var timer = setTimeout(function(){ if (S.loading[key] === tok){ S.slow[key] = true; render(); } }, 2000);
   api(path).then(function(d){
     clearTimeout(timer);
+    if (S.loading[key] !== tok) return;             /* superseded while in flight */
     S.loading[key] = false; S.slow[key] = false; S.data[key] = d;
-    delete S.failed[key];
+    delete S.stale[key]; delete S.failed[key];
     if (S.errs[screen] && S.errs[screen].key === key) delete S.errs[screen];
     render();
     scheduleCli();      /* the strip is built from this data (a reload has none until now) */
   }, function(e){
     clearTimeout(timer);
-    S.loading[key] = false; S.slow[key] = false;
+    if (S.loading[key] !== tok) return;
+    S.loading[key] = false; S.slow[key] = false; delete S.stale[key];
     S.failed[key] = { screen: screen, status: e.status, error: e.error };
     /* an error an action put up (a refused netlist, say) stays: it names what was tried */
     if (!S.errs[screen] || S.errs[screen].key) S.errs[screen] = failErr(key, screen);
     render();
   });
-  return undefined;
+  return S.data[key];
+}
+/* The mark a panel shows while data it is drawing is being asked again ("" otherwise). */
+function updating(key, what){
+  var busy = Object.keys(S.loading).some(function(k){
+    return k.indexOf(key) === 0 && S.loading[k] && S.data[k] !== undefined; });
+  return busy ? '<span class="hint upd" role="status">' + esc(what || "updating") + "&hellip;</span>" : "";
 }
 function failErr(key, screen){
   var f = S.failed[key];
@@ -446,8 +464,18 @@ function unfail(screen){
     if (!screen || S.failed[k].screen === screen) delete S.failed[k];
   });
 }
+/* Forget: the data is gone and the next render draws a skeleton until it is back. For data
+   that is someone else's now (another project, a stamp no longer selected). */
 function forget(prefix){
   Object.keys(S.data).forEach(function(k){ if (k.indexOf(prefix) === 0) delete S.data[k]; });
+  Object.keys(S.loading).forEach(function(k){ if (k.indexOf(prefix) === 0) delete S.loading[k]; });
+  Object.keys(S.failed).forEach(function(k){ if (k.indexOf(prefix) === 0) delete S.failed[k]; });
+  Object.keys(S.stale).forEach(function(k){ if (k.indexOf(prefix) === 0) delete S.stale[k]; });
+}
+/* Refresh: an action changed what this data says. The screen keeps showing it and asks again;
+   a request already in flight was asked before the change, so it is superseded. */
+function refresh(prefix){
+  Object.keys(S.data).forEach(function(k){ if (k.indexOf(prefix) === 0) S.stale[k] = true; });
   Object.keys(S.loading).forEach(function(k){ if (k.indexOf(prefix) === 0) delete S.loading[k]; });
   Object.keys(S.failed).forEach(function(k){ if (k.indexOf(prefix) === 0) delete S.failed[k]; });
 }
@@ -775,7 +803,7 @@ function restoreCell(cell, block){
 }
 function openProject(name, screen){
   S.project = name;
-  S.data = {}; S.loading = {}; S.failed = {}; S.errs = {}; S.sel = {}; S.progress = {};
+  S.data = {}; S.loading = {}; S.stale = {}; S.failed = {}; S.errs = {}; S.sel = {}; S.progress = {};
   go(screen || "new");
   loadProgress();
 }
@@ -1126,7 +1154,7 @@ SCREENS.home = {
     var pd = need("projects", "/api/projects", "home");
     var md = need("machine", "/api/machine", "home");
     var left, right;
-    if (S.loading["projects"] || pd === undefined){
+    if (pd === undefined){
       left = panel("Projects", "", loadingBlock("projects", "listing the directories under PMUKIT_DATA"));
     } else if (!pd.projects.length){
       left = panel("Projects", "", emptyBlock("No projects yet",
@@ -1158,7 +1186,7 @@ SCREENS.home = {
         + "<tbody>" + rows + "</tbody></table>", { flush: true });
     }
     var mach;
-    if (S.loading["machine"] || md === undefined){
+    if (md === undefined){
       mach = panel("This machine", "", loadingBlock("machine",
         "probing the engine, the queue, the PDK and the licence (each with its own timeout)"),
         { style: "flex:none" });
@@ -1179,10 +1207,11 @@ SCREENS.home = {
         return '<span class="k">' + esc(pr.name) + "</span><span>" + badge + " " + why + more
              + ' <span class="hint">' + pr.ms + " ms</span></span>";
       }).join("");
-      var reid = regAction(function(){ forget("machine"); render(); });
+      var reid = regAction(function(){ refresh("machine"); render(); });
       mach = panel("This machine",
-        (md.ready ? '<span class="badge b-ok">' + ICON.ok + " ready</span>"
-                  : '<span class="badge b-warn">' + ICON.warn + " partial</span>"),
+        updating("machine", "probing") + " "
+        + (md.ready ? '<span class="badge b-ok">' + ICON.ok + " ready</span>"
+                    : '<span class="badge b-warn">' + ICON.warn + " partial</span>"),
         /* a 380px column: long paths and probe details wrap instead of scrolling sideways */
         '<div class="kv wrap">' + probes
         + '<span class="k">data</span><span class="mono">' + esc(md.data_root) + "</span>"
@@ -1290,17 +1319,22 @@ SCREENS.new = {
       left = panel("Netlist", "one file, exported at the nominal corner",
         (src && (src.source || src.attempt) ? '<div class="kv" style="margin-bottom:12px">' + netlistSourceKv(src) + "</div>" : "")
         + dropZone(src), { style:"flex:1" });
-    } else if (S.loading["pins"] || pins === undefined){
+    } else if (pins === undefined){
       left = panel("Netlist", "one file, exported at the nominal corner",
         loadingBlock("pins", "parsing the netlist and resolving the pins"), { style:"flex:1" });
     } else {
-      left = panel("Netlist", "one file, exported at the nominal corner",
+      /* data being asked again is drawn as it is, with a mark -- never a skeleton */
+      var upd = S.sel.roleBusy
+        ? '<span class="hint upd" role="status">writing the role and re-reading the pins&hellip;</span>'
+        : updating("pins") || updating("netlistsrc", "checking the netlist on disk");
+      left = panel("Netlist", "one file, exported at the nominal corner" + (upd ? " &middot; " + upd : ""),
         netlistBody(pins, src), { style:"flex:1" });
     }
     var right = (cfgd === undefined)
       ? panel("Three things only you know", "everything else is derived",
               loadingBlock("config", "reading the project configuration"))
-      : panel("Three things only you know", "everything else is derived", threeQuestions(cfgd, pins));
+      : panel("Three things only you know", "everything else is derived" + (updating("config")
+                ? " &middot; " + updating("config") : ""), threeQuestions(cfgd, pins));
     return '<div class="col" style="flex:1 1 640px">' + errBlock("new", errInstPicker()) + jobBlock() + left + "</div>"
          + '<div class="col grow">' + right + "</div>";
   },
@@ -1453,10 +1487,13 @@ function errInstPicker(){
 }
 function setInstance(name){
   api("/api/p/" + P() + "/netlist/instance", { method:"PUT", body:{ pmu_inst: name } })
-    .then(function(){
+    .then(function(d){
       delete S.errs.new; S.job = null;
-      forget("pins"); forget("config"); forget("derived"); forget("plan"); forget("consequences");
-      forget("netlistsrc");
+      /* the answer carries the new instance's table; the rest is asked again behind it */
+      if (d && d.pins && d.pins.pins){ S.data["pins"] = d.pins; delete S.stale["pins"]; delete S.loading["pins"]; delete S.failed["pins"]; }
+      else refresh("pins");
+      refresh("config"); refresh("derived"); refresh("netlistsrc");
+      forget("plan"); forget("consequences");
       render(); refreshCli();
     }, showErr);
 }
@@ -1495,15 +1532,24 @@ function roleAskBlock(){
 }
 function netlistBody(pins, info){
   var nl = pins.netlist || {};
-  var rows = (pins.pins || []).map(function(p){
+  var all = pins.pins || [];
+  /* A role-less pin the config ignores (no IL_/VB_/VS_/VEN_ source) is most of a real PMU's
+     pins and none of its decisions: folded away by default, one click to show. A role-less pin
+     that is NOT ignored still wants an answer, so it stays in view. */
+  var folded = function(p){ return p.role === "none" && !p.is_ground && p.fate === "ignore"; };
+  var nFolded = all.filter(folded).length;
+  var showAll = !!S.sel.showUnc;
+  var busy = S.sel.pinBusy || {};
+  var rows = all.filter(function(p){ return showAll || !folded(p); }).map(function(p){
     var ctx = regCtx({ row: p });
     var canModel = p.role === "rail" || p.role === "bias";
     var tid = regAction(function(){ setPin(p.name, { fate: p.fate === "model" ? "stub" : "model" }); });
     var fateCls = p.fate === "model" ? "b-acc" : p.fate === "stub" ? "b-ink" : "b-mute";
     var fateTxt = p.fate === "stub"
       ? "stub &middot; ideal " + (p.role === "rail" ? "V" : "I") : esc(p.fate);
-    return '<tr class="rc"' + rc("pin", "pin " + p.name, ctx) + ">"
-      + "<td>" + (canModel ? '<input type="checkbox" data-act="' + tid + '"'
+    var saving = busy[p.name] || S.sel.roleBusy === p.name;
+    return '<tr class="rc' + (saving ? " saving" : "") + '"' + rc("pin", "pin " + p.name, ctx) + ">"
+      + "<td>" + (canModel ? '<input type="checkbox" data-act="' + tid + '" aria-label="Model ' + esc(p.name) + '"'
           + (p.fate === "model" ? " checked" : "") + ">" : "") + "</td>"
       + '<td class="mono">' + esc(p.name) + "</td>"
       + '<td class="mono" style="color:var(--ink2)">' + esc(p.net) + "</td>"
@@ -1512,8 +1558,17 @@ function netlistBody(pins, info){
       + '<td class="mono">' + esc(p.src || "-") + "</td>"
       + "<td>" + (p.dc === null || p.dc === undefined ? "-"
           : esc(eng(p.dc, p.role === "rail" ? "A" : "V"))) + "</td>"
-      + '<td><span class="badge ' + fateCls + '">' + fateTxt + "</span></td></tr>";
+      + '<td><span class="badge ' + fateCls + '">' + fateTxt + "</span>"
+      + (saving ? ' <span class="hint">saving&hellip;</span>' : "") + "</td></tr>";
   }).join("");
+  if (nFolded){
+    var fold = regAction(function(){ S.sel.showUnc = !S.sel.showUnc; render(); });
+    rows += '<tr><td></td><td colspan="6"><button class="btn sm" data-act="' + fold + '" aria-expanded="'
+      + (showAll ? "true" : "false") + '">' + (showAll ? "Hide the " + nFolded + " unclassified pins"
+         : "Show " + nFolded + " unclassified pins") + "</button>"
+      + ' <span class="hint">no IL_ / VB_ / VS_ / VEN_ source, left exactly as wired (ignore)'
+      + "</span></td></tr>";
+  }
   var unc = (pins.summary || {}).unclassified || [];
   var srcInfo = info || { source: null, copy: { path: nl.path, bytes: nl.bytes, sha: nl.sha } };
   return '<div class="kv" style="margin-bottom:12px">'
@@ -1530,6 +1585,8 @@ function netlistBody(pins, info){
     + " found &middot; stripped, pmukit writes its own</span></div>"
     + (S.sel.loadAnother ? '<div style="margin-bottom:12px">' + dropZone(srcInfo) + "</div>" : "")
     + roleAskBlock()
+    + pinErrBlock()
+    + pinToolbar(all)
     + '<table class="t"><thead><tr><th style="width:26px" title="Model this port? Unticked rails and biases become stubs.">Model</th>'
     + "<th>Pin</th><th>Net</th><th>Role</th><th>From source</th><th>DC</th><th>Fate</th></tr></thead>"
     + "<tbody>" + rows + "</tbody></table>"
@@ -1543,6 +1600,30 @@ function netlistBody(pins, info){
     + " <b>You decide which ports get modeled.</b> Ticked = characterized and fitted. Unticked "
     + "rail or bias = <b>stub</b>: the pin stays on the symbol, emitted as an ideal source at its "
     + "DC value, zero runs.</div>";
+}
+/* Above the pin table: how many pins of each role, and the Model column in one click each --
+   every rail, every bias, or none of them (each one request, one Ctrl Z). */
+function pinToolbar(rows){
+  var s = pinSummary(rows);
+  var order = [["rail", "rail"], ["bias", "bias"], ["supply", "supply"], ["en", "enable"],
+               ["ground", "ground"], ["none", "unclassified"]];
+  var counts = order.filter(function(o){ return s.roles[o[0]]; }).map(function(o){
+    return '<span class="badge ' + (o[0] === "none" ? "b-warn" : o[0] === "ground" ? "b-mute" : "b-acc")
+      + '" title="pins whose role is ' + o[1] + '">' + s.roles[o[0]] + " " + o[1] + "</span>";
+  }).join(" ");
+  var nRail = s.roles.rail || 0, nBias = s.roles.bias || 0;
+  var btn = function(role, label, title, off){
+    var id = regAction(function(){ modelAll(role); });
+    return '<button class="btn sm" data-act="' + id + '" title="' + esc(title) + '"'
+      + (off ? " disabled" : "") + ">" + label + "</button>";
+  };
+  return '<div class="rowflex" style="margin-bottom:8px;justify-content:space-between">'
+    + '<span class="rowflex" aria-label="pins per role">' + counts + "</span>"
+    + '<span class="rowflex"><span class="hint">Model</span>'
+    + btn("rail", "all rails", "tick Model on every rail pin (" + nRail + ")", !nRail)
+    + btn("bias", "all biases", "tick Model on every bias pin (" + nBias + ")", !nBias)
+    + btn("none", "none", "untick every rail and bias: each becomes a stub", !(nRail + nBias))
+    + "</span></div>";
 }
 function vsetParamPicker(cfg, pins){
   // The name is the designer's, not pmukit's: offer what the netlist declares, keep a name the
@@ -1708,17 +1789,172 @@ function loadNetlist(body){
              if (j && j.status === "done"){ S.sel.loadAnother = false; settled("new"); }
              /* Try again = read it again: the bench was fixed and exported to the same place */
              if (j && j.status === "failed" && S.errs.new) S.errs.new.retry = function(){ loadNetlist(body); };
-             forget("pins"); forget("config"); forget("derived"); forget("plan"); forget("consequences");
-             forget("netlistsrc");
+             /* the table on screen stays until the new one is in: a load's answer IS the new
+                table; a refused load changed nothing, and what is shown is still the copy */
+             var res = j && j.status === "done" && j.result;
+             if (res && res.pins && res.pmu_inst){
+               S.data["pins"] = res; delete S.stale["pins"]; delete S.loading["pins"]; delete S.failed["pins"];
+             } else refresh("pins");
+             refresh("config"); refresh("derived"); refresh("netlistsrc");
+             forget("plan"); forget("consequences");
              render();
            });
 }
+/* A pin change. A Model answer (fate) is optimistic -- see setFates. A role is written into the
+   netlist and re-scanned on the server: the table stays on screen, marked updating, until the
+   answer brings the new one. */
 function setPin(pin, body){
+  if (body && body.fate && !body.role){ var f = {}; f[pin] = body.fate; return setFates(f); }
+  S.sel.roleBusy = pin; render();
   api("/api/p/" + P() + "/pins/" + encodeURIComponent(pin), { method:"PUT", body: body })
-    .then(function(){
+    .then(function(d){
+      S.sel.roleBusy = null;
       settled(S.screen);
-      forget("pins"); forget("config"); forget("derived"); forget("plan"); forget("netlistsrc"); render();
-    }, showErr);
+      pinsAnswer(d);
+      refresh("netlistsrc"); forget("plan"); forget("consequences");
+      render(); refreshCli();
+    }, function(e){ S.sel.roleBusy = null; showErr(e); });
+}
+/* What a PUT on the pins answers with -- the table, the config, what Ctrl Z undoes -- replaces
+   the cached copies; an older server that answered without them is asked again (refresh). */
+function pinsAnswer(d){
+  var put = function(key, val){
+    if (val){ S.data[key] = val; delete S.stale[key]; delete S.loading[key]; delete S.failed[key]; }
+    else refresh(key);
+  };
+  put("pins", d && d.pins && d.pins.pins ? d.pins : null);
+  put("config", d && d.config && d.config.config ? d.config : null);
+  if (d && d.undoable !== undefined) S.undoable = d.undoable;
+  refresh("derived");
+}
+/* The footer's counts, from the rows as they are on screen (an optimistic tick moves them at
+   once): the same shape as the server's summary. */
+function pinSummary(rows){
+  var s = { rails: 0, biases: 0, stubs: 0, grounds: 0, roles: {}, unclassified: [] };
+  (rows || []).forEach(function(p){
+    if (p.role === "rail" && p.fate === "model") s.rails++;
+    if (p.role === "bias" && p.fate === "model") s.biases++;
+    if (p.fate === "stub") s.stubs++;
+    if (p.is_ground) s.grounds++;
+    var k = p.is_ground ? "ground" : p.role;
+    s.roles[k] = (s.roles[k] || 0) + 1;
+    if (p.role === "none" && !p.is_ground && p.fate !== "ignore") s.unclassified.push(p.name);
+  });
+  return s;
+}
+/* Model answers, optimistic: the ticks flip on this frame, the footer and the command echo
+   follow, and the PUT goes out (ONE request for a bulk change, so one Ctrl Z undoes it). The
+   answer carries the table and the config and replaces them; a refusal flips the ticks back and
+   says why next to the table. Requests are sent one after another, in click order: the last
+   answer is the server's view of every click. */
+var PIN_CHAIN = null, PIN_SEQ = 0;
+function setFates(fates, note){
+  var pd = S.data["pins"];
+  var names = Object.keys(fates || {});
+  if (!names.length) return;
+  var before = {};
+  if (pd && pd.pins){
+    pd.pins.forEach(function(p){
+      if (fates[p.name] !== undefined){ before[p.name] = p.fate; p.fate = fates[p.name]; }
+    });
+    pd.summary = pinSummary(pd.pins);
+  }
+  var cfgd = S.data["config"], cfgBefore = null;
+  if (cfgd && cfgd.config){
+    cfgBefore = JSON.parse(JSON.stringify(cfgd.config));
+    cfgd.config.ports = cfgd.config.ports || {};
+    names.forEach(function(n){
+      cfgd.config.ports[n] = fates[n];
+      if (fates[n] !== "model" && cfgd.config.my_load) delete cfgd.config.my_load[n];
+    });
+  }
+  /* a GET already in flight was asked before this click: its answer must not undo the flip */
+  ["pins", "config"].forEach(function(k){
+    if (S.data[k] !== undefined){ delete S.loading[k]; delete S.stale[k]; } });
+  S.sel.pinBusy = S.sel.pinBusy || {};
+  names.forEach(function(n){ S.sel.pinBusy[n] = (S.sel.pinBusy[n] || 0) + 1; });
+  S.sel.pinErr = null;
+  render(); refreshCli();
+  var seq = ++PIN_SEQ;
+  var send = function(){
+    return names.length === 1 && !note
+      ? api("/api/p/" + P() + "/pins/" + encodeURIComponent(names[0]),
+            { method:"PUT", body:{ fate: fates[names[0]] } })
+      : api("/api/p/" + P() + "/pins", { method:"PUT", body:{ fates: fates, note: note || "" } });
+  };
+  var done = function(){
+    names.forEach(function(n){ if (S.sel.pinBusy && !--S.sel.pinBusy[n]) delete S.sel.pinBusy[n]; });
+  };
+  var p = PIN_CHAIN ? PIN_CHAIN.then(send, send) : send();
+  PIN_CHAIN = p.then(function(){}, function(){});
+  p.then(function(d){
+    done();
+    settled("new");
+    /* a later click is already on screen: its own answer (the newest) redraws the table */
+    if (seq === PIN_SEQ) pinsAnswer(d);
+    else if (d && d.undoable !== undefined) S.undoable = d.undoable;
+    forget("plan"); forget("consequences");
+    render(); refreshCli();
+  }, function(e){
+    done();
+    var cur = S.data["pins"];
+    if (cur && cur.pins){
+      cur.pins.forEach(function(p){
+        if (before[p.name] !== undefined && p.fate === fates[p.name]) p.fate = before[p.name];
+      });
+      cur.summary = pinSummary(cur.pins);
+    }
+    var cfg2 = S.data["config"];
+    if (cfgBefore && cfg2 && cfg2.config){
+      names.forEach(function(n){
+        if ((cfg2.config.ports || {})[n] !== fates[n]) return;
+        if (cfgBefore.ports && cfgBefore.ports[n] !== undefined) cfg2.config.ports[n] = cfgBefore.ports[n];
+        else delete cfg2.config.ports[n];
+        if (cfgBefore.my_load && cfgBefore.my_load[n]){
+          cfg2.config.my_load = cfg2.config.my_load || {};
+          cfg2.config.my_load[n] = cfgBefore.my_load[n];
+        }
+      });
+    }
+    S.sel.pinErr = { pins: names, status: e.status, error: e.error || {} };
+    render(); refreshCli();
+  });
+  return p;
+}
+/* The bulk buttons: every rail (or bias) ticked, or none of them. */
+function modelAll(role){
+  var pd = S.data["pins"];
+  if (!pd || !pd.pins) return;
+  var fates = {}, n = 0;
+  pd.pins.forEach(function(p){
+    if (p.role !== "rail" && p.role !== "bias") return;
+    var want = role === "none" ? "stub" : p.role === role ? "model" : null;
+    if (want && p.fate !== want){ fates[p.name] = want; n++; }
+  });
+  if (!n){
+    S.toast = role === "none" ? "no rail or bias is ticked" : "every " + role + " is already ticked";
+    render(); setTimeout(function(){ S.toast = ""; render(); }, 1400);
+    return;
+  }
+  setFates(fates, role === "none" ? "model none: " + n + " rail/bias pin(s) -> stub"
+                                  : "model all " + role + "s: " + n + " pin(s) -> model");
+}
+/* A Model answer the server refused: the tick is back where it was, and this says why. */
+function pinErrBlock(){
+  var pe = S.sel.pinErr;
+  if (!pe) return "";
+  var er = pe.error || {};
+  var close = regAction(function(){ S.sel.pinErr = null; render(); });
+  return '<div class="err" role="alert" style="margin-bottom:10px"><div class="t">' + ICON.x + " "
+    + "Not saved: " + esc(pe.pins.slice(0, 6).join(", ") + (pe.pins.length > 6 ? " +" + (pe.pins.length - 6) : ""))
+    + " (the tick is back as it was)"
+    + (pe.status ? ' <span class="badge b-bad">' + pe.status + "</span>" : "") + "</div>"
+    + '<div class="row"><span class="k">What</span><span>' + esc(er.what || "the change was refused") + "</span></div>"
+    + '<div class="row"><span class="k">Why</span><span>' + esc(er.why || "") + "</span></div>"
+    + '<div class="row"><span class="k">Do</span><span>' + esc((er.do || []).join(" · ")) + "</span></div>"
+    + '<div class="row"><span class="k">Where</span><span class="mono">' + esc(er.where || "-") + "</span></div>"
+    + '<div class="rowflex" style="margin-top:6px"><button class="btn sm" data-act="' + close + '">Dismiss</button></div>'
+    + "</div>";
 }
 function askRole(pin, role){
   S.sel.roleAsk = { pin: pin.name, role: role };
@@ -1799,14 +2035,16 @@ function putConfig(cfg, note, typedKey, after){
       if (typedKey) dropTyped(typedKey);
       settled(S.screen);
       if (after) after(d);
-      forget("derived"); forget("plan"); forget("consequences");
+      refresh("derived"); forget("plan"); forget("consequences");
       render(); refreshCli();
     }, showErr);
 }
+/* Ctrl Z: whatever it restored is asked again BEHIND what is on screen (the New table, the Plan
+   groups), so the screen does not blank out while the old answer comes back. */
 function doUndo(){
   api("/api/p/" + P() + "/config/undo", { method:"POST", body:{} }).then(function(d){
     settled(S.screen);
-    forget("config"); forget("derived"); forget("plan"); forget("consequences"); forget("pins");
+    ["config", "derived", "plan", "consequences", "pins"].forEach(refresh);
     dropTyped("in:"); S.sel.measured = null;       /* the boxes show what was restored */
     S.undoable = d.undoable || "";
     S.toast = "undone: " + d.kind;
@@ -1880,7 +2118,9 @@ SCREENS.plan = {
         + '<td class="mono" style="font-size:11.5px">' + esc((g.observables || []).join(" ")) + "</td>"
         + '<td class="num">' + num(g.cpu_hours, 1) + "</td></tr>";
     }).join("");
-    var table = panel("What will run, and why", "click a row for the reason &middot; untick to see what you lose",
+    var pupd = updating("plan", "recomputing");
+    var table = panel("What will run, and why", "click a row for the reason &middot; untick to see what you lose"
+      + (pupd ? " &middot; " + pupd : ""),
       '<table class="t"><thead><tr><th style="width:26px"></th><th>Group</th><th>Analysis</th>'
       + '<th>Ports</th><th class="num">Runs</th><th class="num">Cached</th><th>Feeds</th>'
       + '<th class="num">CPU-h</th></tr></thead><tbody>' + rows + "</tbody></table>", { flush: true });
@@ -1896,6 +2136,9 @@ SCREENS.plan = {
     var n = (pl.cost || {}).runs || 0;
     var sid = regAction(function(){ doSubmit(); });
     var block = submitBlocker(S.data["site"]);
+    /* a plan on screen that is being recomputed (after a Ctrl Z) is not the one Submit sends */
+    if (!block && S.stale["plan"] && S.data["plan"]) block = "the plan is being recomputed";
+    if (!block && S.loading["plan"] && S.data["plan"]) block = "the plan is being recomputed";
     return '<span class="hint">Resume: runs already in the ledger are skipped. Nothing is '
          + "submitted until you press this.</span>"
          + '<div class="rowflex">' + runDestination() + '<button class="btn" title="Save '
@@ -2258,7 +2501,7 @@ function refreshRun(){
 }
 function runAction(id, action){
   api("/api/p/" + P() + "/runs/" + encodeURIComponent(id) + "/" + action, { method:"POST", body:{} })
-    .then(function(){ forget("ledger:"); forget("run:"); render(); refreshCli(); }, showErr);
+    .then(function(){ refresh("ledger:"); refresh("run:"); render(); refreshCli(); }, showErr);
 }
 function jobBusy(){ return !!(S.job && (S.job.status === "running" || S.job.status === "queued")); }
 function doFit(){
@@ -2759,7 +3002,7 @@ function curveCsv(c){
 }
 function doVerify(){
   startJob(api("/api/p/" + P() + "/verify", { method:"POST", body:{} }), "HB health check",
-    function(){ forget("model"); forget("cell:"); forget("curve:"); render(); });
+    function(){ refresh("model"); refresh("cell:"); refresh("curve:"); render(); });
 }
 /* Deliver: one at a time, never while a fit is running (the server refuses too). The page moves
    to Deliver as soon as the job starts, so its progress -- per corner -- is shown where the
@@ -3007,7 +3250,7 @@ function verifyWarn(d, dv){
   var vid = regAction(function(){
     if (jobBusy()) return;
     startJob(api("/api/p/" + P() + "/verify", { method:"POST", body:{} }), "HB health check",
-      function(){ forget("deliverables"); forget("model"); forget("cell:"); render(); });
+      function(){ refresh("deliverables"); refresh("model"); refresh("cell:"); render(); });
   });
   return '<div class="callout warn" style="flex:none">' + lines.join("<br>")
        + '<div class="rowflex" style="margin-top:8px"><button class="btn sm" data-act="' + vid + '"' + busyAttr()
@@ -3393,7 +3636,7 @@ function paletteCommands(){
   cmds.push({ label: "Undo the last configuration change", hint: "Ctrl Z", run: function(){ doUndo(); } });
   cmds.push({ label: "Copy the command echo", hint: "$", run: function(){ copy(S.cli); } });
   cmds.push({ label: "Reload everything from the server", hint: "cache", run: function(){
-    S.data = {}; S.loading = {}; S.failed = {}; render(); } });
+    S.data = {}; S.loading = {}; S.stale = {}; S.failed = {}; render(); } });
   if (S.project){
     cmds.push({ label: "Fit the model", hint: S.project, run: function(){ doFit(); } });
     cmds.push({ label: "Verify (HB health check)", hint: S.project, run: function(){ doVerify(); } });
@@ -3490,7 +3733,7 @@ document.addEventListener("drop", function(e){
 window.addEventListener("focus", function(){
   if (S.screen !== "new" || !S.project || S.demo || !S.data["netlistsrc"]) return;
   if (S.job && S.job.status === "running") return;
-  forget("netlistsrc"); render();
+  refresh("netlistsrc"); render();
 });
 
 /* ---------------------------------------------------------------- boot -- */
