@@ -382,7 +382,12 @@ def _iterate_axes(axes, analysis: str, derived: DerivedConfig,
 
 
 def _apply_corner(nl: Netlist, cfg: ProjectConfig, corner: str) -> list[str]:
-    """Rewrite the PDK include section(s) for one corner name. Returns any notes."""
+    """Rewrite the PDK include section(s) for one corner name. Returns any notes.
+
+    Only each file's process-corner line is rewritten (config.corner_include when the user
+    picked it, else `Netlist.corner_lines` reads it from the section names); the fixed
+    model-library lines of the same file stay as exported."""
+    nl.corner_choice = dict(getattr(cfg, "corner_include", None) or {})
     sections = cfg.corner_sections(corner)
     if isinstance(sections, dict):               # composite: each include file named explicitly
         for file_pattern, section in sections.items():

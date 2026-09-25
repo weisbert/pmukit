@@ -26,9 +26,14 @@ New here:
   * `include "<file>" section=<corner>` rewriting, which is how process corners are produced;
   * `parameters VSET=<n>` rewriting, which is how output codes are produced;
   * `options temp=<c>`, which is how temperature is set;
-  * split grounds read from the wiring: ground PINS are the PMU pins the testbench ties to `0`,
-    and each rail/bias is attached to the ground pin nearest to it in the subcircuit's device
+  * split grounds read from the wiring: a ground NET is `0`, the reference terminal of a
+    convention source (`VS_AVDD (AVDD AGND)`), or a net shorted to one; the PMU pins on a ground
+    net are its ground PINS -- unless the subcircuit shows a pin reaching only gates / logic,
+    which is a control input the bench ties low (passed through). Each rail/bias is attached to
+    the ground pin its source returns to, else the one nearest to it in the subcircuit's device
     graph.  When the subcircuit body is not in the netlist we say so instead of guessing.
+  * near-zero impedances (`L<=10 fH`, `R<=1 uOhm`, 0 V vsources, iprobes) are shorts: the nets
+    they join are one node for all of the above;
   * every mutation appends a recipe line (`~` edited in place with the old value in a comment,
     `+` added, `-` stripped) so contract 3's `recipe` column is a byproduct, not an afterthought.
 """
@@ -210,6 +215,169 @@ def _is_analysis_statement(logical: str) -> bool:
     return (not second.startswith("(")) and second in ANALYSIS_KEYWORDS
 
 
+# ------------------------------------------------------------- parameters: the code variable
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_PLAIN_NUM = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
+
+
+def param_followers(params: dict[str, str]) -> dict[str, list[str]]:
+    """parameter -> every parameter whose expression depends on it, directly or through another
+    (`B=0.0125*A+0.7`, `C=2*B` -> A: [B, C]), in declaration order. Only parameters that have
+    followers are keys."""
+    deps = {k: {t for t in _IDENT_RE.findall(str(v)) if t in params and t != k}
+            for k, v in params.items()}
+    out: dict[str, list[str]] = {}
+    for root in params:
+        seen: set[str] = set()
+        frontier = {root}
+        while frontier:
+            nxt = {k for k, d in deps.items() if d & frontier and k not in seen and k != root}
+            seen |= nxt
+            frontier = nxt
+        if seen:
+            out[root] = [k for k in params if k in seen]
+    return out
+
+
+def code_variable(params: dict[str, str]) -> dict:
+    """The design variable that selects the output code, as far as the parameters say.
+
+    `VSET` when it is declared (the convention). Otherwise the ONE parameter whose name contains
+    "vset" (any case) and whose value is a plain integer -- `CORE_VSET=10` -- is a SUGGESTION the
+    user confirms; with none, or several, nothing is guessed and the user chooses.
+
+    Returns {"param", "value", "suggested", "candidates"}: `param`/`value` are None when there
+    is nothing to seed, `candidates` every parameter whose name contains "vset".
+    """
+    cands = [k for k in params if "vset" in k.lower()]
+
+    def as_code(v):
+        v = str(v).strip()
+        if not _PLAIN_NUM.fullmatch(v):
+            return None
+        f = float(v)
+        return int(f) if f == int(f) else None
+
+    if "VSET" in params:
+        return {"param": "VSET", "value": as_code(params["VSET"]), "suggested": False,
+                "candidates": cands}
+    plain = [k for k in cands if as_code(params[k]) is not None]
+    if len(plain) == 1:
+        return {"param": plain[0], "value": as_code(params[plain[0]]), "suggested": True,
+                "candidates": cands}
+    return {"param": None, "value": None, "suggested": False, "candidates": cands}
+
+
+# ------------------------------------------------------ includes: which line is the corner
+#: A section name reads as a PROCESS CORNER when one of its words (split on `_ - .`) is one of
+#: these -- `tt`, `TOP_TT_X`, `tt_lib`, `mos_ss` -- or the whole name is one of _CORNER_NAMES
+#: (the RC-extraction and long spellings). `Noise_Worst`, `pre_Sim` are none of them: those
+#: are fixed model-library rows, kept as exported for every run.
+_CORNER_WORDS = frozenset({"tt", "ss", "ff", "sf", "fs", "snfp", "fnsp", "tttt", "ssss", "ffff"})
+_CORNER_NAMES = frozenset({"typ", "typical", "slow", "fast", "rcworst", "rcbest", "cworst",
+                           "cbest", "rctyp", "rctypical", "typ_rc"})
+
+
+def looks_like_corner(section: str | None) -> bool:
+    s = str(section or "").strip().lower()
+    return bool(s) and (s in _CORNER_NAMES
+                        or any(w in _CORNER_WORDS for w in re.split(r"[_\-.]+", s)))
+
+
+def _file_matches(path: str, pattern: str) -> bool:
+    """`pattern` names the include `path`: the same, a suffix of it, or its basename."""
+    return path == pattern or path.endswith(pattern) or pathlib.PurePosixPath(path).name == pattern
+
+
+# ------------------------------------------------- ground pins vs control pins tied low
+_GLOBAL_GROUNDS = ("0", "gnd!", "gnd")
+#: A pin or subcircuit port named like a ground: VSS*, *GND*, PSUB/VSUB/SUB, substrate.
+_GROUND_NAME = re.compile(r"(?i)(vss|gnd|psub|vsub|substrate|^sub(?:$|[_<\[\\]))")
+#: One bit of a bus: `TRIM<3>` (escaped `TRIM\<3\>` in a Spectre netlist) or `TRIM[3]`.
+_BUS_BIT = re.compile(r"(\\?<\d+\\?>|\[\d+\])$")
+#: Last resort only, when the devices say nothing: a digital control's name.
+_CONTROL_NAME = re.compile(r"(?i)(^d_|_en(?:_|$)|^en(?:_|$)|enable|_sel|^sel|trim|ctrl|ctl|"
+                           r"test|reserve|_rsv|mode|cfg)")
+_MOS_MASTER = re.compile(r"(?i)(^|_)[np](ch|mos|fet)|nmos|pmos|nfet|pfet")
+_BJT_MASTER = re.compile(r"(?i)pnp|npn")
+_STDCELL_MASTER = re.compile(r"(?i)^(inv|nand|nor|and|or|xor|xnor|buf|dff|dfr|lat|mux|aoi|oai|"
+                             r"ao\d|oa\d|tie|dly|ckbd|ckin|sdf|sync)[a-z0-9_]*$")
+
+
+#: Near-zero impedances ADE benches carry as placeholders (bondwire / package `L=0`, `L=1f`,
+#: `R=0`): one node, not an element. 10 fH is ~0.6 mOhm at 10 GHz and 1 uOhm is below any wire,
+#: both negligible against any LDO's Zout, so neither is a load, a decap path or a separate net.
+SHORT_L_H = 1e-14
+SHORT_R_OHM = 1e-6
+
+
+def _value(tok: str | None, params: dict[str, str] | None = None, depth: int = 0):
+    """A number, an engineering number, or a top-level parameter resolving to one; else None."""
+    if tok is None:
+        return None
+    v = parse_number(tok)
+    if v is None and params and tok.strip() in params and depth < 8:
+        return _value(params[tok.strip()], params, depth + 1)
+    return v
+
+
+def _is_short(master: str, rest: list[str], params: dict[str, str] | None = None):
+    """True when a two-terminal element is one node at DC and at every frequency pmukit looks
+    at: an iprobe, an inductor of at most SHORT_L_H, a resistor of at most SHORT_R_OHM, a 0 V
+    (or dc-less, non-transient) vsource. None when its `l=` / `r=` is an expression that does
+    not evaluate (it is then NOT a short, and the caller says so); False otherwise."""
+    kv = _params_of(rest[1:])
+    if master == "iprobe":
+        return True
+    if master in ("inductor", "resistor"):
+        key, limit = ("l", SHORT_L_H) if master == "inductor" else ("r", SHORT_R_OHM)
+        if key not in kv:
+            return False
+        v = _value(kv[key], params)
+        if v is None:
+            return None
+        return abs(v) <= limit * (1 + 1e-9)          # `10f` is 1.0000000000000002e-14
+    if master == "vsource":
+        if kv.get("type", "dc") != "dc" or "wave" in kv or "file" in kv:
+            return False
+        dc = kv.get("dc")
+        return dc is None or _value(dc, params) == 0
+    return False
+
+
+def _closure(seeds, adj: dict[str, set[str]]) -> set[str]:
+    out, stack = set(seeds), list(seeds)
+    while stack:
+        for n in adj.get(stack.pop(), ()):
+            if n not in out:
+                out.add(n)
+                stack.append(n)
+    return out
+
+
+def _subckt_header(logical: str):
+    """(name, ports) of a `subckt`/`.subckt`/`inline subckt` header line, or None."""
+    s = logical.strip()
+    toks = s.split()
+    if len(toks) < 2:
+        return None
+    low = toks[0].lower()
+    if low in ("subckt", ".subckt"):
+        name, rest = toks[1], (s.split(None, 2)[2] if len(toks) > 2 else "")
+    elif low == "inline" and len(toks) > 2 and toks[1].lower() == "subckt":
+        name, rest = toks[2], (s.split(None, 3)[3] if len(toks) > 3 else "")
+    else:
+        return None
+    if "(" in rest:
+        return name, rest[rest.index("(") + 1:].split(")", 1)[0].split()
+    ports = []                              # spice-style: nodes up to the first name=value
+    for t in rest.split():
+        if "=" in t:
+            break
+        ports.append(t)
+    return name, ports
+
+
 # ------------------------------------------------------------------------ in-place setters
 def _set_kv_on_line(line: str, key: str, value: str) -> str:
     """Replace or append `key=value`, preserving the indent and any trailing comment."""
@@ -256,12 +424,13 @@ class Pin:
     src_reversed: bool = False  # the convention source is wired (gnd pin) instead of (pin gnd)
     fate: str = "model"         # model | stub | ignore
     reason: str = ""            # why unclassifiable
+    tied: str = ""              # a control input the bench ties to this ground net
 
     def to_dict(self) -> dict:
         return {"role": self.role, "net": self.net, "index": self.index, "gnd": self.gnd,
                 "gnd_from": self.gnd_from, "src": self.src, "src_master": self.src_master,
                 "src_reversed": self.src_reversed, "dc": self.dc, "fate": self.fate,
-                "is_ground": self.is_ground, "reason": self.reason}
+                "is_ground": self.is_ground, "reason": self.reason, "tied": self.tied}
 
 
 @dataclass
@@ -271,8 +440,17 @@ class PinTable:
     pmu_inst: str
     pmu_master: str
     pins: dict[str, Pin] = field(default_factory=dict)
-    sections: dict[str, str] = field(default_factory=dict)   # include file -> current section
+    #: include file -> the section of its FIRST include line: the process-corner row, the one
+    #: `set_section_all` rewrites (ADE writes one line per Model Library row, corner first).
+    sections: dict[str, str] = field(default_factory=dict)
+    #: every include line in file order: {"file", "section", "kind", "corner"}; `corner` marks
+    #: the line a corner rewrites, the others are left alone.
+    includes: list[dict] = field(default_factory=list)
     params: dict[str, str] = field(default_factory=dict)     # top-level `parameters` variables
+    #: parameter -> the parameters whose expressions follow it (transitively), file order.
+    param_followers: dict[str, list[str]] = field(default_factory=dict)
+    #: the output-code variable read from the parameters -- see `code_variable`.
+    code_var: dict = field(default_factory=dict)
     analyses: list[str] = field(default_factory=list)        # the analyses that will be stripped
     notes: list[str] = field(default_factory=list)
 
@@ -281,7 +459,8 @@ class PinTable:
 
     def unclassified(self) -> list[Pin]:
         """Pins with no convention source and not tied to ground. We report; we never guess."""
-        return [p for p in self.pins.values() if p.role == "none" and not p.is_ground]
+        return [p for p in self.pins.values()
+                if p.role == "none" and not p.is_ground and not p.tied]
 
     def grounds(self) -> list[Pin]:
         return [p for p in self.pins.values() if p.is_ground]
@@ -331,6 +510,10 @@ class Netlist:
         self.label = ""
         self.edits: list[str] = []
         self._inc_texts: dict[str, tuple[str, str] | None] = {}
+        self._sidx_key: str | None = None    # the text the subckt index below was built from
+        self._sidx: dict = {}
+        #: config.corner_include: {file: index of its section= line that is the process corner}
+        self.corner_choice: dict[str, int] = {}
 
     # ---- construction
     @classmethod
@@ -349,6 +532,7 @@ class Netlist:
         n.origin = self.origin
         n.label = self.label
         n.edits = list(self.edits)
+        n.corner_choice = dict(self.corner_choice)
         return n
 
     def sha(self, n: int = 12) -> str:
@@ -419,26 +603,75 @@ class Netlist:
             out.append((m.group(1), sec.group(1) if sec else None))
         return out
 
+    def corner_lines(self) -> dict[str, dict]:
+        """Per include file with section= lines: which ONE of them is the process corner.
+
+        ADE writes `include "toplevel.scs" section=<x>` once per Model Library row: the process
+        corner, plus fixed rows (`pre_Sim`, `Noise_Worst`...) that are constants -- kept exactly as
+        exported for every run, never offered or seeded as a corner. The corner line is, in order:
+        the one `corner_choice` (config.corner_include) names; the one line whose section reads
+        as a corner (`looks_like_corner`); none at all when no line of the file reads as a corner
+        but another file's does (a lone `include "x.scs" section=pre_Sim` is a constant too);
+        the only line; else the first, flagged unsure so the New screen asks the user to pick.
+
+        {file: {"index", "section", "how": chosen|pattern|only|first|none, "sure", "sections"}}
+        with `index` among that file's section= lines (None for `none`) and `sections` all of
+        them in order. Only files with at least one section= line are keys."""
+        by_file: dict[str, list[str]] = {}
+        for f, s in self.includes():
+            if s is not None:
+                by_file.setdefault(f, []).append(s)
+        some_corner = any(looks_like_corner(s) for secs in by_file.values() for s in secs)
+        out: dict[str, dict] = {}
+        for f, secs in by_file.items():
+            pick = next((int(v) for k, v in self.corner_choice.items() if _file_matches(f, k)),
+                        None)
+            hits = [i for i, s in enumerate(secs) if looks_like_corner(s)]
+            if pick is not None and 0 <= pick < len(secs):
+                idx, how = pick, "chosen"
+            elif len(hits) == 1:
+                idx, how = hits[0], "pattern"
+            elif not hits and some_corner:
+                idx, how = None, "none"
+            elif len(secs) == 1:
+                idx, how = 0, "only"
+            else:
+                idx, how = 0, "first"
+            out[f] = {"index": idx, "section": secs[idx] if idx is not None else None,
+                      "how": how, "sure": how != "first", "sections": secs}
+        return out
+
+    def include_lines(self) -> list[dict]:
+        """Every include line in file order: {"file", "section", "kind", "index" (among the
+        file's section= lines, None without one), "corner" (the line a corner rewrites), "how",
+        "sure" (see `corner_lines`)}. A sectioned line that is not the corner is a constant."""
+        corners = self.corner_lines()
+        out, count = [], collections.Counter()
+        for logical, _phys, _d in _scoped_logical_lines(self.text):
+            s = logical.strip()
+            if not (s.startswith("include ") or s.startswith("ahdl_include ")):
+                continue
+            m = re.search(r'["\']([^"\']+)["\']', s)
+            if not m:
+                continue
+            sec = re.search(r"\bsection\s*=\s*([A-Za-z0-9_.+-]+)", s)
+            f = m.group(1)
+            idx = None
+            if sec:
+                idx = count[f]
+                count[f] += 1
+            c = corners.get(f) or {}
+            out.append({"file": f, "section": sec.group(1) if sec else None,
+                        "kind": s.split(None, 1)[0], "index": idx,
+                        "corner": idx is not None and idx == c.get("index"),
+                        "how": c.get("how"), "sure": c.get("sure", True)})
+        return out
+
     def analyses(self) -> list[str]:
         return [lg for lg, _p, d in _scoped_logical_lines(self.text)
                 if d == 0 and _is_analysis_statement(lg)]
 
     # ---- role scanning (the convention)
-    def _sources_by_net(self) -> dict[str, list[tuple]]:
-        """net -> [(name, nodes, master, rest, position)] for every source TOUCHING that net.
-
-        `position` is the node index the net sits at. A convention source is normally written
-        `IL_<pin> (<pin> 0)`, i.e. position 0; but `(0 <pin>)` is an easy thing for a person to
-        draw, and silently failing to classify the pin would be worse than noting the polarity.
-        """
-        by_net: dict[str, list[tuple]] = collections.defaultdict(list)
-        for name, nodes, master, rest in self.instances(0):
-            if master not in ("isource", "vsource"):
-                continue
-            for pos, net in enumerate(nodes[:2]):
-                by_net[net].append((name, nodes, master, rest, pos))
-        return by_net
-
     def scan(self, pmu_inst: str, *, ports: dict[str, str] | None = None) -> PinTable:
         """Read the pin roles out of the testbench. Roles come ONLY from source-name prefixes."""
         inst = self.find_instance(pmu_inst)
@@ -484,88 +717,399 @@ class Netlist:
                     f"Or fix the `{master}` port list / the `{pmu_inst}` instance line by hand."],
                 where=f"{self.where(self.line_of(pmu_inst))}: instance {pmu_inst}")
 
-        by_net = self._sources_by_net()
+        pins_on: dict[str, list[str]] = collections.defaultdict(list)
+        for pin, net in zip(port_names, nodes):
+            pins_on[net].append(pin)
+        conv, ground_nodes, ground_why, cn = self._read_sources(pmu_inst, pins_on)
+        rep = cn["rep"]
+        owners: dict[str, list[dict]] = collections.defaultdict(list)
+        for c in conv:
+            owners[c["sig"]].append(c)
+
+        reversed_pins: dict[str, list[str]] = collections.defaultdict(list)
+        unnamed: dict[str, list[str]] = collections.defaultdict(list)
+        on_ground: list[Pin] = []
         for i, (pin, net) in enumerate(zip(port_names, nodes)):
             p = Pin(name=pin, net=net, index=i)
-            # ground pins: tied to the global 0 net in the testbench
-            if net in ("0", "gnd!", "gnd"):
-                p.is_ground = True
-                p.role = "none"
-                p.fate = "ignore"
-                table.pins[pin] = p
+            table.pins[pin] = p
+            node = rep(net)
+            if node in ground_nodes:
+                # a ground pin, or a control input the bench ties low: told apart below
+                on_ground.append(p)
                 continue
-            # role from the source-name prefix on this pin's net; a source wired the normal way
-            # round (the pin is its first node) always wins over a reversed one.
-            candidates = [c for c in by_net.get(net, [])
-                          if any(c[0].startswith(pre) for pre in PREFIX_ROLE)]
-            candidates.sort(key=lambda c: c[4])
-            if len({c[0] for c in candidates if c[4] == 0}) > 1:
-                names = sorted({c[0] for c in candidates if c[4] == 0})
-                raise PmuError(
-                    what=f"net '{net}' is driven by more than one convention source: "
-                         f"{', '.join(names)}.",
-                    why="A pin's role is read from the ONE source the convention puts on it; with "
-                        "two, the role and the dc value are both ambiguous.",
-                    do=[f"Keep one of {', '.join(names)} and rename or remove the others."],
-                    where=f"{self.where(self.line_of(names[0]))}: net {net}")
-            for src_name, _snodes, src_master, rest, pos in candidates:
-                role = next((r for pre, r in PREFIX_ROLE.items() if src_name.startswith(pre)), None)
-                if role is None:
-                    continue
-                if src_master != ROLE_MASTER[role]:
-                    prefix = next(pre for pre, r in PREFIX_ROLE.items() if r == role)
-                    raise PmuError(
-                        what=f"source '{src_name}' on net '{net}' is a {src_master}, but the "
-                             f"'{prefix}' prefix means '{role}', which must be "
-                             f"{'an' if ROLE_MASTER[role][0] in 'aeiou' else 'a'} "
-                             f"{ROLE_MASTER[role]}.",
-                        why="The read math depends on the master: a rail is read as a voltage "
-                            "under a current injection (isource), a bias is read as a probe "
-                            "current under a voltage drive (vsource).",
-                        do=[f"Change '{src_name}' to "
-                            f"{'an' if ROLE_MASTER[role][0] in 'aeiou' else 'a'} "
-                            f"{ROLE_MASTER[role]}.",
-                            f"Or rename it if it is not the {role} source for this pin."],
-                        where=f"{self.where(self.line_of(src_name))}: instance {src_name}")
-                p.role, p.src, p.src_master = role, src_name, src_master
-                p.src_reversed = pos != 0
-                if p.src_reversed:
-                    table.notes.append(
-                        f"{src_name} is wired ({_snodes[0]} {net}), not ({net} {_snodes[0]}) -- "
-                        "the pin is classified, but its polarity is inverted relative to the "
-                        "convention; the importer detects the sign from the operating point")
-                p.dc = parse_number(_params_of(rest[1:]).get("dc", ""))
-                break
-            if p.role == "none":
+            if not owners.get(node):
                 p.reason = f"no source named IL_*/VB_*/VS_*/VEN_* drives net '{net}'"
                 p.fate = "ignore"
-            table.pins[pin] = p
+                continue
+            c = self._owner(owners[node], pin, net)
+            role, src_name, src_master = c["role"], c["name"], c["master"]
+            if src_master != ROLE_MASTER[role]:
+                prefix = next(pre for pre, r in PREFIX_ROLE.items() if r == role)
+                raise PmuError(
+                    what=f"source '{src_name}' on net '{net}' is a {src_master}, but the "
+                         f"'{prefix}' prefix means '{role}', which must be "
+                         f"{'an' if ROLE_MASTER[role][0] in 'aeiou' else 'a'} "
+                         f"{ROLE_MASTER[role]}.",
+                    why="The read math depends on the master: a rail is read as a voltage "
+                        "under a current injection (isource), a bias is read as a probe "
+                        "current under a voltage drive (vsource).",
+                    do=[f"Change '{src_name}' to "
+                        f"{'an' if ROLE_MASTER[role][0] in 'aeiou' else 'a'} "
+                        f"{ROLE_MASTER[role]}.",
+                        f"Or rename it if it is not the {role} source for this pin."],
+                    where=f"{self.where(self.line_of(src_name))}: instance {src_name}")
+            p.role, p.src, p.src_master = role, src_name, src_master
+            p.src_reversed = c["rev"]
+            if p.src_reversed:
+                reversed_pins[src_name].append(pin)
+            if c["suffix"] not in {pin, net} | cn["members"].get(node, set()):
+                unnamed[src_name].append(pin)
+            p.dc = parse_number(_params_of(c["rest"][1:]).get("dc", ""))
 
-        self._check_rail_loads(table, pmu_inst)
-        self._attach_grounds(table, master, home[0] if home else None)
+        def _pins_text(names):
+            return (f" -- {len(names)} pins ({', '.join(names[:6])}"
+                    f"{', ...' if len(names) > 6 else ''})" if len(names) > 1 else "")
 
-        table.sections = {f: s for f, s in self.includes() if s is not None}
+        by_name = {c["name"]: c for c in conv}
+        for src_name, names in reversed_pins.items():
+            c = by_name[src_name]
+            ws, wr = c["wired_sig"], c["wired_ref"]
+            table.notes.append(
+                f"{src_name} is wired ({wr} {ws}), not ({ws} {wr}) -- "
+                "the pin is classified, but its polarity is inverted relative to the "
+                "convention; the importer detects the sign from the operating point"
+                + _pins_text(names))
+        for src_name, names in unnamed.items():
+            table.notes.append(
+                f"{src_name} gives {', '.join(names[:6])}{', ...' if len(names) > 6 else ''} "
+                f"its role, but its name after the prefix names neither the pin nor its net "
+                f"({by_name[src_name]['wired_sig']}) -- check it is the source meant for "
+                f"{'them' if len(names) > 1 else 'it'}")
+        if cn["listed"]:
+            ex = cn["listed"][:6]
+            table.notes.append(
+                f"{len(cn['listed'])} zero-impedance element(s) (L <= 10 fH, R <= 1 uOhm, 0 V "
+                f"vsources) treated as shorts: the nets they join are one node, e.g. "
+                f"{', '.join(ex)}{', ...' if len(cn['listed']) > len(ex) else ''}")
+        if cn["unresolved"]:
+            ex = cn["unresolved"][:6]
+            table.notes.append(
+                f"{', '.join(ex)}{', ...' if len(cn['unresolved']) > len(ex) else ''}: the l= / "
+                "r= value is an expression pmukit cannot evaluate, so "
+                f"{'they are' if len(cn['unresolved']) > 1 else 'it is'} NOT treated as a short")
+
+        self._split_ground_pins(table, on_ground, master, port_names if home else None,
+                                {n: ground_why.get(rep(n), "a ground")
+                                 for n in {p.net for p in on_ground}})
+        self._check_rail_loads(table, pmu_inst, cn)
+        returns = {p.name: by_name[p.src]["ref"] for p in table.pins.values()
+                   if p.src in by_name}
+        self._attach_grounds(table, master, home[0] if home else None, returns=returns,
+                             node_of=rep)
+
+        table.includes = self.include_lines()
+        table.sections = {}
+        for inc in table.includes:
+            if inc["corner"]:
+                table.sections[inc["file"]] = inc["section"]
         table.params = self.parameters()
+        table.param_followers = param_followers(table.params)
+        table.code_var = code_variable(table.params)
         table.analyses = self.analyses()
+        table.notes = list(dict.fromkeys(table.notes))       # one line per thing noticed
         if ports:
             table.apply_fates(ports)
         return table
 
-    def _check_rail_loads(self, table: PinTable, pmu_inst: str) -> None:
+    # ---- the convention sources and the ground nets they reveal
+    def _connectivity(self, pmu_inst: str, pin_nets: set[str]) -> dict:
+        """The top-level nets merged into NODES across the near-zero impedances (`_is_short`).
+
+        A pin's net joined to its IL_ source by an `L=0` bondwire placeholder is one node with
+        the source's; a ground joined to 0 through `R=0` is 0. Returns {"rep": net -> node name
+        (a global ground, else a PMU pin's net, else the alphabetically first), "members": node
+        -> its nets, "shorts": {instance names}, "listed": the shorts worth naming (not
+        iprobes), "unresolved": elements whose l=/r= did not evaluate, "tops": the top-level
+        instances other than the PMU}."""
+        params = self.parameters()
+        tops = [t for t in self.instances(0) if t[0] != pmu_inst]
+        parent: dict[str, str] = {}
+
+        def find(x):
+            while parent.get(x, x) != x:
+                parent[x] = parent.get(parent[x], parent[x])
+                x = parent[x]
+            return x
+
+        shorts, listed, unresolved = set(), [], []
+        for name, nodes, master, rest in tops:
+            if len(nodes) != 2 or any(name.startswith(pre) for pre in PREFIX_ROLE):
+                continue                        # a convention source is never a short
+            s = _is_short(master, rest, params)
+            if s is None:
+                unresolved.append(name)
+            elif s:
+                shorts.add(name)
+                if master != "iprobe":
+                    listed.append(name)
+                for n in nodes:
+                    parent.setdefault(n, n)
+                a, b = find(nodes[0]), find(nodes[1])
+                if a != b:
+                    parent[b] = a
+        groups: dict[str, set[str]] = collections.defaultdict(set)
+        for n in list(parent):
+            groups[find(n)].add(n)
+        canon: dict[str, str] = {}
+        members: dict[str, set[str]] = {}
+        for grp in groups.values():
+            head = min(grp, key=lambda n: (n not in _GLOBAL_GROUNDS, n not in pin_nets, n))
+            members[head] = grp
+            for n in grp:
+                canon[n] = head
+        return {"rep": lambda n: canon.get(n, n), "members": members, "shorts": shorts,
+                "listed": listed, "unresolved": unresolved, "tops": tops}
+
+    def _read_sources(self, pmu_inst: str, pins_on: dict[str, list[str]]):
+        """(sources, ground nodes, {ground node: why}, connectivity) read from the top level of
+        the bench, on the nodes `_connectivity` merges across shorts.
+
+        A convention source is a signal node and a reference node. Its signal node is its FIRST
+        node -- unless that first node is a ground (`VB_x (0 X)`, an easy thing to draw), or the
+        name after the prefix names the second node's pin or net and not the first's; then the
+        source is reversed and the second node is the signal. The reference node of a source
+        whose signal is a PMU pin's net is a GROUND net of the bench (`VS_AVDD (AVDD AGND)`
+        makes AGND one), as is anything tied to a ground by a short (a 0 ohm resistor, an
+        iprobe, an inductor, a 0 V vsource). A net some convention source drives is never a
+        ground, and neither is a net a non-zero vsource drives.
+        """
+        cn = self._connectivity(pmu_inst, set(pins_on))
+        rep, tops = cn["rep"], cn["tops"]
+        pin_nodes: dict[str, set[str]] = collections.defaultdict(set)   # node -> pins + nets
+        for net, pins in pins_on.items():
+            pin_nodes[rep(net)].update(pins)
+            pin_nodes[rep(net)].add(net)
+        driven: set[str] = set()
+        raw = []
+        for name, nodes, master, rest in tops:
+            if len(nodes) < 2 or name in cn["shorts"]:
+                continue
+            role = next((r for pre, r in PREFIX_ROLE.items() if name.startswith(pre)), None)
+            if role is not None and master in ("isource", "vsource"):
+                prefix = next(pre for pre in PREFIX_ROLE if name.startswith(pre))
+                raw.append({"name": name, "nodes": nodes, "master": master, "rest": rest,
+                            "role": role, "suffix": name[len(prefix):]})
+            elif master == "vsource":
+                driven.update(rep(n) for n in nodes[:2])
+        base = {rep(n) for n in _GLOBAL_GROUNDS}
+        driven -= base
+        why = {n: "the global ground" for n in base}
+
+        def names(node, suffix):
+            return suffix in pin_nodes.get(node, ()) or suffix in cn["members"].get(node, ())
+
+        for c in raw:
+            a, b = c["nodes"][:2]
+            ra, rb = rep(a), rep(b)
+            if ra in base and rb not in base:
+                rev = True
+            elif rb in base or ra in base:
+                rev = False
+            else:
+                rev = names(rb, c["suffix"]) and not names(ra, c["suffix"])
+            # sig/ref: the nodes as merged; wired_*: the nets as written on the source's line
+            c["sig"], c["ref"], c["rev"] = (rb, ra, True) if rev else (ra, rb, False)
+            c["wired_sig"], c["wired_ref"] = (b, a) if rev else (a, b)
+        sig_nodes = {c["sig"] for c in raw}
+        grounds = set(base)
+        for c in raw:
+            if c["sig"] in pin_nodes and c["ref"] not in sig_nodes | driven | base:
+                grounds.add(c["ref"])
+                why.setdefault(c["ref"], f"the return of {c['name']}")
+        grounds -= sig_nodes - base
+        return raw, grounds, why, cn
+
+    def _owner(self, cands: list[dict], pin: str, net: str) -> dict:
+        """The one source a pin takes its role from. Several: the one named after the pin, then
+        after its net, then the one wired the normal way round; still several is an error."""
+        if len(cands) == 1:
+            return cands[0]
+        for key in (pin, net):
+            hit = [c for c in cands if c["suffix"] == key]
+            if len(hit) == 1:
+                return hit[0]
+        normal = [c for c in cands if not c["rev"]]
+        if len(normal) == 1:
+            return normal[0]
+        names = sorted(c["name"] for c in (normal or cands))
+        raise PmuError(
+            what=f"net '{net}' is driven by more than one convention source: "
+                 f"{', '.join(names)}.",
+            why="A pin's role is read from the ONE source the convention puts on it; with "
+                "two, the role and the dc value are both ambiguous.",
+            do=[f"Keep one of {', '.join(names)} and rename or remove the others.",
+                f"Or name the one that is meant after the pin: e.g. "
+                f"{cands[0]['name'][:len(cands[0]['name']) - len(cands[0]['suffix'])]}{pin}."],
+            where=f"{self.where(self.line_of(names[0]))}: net {net}")
+
+    # ---- ground pins vs control inputs tied low
+    def _subckt_index(self) -> dict:
+        """{master: (ports, [(name, nodes, master, rest)])} for every subcircuit this netlist
+        and the includes it can read define -- the first definition wins. Built once per text."""
+        if self._sidx_key is self.text:
+            return self._sidx
+        idx: dict = {}
+        for text, _where in self._definition_texts():
+            stack: list[str | None] = []
+            for logical, _phys, _d in _scoped_logical_lines(text):
+                delta = _subckt_delta(logical)
+                if delta > 0:
+                    head = _subckt_header(logical)
+                    name = head[0] if head else None
+                    if name is not None and name not in idx:
+                        idx[name] = (head[1], [])
+                        stack.append(name)
+                    else:
+                        stack.append(None)          # a duplicate definition: ignored
+                    continue
+                if delta < 0:
+                    if stack:
+                        stack.pop()
+                    continue
+                if stack and stack[-1] is not None:
+                    inst = _parse_instance(logical)
+                    if inst:
+                        idx[stack[-1]][1].append(inst)
+        self._sidx_key, self._sidx = self.text, idx
+        return idx
+
+    def _terminals(self, idx: dict, master: str, net: str, memo: dict, busy: set) -> set[str]:
+        """What `net` of subcircuit `master` reaches, through the hierarchy: `src_bulk` (a MOS
+        source or bulk, a BJT collector or substrate), `gnd_port` (a child port named like a
+        ground), `global_gnd` (shorted to 0 inside), `gate` (a MOS gate), `digital` (a
+        standard cell's pin)."""
+        key = (master, net)
+        if key in memo:
+            return memo[key]
+        if key in busy or len(busy) > 64:
+            return set()
+        busy.add(key)
+        ports, insts = idx[master]
+        adj: dict[str, set[str]] = collections.defaultdict(set)
+        for _n, nodes, m, rest in insts:
+            if len(nodes) == 2 and _is_short(m, rest):
+                adj[nodes[0]].add(nodes[1])
+                adj[nodes[1]].add(nodes[0])
+        group = _closure([net], adj)
+        ev: set[str] = set()
+        if group & set(_GLOBAL_GROUNDS):
+            ev.add("global_gnd")
+        for _n, nodes, m, rest in insts:
+            for i, node in enumerate(nodes):
+                if node not in group:
+                    continue
+                if m in idx:
+                    cports = idx[m][0]
+                    if i < len(cports):
+                        if _GROUND_NAME.search(cports[i]):
+                            ev.add("gnd_port")
+                        ev |= self._terminals(idx, m, cports[i], memo, busy)
+                elif (len(nodes) in (4, 5) and (_MOS_MASTER.search(m) or
+                      {"w", "l"} <= set(_params_of(rest[1:])))) or \
+                        (len(nodes) == 3 and _MOS_MASTER.search(m)):
+                    ev.add("gate" if i == 1 else "src_bulk" if i >= 2 else "drain")
+                elif _BJT_MASTER.search(m) and len(nodes) in (3, 4):
+                    if i in (0, 3):
+                        ev.add("src_bulk")
+                elif _STDCELL_MASTER.match(m):
+                    ev.add("digital")
+        busy.discard(key)
+        memo[key] = ev
+        return ev
+
+    def _split_ground_pins(self, table: PinTable, on_ground: list[Pin], master: str,
+                           port_names: list[str] | None, ground_why: dict[str, str]) -> None:
+        """Every PMU pin on a ground net of the bench is either one of the PMU's GROUND pins or a
+        control input the bench ties low (a trim bit, an enable held off). The subcircuit says
+        which: a ground reaches device sources and bulks (or a ground port, or 0); a control
+        reaches only gates and standard cells, or is one bit of a bus. Without the subcircuit
+        every pin on a ground net is taken as a ground, and the notes say so."""
+        if not on_ground:
+            return
+        idx = self._subckt_index() if port_names is not None else {}
+        memo: dict = {}
+        tied: dict[str, list[str]] = collections.defaultdict(list)
+        defaulted: list[str] = []
+        for p in on_ground:
+            p.role, p.fate = "none", "ignore"
+            if master not in idx:
+                verdict, why = "ground", f"on ground net {p.net}"
+            else:
+                ev = self._terminals(idx, master, p.name, memo, set())
+                if ev & {"src_bulk", "gnd_port", "global_gnd"}:
+                    verdict, why = "ground", f"reaches device sources/bulks inside {master}"
+                elif _GROUND_NAME.search(p.name):
+                    verdict, why = "ground", "named like a ground"
+                elif ev & {"gate", "digital"}:
+                    verdict, why = "control", "reaches only gates / logic cells"
+                elif _BUS_BIT.search(p.name):
+                    verdict, why = "control", "one bit of a control bus"
+                elif _CONTROL_NAME.search(p.name):
+                    verdict, why = "control", "named like a control input"
+                else:
+                    verdict, why = "ground", "nothing inside says otherwise"
+                    defaulted.append(p.name)
+            if verdict == "ground":
+                p.is_ground = True
+                p.gnd_from = f"ground pin: {why}"
+            else:
+                p.tied = p.net
+                p.reason = (f"tied to {p.net} (a ground) in the bench: a control input, "
+                            f"passed through")
+                p.gnd_from = why
+                tied[p.net].append(p.name)
+        nets = sorted({p.net for p in on_ground if p.net not in _GLOBAL_GROUNDS})
+        if nets:
+            table.notes.append("ground nets read from the bench: " + ", ".join(
+                f"{n} ({ground_why.get(n, 'a ground')})" for n in nets))
+        for net, names in tied.items():
+            table.notes.append(
+                f"{len(names)} pin(s) tied to {net} (a ground) read as control inputs held low, "
+                f"not ground pins -- passed through, not modeled: {', '.join(names[:8])}"
+                f"{', ...' if len(names) > 8 else ''}")
+        if master not in idx:
+            names = [p.name for p in on_ground]
+            if len(set(p.net for p in on_ground) - set(_GLOBAL_GROUNDS)):
+                table.notes.append(
+                    f"subcircuit '{master}' is not readable, so every pin on a ground net is "
+                    f"taken as a ground pin ({', '.join(names[:8])}"
+                    f"{', ...' if len(names) > 8 else ''}); a control input tied low among "
+                    "them cannot be told apart")
+        elif defaulted:
+            table.notes.append(
+                f"{', '.join(defaulted)}: on a ground net and nothing inside {master} says "
+                "whether ground pin or control input -- taken as ground")
+
+    def _check_rail_loads(self, table: PinTable, pmu_inst: str, cn: dict | None = None) -> None:
         """A rail is characterized INTRINSIC: nothing but its IL_ source may hang on its net.
 
         A decap on a rail is fitted INTO the model's Zout, and the designer then adds the same
         decap again in the system bench -- counted twice. That is refused. Anything else found
         there (a probe, a resistor) is named in the notes: it becomes part of what is measured.
+
+        The rail is its merged NODE (`_connectivity`): a cap behind an `L=0` placeholder is still
+        on the rail, and the placeholder itself is a short, not a load.
         """
-        rails = {p.net: p for p in table.pins.values() if p.role == "rail"}
+        rep = cn["rep"] if cn else (lambda n: n)
+        shorts = cn["shorts"] if cn else set()
+        rails = {rep(p.net): p for p in table.pins.values() if p.role == "rail"}
         if not rails:
             return
         caps, others = [], []
         for name, nodes, master, _rest in self.instances(0):
-            if name == pmu_inst or not nodes:
+            if name == pmu_inst or not nodes or name in shorts:
                 continue
-            hit = [rails[n] for n in dict.fromkeys(nodes) if n in rails]
+            hit = [rails[n] for n in dict.fromkeys(rep(x) for x in nodes) if n in rails]
             for p in hit:
                 if name == p.src:
                     continue
@@ -681,13 +1225,19 @@ class Netlist:
             body.append(logical)
         return body
 
-    def _attach_grounds(self, table: PinTable, master: str, text: str | None = None) -> None:
+    def _attach_grounds(self, table: PinTable, master: str, text: str | None = None, *,
+                        returns: dict[str, str] | None = None, node_of=None) -> None:
         """Each rail/bias returns to the ground PIN nearest to it in the subcircuit's device graph.
 
         This is "read the ground from the wiring" (contract 0a) taken literally: build the node
         graph of the subcircuit body, breadth-first from every ground port at once, and attach
         each signal port to whichever ground reaches it first.  With one ground there is nothing
         to decide; with none, or with no subcircuit body to read, we say so rather than invent one.
+
+        Only real ground pins take part (a control input the bench ties low is not one). When the
+        pin's own convention source returns to a net that carries ground pins (`returns`: pin ->
+        the source's reference net), the choice is among those: the bench already says where the
+        rail's current comes back.
         """
         gnd_pins = sorted([p for p in table.pins.values() if p.is_ground], key=lambda p: p.index)
         signal = [p for p in table.pins.values() if p.role in ("rail", "bias")]
@@ -704,10 +1254,24 @@ class Netlist:
                                "single global reference")
             return
 
+        returns = returns or {}
+        node_of = node_of or (lambda n: n)
+        pools: dict[str, list[Pin]] = {}
+        for p in signal:
+            ret = returns.get(p.name)
+            on_ret = [g for g in gnd_pins if ret is not None and node_of(g.net) == ret]
+            if len(on_ret) == 1:
+                p.gnd = on_ret[0].name
+                p.gnd_from = f"the only ground pin on {ret}, where {p.src} returns in the bench"
+            else:
+                pools[p.name] = on_ret or gnd_pins
+        if not pools:
+            return
+
         body = self._subckt_body(master, text)
         if not body:
-            for p in signal:
-                p.gnd_from = "subcircuit body not in this netlist"
+            for name in pools:
+                table.pins[name].gnd_from = "subcircuit body not in this netlist"
             table.notes.append(
                 f"{len(gnd_pins)} ground pins but subcircuit '{master}' is not defined here -- "
                 "assign each rail's return pin on the New screen before delivering a split-ground "
@@ -724,22 +1288,32 @@ class Netlist:
                     if a != b:
                         adj[a].add(b)
 
-        dist: dict[str, tuple[int, str]] = {}
-        queue: collections.deque = collections.deque()
-        for g in gnd_pins:                      # multi-source BFS; first ground to arrive wins
-            dist[g.name] = (0, g.name)
-            queue.append(g.name)
-        while queue:
-            node = queue.popleft()
-            d, owner = dist[node]
-            for nxt in sorted(adj.get(node, ())):
-                if nxt not in dist:
-                    dist[nxt] = (d + 1, owner)
-                    queue.append(nxt)
-        for p in signal:
-            hit = dist.get(p.name)
+        def nearest(pool: list[Pin]) -> dict[str, tuple[int, str]]:
+            dist: dict[str, tuple[int, str]] = {}
+            queue: collections.deque = collections.deque()
+            for g in pool:                      # multi-source BFS; first ground to arrive wins
+                dist[g.name] = (0, g.name)
+                queue.append(g.name)
+            while queue:
+                node = queue.popleft()
+                d, owner = dist[node]
+                for nxt in sorted(adj.get(node, ())):
+                    if nxt not in dist:
+                        dist[nxt] = (d + 1, owner)
+                        queue.append(nxt)
+            return dist
+
+        done: dict[tuple, dict] = {}
+        for name, pool in pools.items():
+            key = tuple(g.name for g in pool)
+            if key not in done:
+                done[key] = nearest(pool)
+            p = table.pins[name]
+            hit = done[key].get(p.name)
             if hit:
-                p.gnd, p.gnd_from = hit[1], f"nearest ground in the subcircuit graph ({hit[0]} hops)"
+                among = "" if pool is gnd_pins else f", among the ground pins on {pool[0].net}"
+                p.gnd, p.gnd_from = hit[1], (f"nearest ground in the subcircuit graph "
+                                             f"({hit[0]} hops{among})")
             else:
                 p.gnd_from = "not reachable from any ground pin in the subcircuit graph"
 
@@ -876,21 +1450,30 @@ class Netlist:
 
         `file_pattern` matches the include's basename or any suffix of its path, so a config may
         say `toplevel.scs` for `include "/long/pdk/path/toplevel.scs"`.
+
+        Of a file included several times, only its process-corner line (`corner_lines`) is
+        rewritten; the other section= lines are constants and stay as exported.
         """
         sec_re = re.compile(r"(\bsection\s*=\s*)([A-Za-z0-9_.+-]+)")
+        corners = self.corner_lines()
+        target = (file_pattern if file_pattern in corners else
+                  next((f for f in corners if _file_matches(f, file_pattern)), None))
+        # a file with no corner line is rewritten only when named explicitly: its first line
+        want = (corners[target]["index"] or 0) if target is not None else 0
+        seen = [0]
 
         def match(logical):
             s = logical.strip()
             if not (s.startswith("include ") or s.startswith("ahdl_include ")):
                 return False
             m = re.search(r'["\']([^"\']+)["\']', s)
-            if not m:
+            if not m or not sec_re.search(s):
                 return False
             path = m.group(1)
-            if not (path.endswith(file_pattern)
-                    or pathlib.PurePosixPath(path).name == file_pattern):
+            if not (path == target if target is not None else _file_matches(path, file_pattern)):
                 return False
-            return bool(sec_re.search(s))
+            seen[0] += 1
+            return seen[0] - 1 == want
 
         ok = self._rewrite_statement(match, lambda lg: sec_re.sub(rf"\g<1>{section}", lg, count=1))
         if not ok:
@@ -926,6 +1509,8 @@ class Netlist:
         from . import sitenv
         pdk = sitenv.pdk_root().value
         if pdk:
+            if pdk.lower().endswith(".scs"):       # the model FILE pasted as the root
+                bases.append(pathlib.Path(pdk).parent)
             bases.append(pathlib.Path(pdk) / sitenv.simulator().value)
             bases.append(pathlib.Path(pdk))
         for base in ([p] if p.is_absolute() else [b / p for b in bases]):
@@ -1069,26 +1654,30 @@ class Netlist:
         read, rewrite it (the contract's behaviour) and say the choice was unverified.
 
         One file, several include lines: ADE writes one `include "toplevel.scs" section=<x>` per
-        row of the Model Library table (the corner, then e.g. `pre_Sim`, `Noise_Worst`). Only
-        one of those is the process corner, and `set_section` rewrites the FIRST line naming the
-        file -- so only the first occurrence is ever touched, and the notes say which lines were
-        left alone (they used to claim every occurrence had been rewritten).  Keep the corner row
-        first in the Model Library, or use the composite corner form.
+        row of the Model Library table (the corner, and fixed rows such as `pre_Sim`,
+        `Noise_Worst`). Only one of those is the process corner (`corner_lines`: chosen on the
+        New screen, else the one whose section reads as a corner, else the first) and only that
+        one is rewritten; the others are constants, and the notes say they were kept.
 
         Returns the notes worth showing the user.
         """
         notes: list[str] = []
         applied: list[str] = []
-        seen: dict[str, str] = {}
-        for file_path, current in self.includes():
-            if current is None:
+        for file_path, c in self.corner_lines().items():
+            current = c["section"]
+            for k, other in enumerate(c["sections"]):
+                if k != c["index"]:
+                    notes.append(f"{file_path} section={other}: left as is -- a fixed "
+                                 f"model-library section, kept as exported"
+                                 + (f"; the process corner is its section={current} line"
+                                    if current is not None else ""))
+            if c["index"] is None:
                 continue
-            if file_path in seen:
-                notes.append(f"{file_path} section={current}: left as is -- {file_path} is "
-                             f"included more than once and only its FIRST include "
-                             f"(section={seen[file_path]}) is treated as the process corner")
-                continue
-            seen[file_path] = current
+            if not c["sure"]:
+                notes.append(f"{file_path}: which of its {len(c['sections'])} section= lines is "
+                             f"the process corner is not clear from the names "
+                             f"({', '.join(c['sections'])}); the first is rewritten -- pick "
+                             "the corner line on the New screen")
             names = self.section_names(file_path)
             if names is None:
                 self.set_section(file_path, section)
