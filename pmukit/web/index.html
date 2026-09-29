@@ -1805,15 +1805,40 @@ function threeQuestions(cfgd, pins){
     if (r.bad){ S.sel["in:fmax"] = txt; render(); return; }
     patchConfig("care_up_to_hz", r.v, "in:fmax");
   });
-  /* the sections the corner include's file declares, when the server could read it */
+  /* the sections the corner include's file declares, when the server could read it; else only
+     the corner line's own section -- no corner name is ever made up here */
   var known = (pins && pins.section_choices && pins.section_choices.length)
-    ? pins.section_choices.slice() : ["tt","ss","ff","fs","sf"];
+    ? pins.section_choices.slice() : [];
+  var sf = (pins && pins.section_file) || null;
+  /* a corner typed by name: checked against the declared sections when the file was read */
+  var addCorner = regAction(function(v){
+    var txt = String(typeof v === "string" ? v : el("cornerinp").value).trim();
+    var bad = "";
+    if (!txt) bad = "type a section name of the corner include, e.g. " + (known[0] || "TOP_TT");
+    else if (!/^[A-Za-z0-9_.+-]+$/.test(txt)) bad = '"' + txt + '" is not a section name (letters, digits, _ . + -)';
+    else if (sf && sf.read && known.indexOf(txt) < 0) bad = sf.file + " declares no section " + txt;
+    setBad("in:corner", bad);
+    if (bad){ S.sel["in:corner"] = txt; render(); return; }
+    if (corners.indexOf(txt) < 0) patchConfig("corners", corners.concat([txt]), "in:corner");
+    else render();
+  });
+  var cornerNote = !sf ? ""
+    : sf.read ? '<span class="hint">the sections ' + esc(sf.file) + " declares</span>"
+    : '<span class="hint">' + ICON.warn + " could not read " + esc(sf.file) + " on this machine"
+      + ' <span class="mono" title="' + esc((sf.searched || []).join("\n")) + '">(looked in '
+      + (sf.searched || []).length + " places)</span>: only its current section is offered; type the others"
+      + " -- they are not verified until the simulator reads them</span>";
   var kt = [-40, 0, 25, 85, 125];
   return '<div style="display:flex;flex-direction:column;gap:16px">'
     + '<div class="field"><span class="lbl">1 &middot; Corners, temperatures and VSET codes'
     + '<span class="q" title="pmukit rewrites the PDK include section= per corner and sets options temp= per temperature. Temperature is continuous inside the model.">?</span></span>'
     + '<div class="rowflex"><span class="hint" style="width:66px">corners</span>'
-    + chips(known.concat(corners.filter(function(c){ return known.indexOf(c) < 0; })), corners, "corners") + "</div>"
+    + chips(known.concat(corners.filter(function(c){ return known.indexOf(c) < 0; })), corners, "corners")
+    + '<input class="inp mono' + badCls("in:corner") + '" id="cornerinp" style="width:150px" data-keep="in:corner"'
+    + ' data-keepfocus="1" data-enter="' + addCorner + '" placeholder="section name" aria-label="add a corner by section name"'
+    + ' value="' + esc(typed("in:corner", "")) + '">'
+    + '<button class="btn sm" data-act="' + addCorner + '">Add</button>' + badMsg("in:corner") + "</div>"
+    + (cornerNote ? '<div class="rowflex"><span class="hint" style="width:66px"></span>' + cornerNote + "</div>" : "")
     + '<div class="rowflex"><span class="hint" style="width:66px">temp C</span>'
     + chips(kt.concat(cfg.temps_c.filter(function(t){ return kt.indexOf(t) < 0; }))
               .sort(function(a, b){ return a - b; }).map(String),

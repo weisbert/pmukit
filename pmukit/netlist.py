@@ -278,6 +278,12 @@ _CORNER_NAMES = frozenset({"typ", "typical", "slow", "fast", "rcworst", "rcbest"
                            "cbest", "rctyp", "rctypical", "typ_rc"})
 
 
+#: A section DECLARATION in a model file: Spectre `section tt`, or spice-language `.LIB TOP_TT`
+#: alone on its line (optionally followed by a `$` comment). `.lib 'file.l' TT` is a call.
+_SECTION_DECL = re.compile(r"^[ \t]*(?:section[ \t]+([A-Za-z0-9_.+-]+)"
+                           r"|(?i:\.lib)[ \t]+([A-Za-z0-9_.+-]+)[ \t]*(?:\$.*)?$)", re.MULTILINE)
+
+
 def looks_like_corner(section: str | None) -> bool:
     s = str(section or "").strip().lower()
     return bool(s) and (s in _CORNER_NAMES
@@ -1487,17 +1493,17 @@ class Netlist:
                 where=self.where())
         return self
 
-    # Cache of {resolved include path: set of section names}. A PDK toplevel is read once per
-    # process, not once per planned run.
-    _SECTION_CACHE: dict[str, set[str] | None] = {}
+    # Cache of {resolved include path: section names in file order}. A PDK toplevel is read once
+    # per process, not once per planned run.
+    _SECTION_CACHE: dict[str, list[str] | None] = {}
 
-    def _resolve_include(self, file_path: str) -> pathlib.Path | None:
-        """Where an include line's path actually points, relative to this netlist.
-
-        Relative to the ORIGINAL file first: a deck copied into the project still means the
-        `include "models/x.scs"` next to where the user exported it.
-        """
+    def include_search_paths(self, file_path: str) -> list[pathlib.Path]:
+        """Every place an include line's path is looked for, in order: relative to the ORIGINAL
+        file first (a deck copied into the project still means the `include "models/x.scs"` next
+        to where the user exported it), then this copy, the cwd, and the model root."""
         p = pathlib.Path(file_path)
+        if p.is_absolute():
+            return [p]
         bases = []
         if self.origin:
             bases.append(pathlib.Path(self.origin).resolve().parent)
@@ -1513,10 +1519,15 @@ class Netlist:
                 bases.append(pathlib.Path(pdk).parent)
             bases.append(pathlib.Path(pdk) / sitenv.simulator().value)
             bases.append(pathlib.Path(pdk))
-        for base in ([p] if p.is_absolute() else [b / p for b in bases]):
-            if base.is_file():
-                return base
-        return None
+        out: list[pathlib.Path] = []
+        for b in bases:
+            if b / p not in out:
+                out.append(b / p)
+        return out
+
+    def _resolve_include(self, file_path: str) -> pathlib.Path | None:
+        """Where an include line's path actually points (`include_search_paths`), or None."""
+        return next((c for c in self.include_search_paths(file_path) if c.is_file()), None)
 
     # ---- relative includes in the run decks
     def _netlist_dirs(self) -> list[pathlib.Path]:
@@ -1622,7 +1633,16 @@ class Netlist:
         return out
 
     def section_names(self, file_path: str) -> set[str] | None:
-        """The `section <name>` declarations inside an included file, or None if unreadable.
+        """The sections an included file declares, or None if unreadable (`section_list`)."""
+        names = self.section_list(file_path)
+        return set(names) if names is not None else None
+
+    def section_list(self, file_path: str) -> list[str] | None:
+        """The sections an included file declares, in file order, or None if unreadable.
+
+        Both spellings a simulator accepts: Spectre's `section <name>` and, under `simulator
+        lang=spice`, `.LIB <name>` ... `.ENDL` (any case). A `.lib '<file>' <name>` line with a
+        file in front is a CALL of another file's section, not a declaration.
 
         None is not a failure: a PDK often lives behind a path this machine cannot see. The
         caller treats None as "cannot verify" and says so, rather than assuming either way.
@@ -1638,8 +1658,11 @@ class Netlist:
         except OSError:
             Netlist._SECTION_CACHE[key] = None
             return None
-        names = {m.group(1) for m in re.finditer(r"^\s*section\s+([A-Za-z0-9_.+-]+)", text,
-                                                 re.MULTILINE)}
+        names: list[str] = []
+        for m in _SECTION_DECL.finditer(text):
+            name = m.group(1) or m.group(2)
+            if name not in names:
+                names.append(name)
         Netlist._SECTION_CACHE[key] = names or None
         return names or None
 
@@ -1663,6 +1686,7 @@ class Netlist:
         """
         notes: list[str] = []
         applied: list[str] = []
+        missing: list[tuple[str, set[str], str]] = []
         for file_path, c in self.corner_lines().items():
             current = c["section"]
             for k, other in enumerate(c["sections"]):
@@ -1688,9 +1712,25 @@ class Netlist:
                 self.set_section(file_path, section)
                 applied.append(f"{file_path}={section}")
             else:
+                missing.append((file_path, names, current))
                 notes.append(f"{file_path}: left at section={current}; it declares "
                              f"{{{', '.join(sorted(names))}}} and has no '{section}'. Use the "
                              "composite corner form to set it explicitly.")
+        if missing and not applied:
+            # No include took the corner: every run of it would simulate the exported corner
+            # under this corner's name. A second include without the name (an RC file with
+            # typ/ss/ff next to a toplevel with tt) is fine; NO include having it is not.
+            f, names, was = missing[0]
+            raise PmuError(
+                what=f"corner '{section}' is not a section of {f}.",
+                why=f"A corner name is the section= its process-corner include line is rewritten "
+                    f"to; {f} declares {', '.join(self.section_list(f) or sorted(names))} and no "
+                    f"'{section}', so its runs would simulate section={was} "
+                    "under the name of another corner.",
+                do=[f"Pick the corners from the sections {f} declares (New screen, corners).",
+                    "If the name is right, check that this machine reads the same model file "
+                    "the simulator does (pmukit site: pdk_root)."],
+                where=f)
         if len(applied) > 1:
             notes.append(f"corner '{section}' set on {len(applied)} includes: "
                          f"{', '.join(applied)}")

@@ -3656,27 +3656,31 @@ def _include_payload(nl, table) -> dict:
 
     `includes`: every include line in order, the corner one marked (the others are left alone
     by a corner). `section_choices`: the sections the corner include's file really declares,
-    when this machine can read it (next to the original netlist, or under the PDK / model root)
-    -- None when it cannot, and the screen keeps its default corner names. `code_var`: the
-    output-code variable read from the parameters (a suggestion to confirm when it is not
-    VSET), and `param_followers` the parameters that are expressions of each parameter."""
+    in the file's own order (the process corners first, then any other section, never one a
+    fixed line uses such as Noise_Worst / pre_Sim), when this machine can read it -- next to
+    the original netlist, or under the PDK / model root. When it cannot, only the corner line's
+    own section: no corner name is invented, and `section_file` says which file went unread and
+    where it was looked for, so the screen can say why and let the user type the names.
+    `code_var`: the output-code variable read from the parameters (a suggestion to confirm when
+    it is not VSET), and `param_followers` the parameters that are expressions of each one."""
     from .netlist import looks_like_corner
     corner = next((i for i in table.includes if i.get("corner")), None)
-    choices = None
+    choices, source = None, None
     if corner is not None:
         try:
-            names = nl.section_names(corner["file"])
+            names = nl.section_list(corner["file"])
         except OSError:
             names = None
-        # Only process corners are offered: never a section a fixed line uses (Noise_Worst,
-        # pre_Sim), never a declared name that does not read as a corner -- except the corner
-        # line's own current section, which is always there.
         fixed = {i["section"] for i in table.includes if i.get("section") and not i["corner"]}
-        pool = sorted(names) if names else ["tt", "ss", "ff"]
-        choices = [s for s in pool if looks_like_corner(s) and s not in fixed]
+        pool = [s for s in (names or []) if s not in fixed]
+        choices = ([s for s in pool if looks_like_corner(s)]
+                   + [s for s in pool if not looks_like_corner(s)])
         if corner["section"] not in choices:
             choices.insert(0, corner["section"])
-    return {"includes": table.includes, "section_choices": choices,
+        source = {"file": corner["file"], "read": names is not None,
+                    "searched": ([] if names is not None
+                                 else [str(x) for x in nl.include_search_paths(corner["file"])])}
+    return {"includes": table.includes, "section_choices": choices, "section_file": source,
             "code_var": table.code_var, "param_followers": table.param_followers}
 
 

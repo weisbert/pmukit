@@ -352,22 +352,82 @@ def test_the_seed_guesses_no_code_variable_when_there_is_none():
     assert cfg.vset_param == "VSET" and cfg.vset_codes == [0]
 
 
-def test_corner_chips_offer_only_the_declared_process_corners(tmp_path):
+def test_corner_chips_offer_the_declared_sections_in_file_order(tmp_path):
     (tmp_path / "models").mkdir()
     (tmp_path / "models" / "pdk_top.scs").write_text(
         "".join(f"section {s}\nendsection {s}\n" for s in
-                ("TOP_TT_X", "TOP_SS_X", "TOP_FF_X", "pre_Sim", "Noise_Worst", "stat_lib")),
+                ("TOP_TT_X", "stat_lib", "TOP_SS_X", "TOP_FF_X", "pre_Sim", "Noise_Worst")),
         encoding="utf-8", newline="\n")
     nl = Netlist(bench(), tmp_path / "input.scs")
     out = server._include_payload(nl, nl.scan("XPMU"))
-    assert out["section_choices"] == ["TOP_FF_X", "TOP_SS_X", "TOP_TT_X"]
+    # corners first, then the other declared sections; never a fixed line's (pre_Sim, Noise_Worst)
+    assert out["section_choices"] == ["TOP_TT_X", "TOP_SS_X", "TOP_FF_X", "stat_lib"]
+    assert out["section_file"] == {"file": "models/pdk_top.scs", "read": True, "searched": []}
     assert len(out["includes"]) == 3
 
 
-def test_corner_chips_without_the_file_offer_the_defaults_and_the_current_corner(tmp_path):
+def test_corner_chips_without_the_file_offer_only_the_current_corner(tmp_path):
     nl = Netlist(bench(), tmp_path / "input.scs")
     out = server._include_payload(nl, nl.scan("XPMU"))
-    assert out["section_choices"] == ["TOP_TT_X", "tt", "ss", "ff"]
+    assert out["section_choices"] == ["TOP_TT_X"]           # no tt/ss/ff made up
+    sf = out["section_file"]
+    assert sf["file"] == "models/pdk_top.scs" and sf["read"] is False
+    assert str(tmp_path / "models" / "pdk_top.scs") in sf["searched"]
+
+
+# ------------------------------------------------------------------ a spice-language model file
+SPICE_TOP = """simulator lang=spice
+* corner libraries
+.LIB TOP_TT_X
+.lib 'logic_usage.alps' TT_MOS_MOSCAP
+.lib 'rf_usage.alps' RCSKEW_TYP_HFMOS_RFMOS
+.ENDL TOP_TT_X
+
+.LIB TOP_FF_X
+.lib 'logic_usage.alps' FF_MOS_MOSCAP
+.ENDL TOP_FF_X
+
+.lib TOP_FFQBEST_X $ the Q-best RF MOM
+.lib 'rf_usage.alps' QBEST_RFMOM
+.endl TOP_FFQBEST_X
+
+.LIB Noise_Worst
+.lib 'rf_usage.alps' NOISE_WORST
+.ENDL Noise_Worst
+"""
+
+
+@pytest.fixture
+def spice_pdk(tmp_path):
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "pdk_top.scs").write_text(SPICE_TOP, encoding="utf-8", newline="\n")
+    return Netlist(bench('include "models/pdk_top.scs" section=TOP_TT_X\n'
+                         'include "models/pdk_top.scs" section=Noise_Worst\n'),
+                   tmp_path / "input.scs")
+
+
+def test_spice_lib_declarations_are_sections_and_lib_calls_are_not(spice_pdk):
+    assert spice_pdk.section_list("models/pdk_top.scs") == [
+        "TOP_TT_X", "TOP_FF_X", "TOP_FFQBEST_X", "Noise_Worst"]
+
+
+def test_spice_pdk_chips_include_a_corner_whose_name_does_not_read_as_one(spice_pdk):
+    out = server._include_payload(spice_pdk, spice_pdk.scan("XPMU"))
+    assert out["section_choices"] == ["TOP_TT_X", "TOP_FF_X", "TOP_FFQBEST_X"]
+
+
+def test_a_declared_spice_corner_is_rewritten(spice_pdk):
+    spice_pdk.set_section_all("TOP_FFQBEST_X")
+    lines = [ln for ln in spice_pdk.text.splitlines() if ln.startswith("include")]
+    assert lines[0].endswith("section=TOP_FFQBEST_X") and lines[1].endswith("section=Noise_Worst")
+
+
+def test_a_corner_the_readable_model_file_lacks_is_refused(spice_pdk):
+    with pytest.raises(PmuError) as e:
+        spice_pdk.set_section_all("tt")
+    assert "'tt' is not a section of models/pdk_top.scs" in e.value.what
+    assert "TOP_TT_X, TOP_FF_X, TOP_FFQBEST_X" in e.value.why
+    assert "section=TOP_TT_X" in e.value.why
 
 
 # ------------------------------------------------------------------ through the API
