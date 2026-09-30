@@ -244,13 +244,15 @@ const configPuts = (pg) => pg.calls.filter(c => c.method === 'PUT' && c.path ===
     const r = crow(pg);
     const ctx = pg.sandbox.CTXS[(r.match(/data-menuctx="(c\d+)"/) || [])[1]];
     const t = { last_disabled: /<button class="x" disabled title="the last corner cannot be removed/.test(r),
-      last_menu: pg.sandbox.verbsFor('corner', ctx).filter(v => !v.sep).map(v => v.id) };
+      last_menu: pg.sandbox.verbsFor('corner', ctx).filter(v => !v.sep).map(v => v.id),
+      last_menu_raw: pg.sandbox.verbsFor('corner', ctx).map(v => v.sep ? '-' : v.id) };
     const p2 = await openNew(pickerRoutes({ corners: ['TOP_TT_RFTYP', 'TOP_SS_RFTYP'] }));
     const r2 = crow(p2);
     t.two_disabled = (r2.match(/class="x" disabled/g) || []).length;
     t.two_live = (r2.match(/<button class="x" data-act=/g) || []).length;
     const ctx2 = p2.sandbox.CTXS[(r2.match(/data-menuctx="(c\d+)"/) || [])[1]];
     t.two_menu = p2.sandbox.verbsFor('corner', ctx2).filter(v => !v.sep).map(v => v.id);
+    t.two_menu_raw = p2.sandbox.verbsFor('corner', ctx2).map(v => v.sep ? '-' : v.id);
     p2.sandbox.ACTS[act(r2, /<button class="x" data-act="(a\d+)" title="remove TOP_SS_RFTYP"/)]();
     await settle();
     const put = configPuts(p2).pop();
@@ -286,6 +288,21 @@ const configPuts = (pg) => pg.calls.filter(c => c.method === 'PUT' && c.path ===
     const ps = await openNew(pickerRoutes({ corners: ['TOP_SS_RFTYP', 'TOP_TT_RFTYP'] }));
     t.same_no_use = !crow(ps).includes('Use my usual corners');
     out.usual = t;
+  }
+  // ---- 7. text left in the add-corner box is a search, not a pending edit: Build plan goes on
+  {
+    const pg = await openNew(pickerRoutes());
+    combo(pg, 'input', 'TOP_F');
+    const t = { typed: pg.S.sel['in:corner'] };
+    pg.sandbox.buildPlan(); await settle();
+    t.screen = pg.S.screen; t.toast = pg.S.toast || '';
+    // a real pending edit still blocks it
+    const pf = await openNew(pickerRoutes());
+    combo(pf, 'input', 'TOP_F');
+    pf.S.sel['in:fmax'] = '5G';
+    pf.sandbox.buildPlan(); await settle();
+    t.fmax_screen = pf.S.screen; t.fmax_toast = pf.S.toast || '';
+    out.buildplan = t;
   }
   console.log(JSON.stringify(out));
 })().catch(e => { console.error(e && e.stack || e); process.exit(1); });
@@ -340,7 +357,9 @@ def test_enter_on_an_undeclared_name_is_refused_when_the_file_was_read(page):
 def test_the_last_corner_cannot_be_removed(page):
     x = page["x"]
     assert x["last_disabled"] and x["last_menu"] == ["only"]
+    assert x["last_menu_raw"] == ["only"], "no separator left dangling at the end of the menu"
     assert x["two_disabled"] == 0 and x["two_live"] == 2 and x["two_menu"] == ["only", "rm"]
+    assert x["two_menu_raw"] == ["only", "-", "rm"]
     assert x["removed"] == ["TOP_TT_RFTYP"]
 
 
@@ -356,3 +375,12 @@ def test_usual_corners_are_offered_skipped_named_and_applied_only_by_the_button(
     assert u["used"] == ["TOP_TT_RFTYP", "TOP_SS_RFTYP"]
     assert u["saved_body"] == {"corners": ["TOP_TT_RFTYP", "TOP_SS_RFTYP"]}
     assert u["after_save"] and u["same_no_use"]
+
+
+def test_text_left_in_the_add_corner_box_does_not_block_build_plan(page):
+    b = page["buildplan"]
+    assert b["typed"] == "TOP_F"
+    assert b["screen"] == "plan" and "not saved yet" not in b["toast"]
+    # a real pending edit still does
+    assert b["fmax_screen"] == "new" and "not saved yet: highest frequency" in b["fmax_toast"]
+    assert "corner" not in b["fmax_toast"]

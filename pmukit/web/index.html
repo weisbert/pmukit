@@ -736,10 +736,13 @@ var VERBS = {
 };
 
 function verbsFor(kind, ctx){
-  return (VERBS[kind] || []).filter(function(v){
+  var out = (VERBS[kind] || []).filter(function(v){
     if (v.sep) return true;
     return v.when ? v.when(ctx) !== false : true;
   });
+  /* a separator with nothing left after it (the verbs below it do not apply) is dropped */
+  while (out.length && out[out.length - 1].sep) out.pop();
+  return out;
 }
 function verbLabel(v, ctx){ return typeof v.label === "function" ? v.label(ctx) : v.label; }
 
@@ -2306,8 +2309,9 @@ function saveLoadsFromInputs(after){
    are saved first (the one box set a user edits and then walks away from); any other unsaved
    box is named and the move refused -- guessing whether "5G" was meant is not ours to do. */
 function buildPlan(){
+  /* the add-corner box is a search, not a pending edit: what is left in it blocks nothing */
   var typed = Object.keys(S.sel).filter(function(k){
-    return k.indexOf("in:") === 0 && S.sel[k] !== undefined && S.sel[k] !== null;
+    return k.indexOf("in:") === 0 && k !== "in:corner" && S.sel[k] !== undefined && S.sel[k] !== null;
   });
   var other = typed.filter(function(k){ return k.indexOf("in:load:") !== 0; });
   if (other.length){
