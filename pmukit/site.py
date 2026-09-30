@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, fields
 
@@ -47,6 +48,9 @@ SIMULATORS = ("alps", "spectre")
 
 SITE_FILE = "site.json"
 
+SECTION_NAME = re.compile(r"^[A-Za-z0-9_.+-]+$")
+"""How a model-library section name may be spelled (the netlist reads section names so)."""
+
 
 def _err(what: str, why: str, do, where: str) -> PmuError:
     return PmuError(what=what, why=why, do=list(do), where=where)
@@ -67,6 +71,10 @@ class SiteConfig:
     #: The Donau accounts this user may charge, as [{"name": ..., "note": ...}] -- the UI's
     #: dropdown.  Site facts, so they live in site.json on the box and never in this repo.
     accounts: list = field(default_factory=list)
+    #: The corners this user picks usually, per corner include file as the bench writes it
+    #: ({"models/pdk_top.scs": ["TOP_TT", "TOP_SS"]}): section names are one PDK file's own,
+    #: so another file never gets them.  Written only by "Save as my usual corners".
+    usual_corners: dict = field(default_factory=dict)
 
     # ---------------------------------------------------------------- serialization
     def to_dict(self) -> dict:
@@ -113,6 +121,15 @@ class SiteConfig:
                        "It is the list the Plan screen offers as Donau accounts.",
                        ['Write it as [{"name": "<account>", "note": "sims up to 1TB"}, ...]',
                         "Or manage it with: pmukit site --add-account <name>=<note>"], where)
+        if not isinstance(self.usual_corners, Mapping) or not all(
+                isinstance(f, str) and f.strip() and isinstance(v, list) and v
+                and all(isinstance(c, str) and SECTION_NAME.match(c) for c in v)
+                for f, v in self.usual_corners.items()):
+            raise _err("site usual_corners is not a map of include file -> section names.",
+                       "It holds the corners the New screen offers as \"my usual corners\", "
+                       "one list per corner include file.",
+                       ['Write it as {"models/pdk_top.scs": ["TOP_TT", "TOP_SS"]}',
+                        "Or delete the key; the New screen saves it again"], where)
         for name in ("queue", "ssh_host", "remote_workdir", "spectre_cmd", "project_account"):
             val = getattr(self, name)
             if not isinstance(val, str):
@@ -152,6 +169,26 @@ class SiteConfig:
         """Make `name` the account runs are charged to; an unknown one joins the list."""
         self.add_account(name)
         self.project_account = name.strip()
+
+    # ---------------------------------------------------------------- usual corners
+    def usual_for(self, file: str, declared=None) -> tuple[list, list]:
+        """(kept, skipped): the usual corners saved for `file`. Given `declared` -- the sections
+        the file was read to declare -- a saved name it lacks is skipped, never offered."""
+        saved = list(self.usual_corners.get(file) or [])
+        if declared is None:
+            return saved, []
+        return [c for c in saved if c in declared], [c for c in saved if c not in declared]
+
+    def set_usual(self, file: str, corners) -> None:
+        """Remember `corners` as the usual ones for `file`; an empty list forgets them."""
+        names = []
+        for c in corners:
+            if c not in names:
+                names.append(c)
+        if names:
+            self.usual_corners[file] = names
+        else:
+            self.usual_corners.pop(file, None)
 
     # ---------------------------------------------------------------- storage
     @staticmethod

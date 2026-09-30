@@ -86,6 +86,14 @@ table.t{width:100%;border-collapse:collapse;font-size:12.5px}
 .btn.sm{height:25px;padding:0 9px;font-size:11.5px}
 .chip{display:inline-flex;align-items:center;height:24px;padding:0 10px;border-radius:12px;border:1px solid var(--line3);background:var(--panel);color:var(--ink);font-size:12px;cursor:pointer;font-family:var(--mono)}
 .chip.on{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.chip .x{margin:0 -4px 0 6px;padding:0 2px;border:0;background:none;color:inherit;font:inherit;font-size:14px;line-height:1;cursor:pointer;opacity:.75}
+.chip .x:hover:not(:disabled){opacity:1}
+.chip .x:disabled{opacity:.3;cursor:not-allowed}
+.combo{position:relative;display:inline-block}
+.combolist{position:absolute;z-index:30;top:calc(100% + 2px);left:0;min-width:100%;max-height:240px;overflow:auto;padding:3px;background:var(--panel);border:1px solid var(--line3);border-radius:4px;box-shadow:0 6px 18px rgba(0,0,0,.18)}
+.combolist .opt{display:block;width:100%;padding:5px 8px;border:0;border-radius:3px;background:none;color:inherit;font-family:var(--mono);font-size:12px;text-align:left;white-space:nowrap;cursor:pointer}
+.combolist .opt.on,.combolist .opt:hover{background:var(--acc-bg);color:var(--acc)}
+.combolist .none{padding:5px 8px;white-space:nowrap}
 .kv{display:grid;grid-template-columns:minmax(110px,160px) 1fr;gap:5px 12px;font-size:12.5px}
 .kv .k{color:var(--ink2)}
 .field{display:flex;flex-direction:column;gap:5px}
@@ -447,6 +455,24 @@ function need(key, path, screen){
   });
   return S.data[key];
 }
+/* need() for data a screen can do without (a hint next to a field): asked the same way, but a
+   failure puts up no banner -- the screen just draws nothing for it. The failure is kept under
+   `owner`, whose own need() reports it when that screen asks. */
+function want(key, path, owner){
+  if (S.loading[key] || S.failed[key] || (S.data[key] !== undefined && !S.stale[key])) return S.data[key];
+  var tok = S.loading[key] = ++REQN;
+  api(path).then(function(d){
+    if (S.loading[key] !== tok) return;
+    S.loading[key] = false; S.data[key] = d; delete S.stale[key];
+    render();
+  }, function(e){
+    if (S.loading[key] !== tok) return;
+    S.loading[key] = false; delete S.stale[key];
+    S.failed[key] = { screen: owner || S.screen, status: e.status, error: e.error };
+    render();
+  });
+  return S.data[key];
+}
 /* The mark a panel shows while data it is drawing is being asked again ("" otherwise). */
 function updating(key, what){
   var busy = Object.keys(S.loading).some(function(k){
@@ -593,9 +619,12 @@ var VERBS = {
   ],
   corner: [
     { id:"only", label:"Only this", common:true, run:function(c){ c.only(); } },
-    { id:"all",  label:"All",       common:true, run:function(c){ c.all(); } },
+    { id:"all",  label:"All",       common:true, when:function(c){ return !!c.all; },
+      run:function(c){ c.all(); } },
     { sep:true },
-    { id:"rm",   label:"Remove from the list", run:function(c){ c.remove(); } }
+    /* the last corner has no Remove: the config needs at least one */
+    { id:"rm",   label:"Remove from the list", when:function(c){ return !!c.remove; },
+      run:function(c){ c.remove(); } }
   ],
   rail: [
     { id:"measure", label:"Measure on / off from the netlist", common:true,
@@ -998,6 +1027,17 @@ function wire(){
   document.querySelectorAll("[data-keep],[data-input]").forEach(function(n){
     var key = n.getAttribute("data-keep") || n.getAttribute("data-input");
     n.oninput = function(){ S.sel[key] = n.value; };
+  });
+  /* A combobox box (data-combo="<action>"): the action hears its typing, keys, focus, click and
+     blur as (kind, event, box). Its list (data-combolist) takes no focus on a press, so a pick
+     with the mouse does not blur the box first. */
+  document.querySelectorAll("[data-combo]").forEach(function(n){
+    var on = function(kind){ return function(e){ var f = ACTS[n.getAttribute("data-combo")]; if (f) f(kind, e, n); }; };
+    n.oninput = on("input"); n.onkeydown = on("key"); n.onfocus = on("focus");
+    n.onclick = on("click"); n.onblur = on("blur");
+  });
+  document.querySelectorAll("[data-combolist]").forEach(function(n){
+    n.onmousedown = function(e){ e.preventDefault(); };
   });
   document.querySelectorAll("[data-go]").forEach(function(n){
     n.onclick = function(){ go(n.getAttribute("data-go")); };
@@ -1805,40 +1845,11 @@ function threeQuestions(cfgd, pins){
     if (r.bad){ S.sel["in:fmax"] = txt; render(); return; }
     patchConfig("care_up_to_hz", r.v, "in:fmax");
   });
-  /* the sections the corner include's file declares, when the server could read it; else only
-     the corner line's own section -- no corner name is ever made up here */
-  var known = (pins && pins.section_choices && pins.section_choices.length)
-    ? pins.section_choices.slice() : [];
-  var sf = (pins && pins.section_file) || null;
-  /* a corner typed by name: checked against the declared sections when the file was read */
-  var addCorner = regAction(function(v){
-    var txt = String(typeof v === "string" ? v : el("cornerinp").value).trim();
-    var bad = "";
-    if (!txt) bad = "type a section name of the corner include, e.g. " + (known[0] || "TOP_TT");
-    else if (!/^[A-Za-z0-9_.+-]+$/.test(txt)) bad = '"' + txt + '" is not a section name (letters, digits, _ . + -)';
-    else if (sf && sf.read && known.indexOf(txt) < 0) bad = sf.file + " declares no section " + txt;
-    setBad("in:corner", bad);
-    if (bad){ S.sel["in:corner"] = txt; render(); return; }
-    if (corners.indexOf(txt) < 0) patchConfig("corners", corners.concat([txt]), "in:corner");
-    else render();
-  });
-  var cornerNote = !sf ? ""
-    : sf.read ? '<span class="hint">the sections ' + esc(sf.file) + " declares</span>"
-    : '<span class="hint">' + ICON.warn + " could not read " + esc(sf.file) + " on this machine"
-      + ' <span class="mono" title="' + esc((sf.searched || []).join("\n")) + '">(looked in '
-      + (sf.searched || []).length + " places)</span>: only its current section is offered; type the others"
-      + " -- they are not verified until the simulator reads them</span>";
   var kt = [-40, 0, 25, 85, 125];
   return '<div style="display:flex;flex-direction:column;gap:16px">'
     + '<div class="field"><span class="lbl">1 &middot; Corners, temperatures and VSET codes'
     + '<span class="q" title="pmukit rewrites the PDK include section= per corner and sets options temp= per temperature. Temperature is continuous inside the model.">?</span></span>'
-    + '<div class="rowflex"><span class="hint" style="width:66px">corners</span>'
-    + chips(known.concat(corners.filter(function(c){ return known.indexOf(c) < 0; })), corners, "corners")
-    + '<input class="inp mono' + badCls("in:corner") + '" id="cornerinp" style="width:150px" data-keep="in:corner"'
-    + ' data-keepfocus="1" data-enter="' + addCorner + '" placeholder="section name" aria-label="add a corner by section name"'
-    + ' value="' + esc(typed("in:corner", "")) + '">'
-    + '<button class="btn sm" data-act="' + addCorner + '">Add</button>' + badMsg("in:corner") + "</div>"
-    + (cornerNote ? '<div class="rowflex"><span class="hint" style="width:66px"></span>' + cornerNote + "</div>" : "")
+    + cornerRow(corners, pins)
     + '<div class="rowflex"><span class="hint" style="width:66px">temp C</span>'
     + chips(kt.concat(cfg.temps_c.filter(function(t){ return kt.indexOf(t) < 0; }))
               .sort(function(a, b){ return a - b; }).map(String),
@@ -1876,6 +1887,178 @@ function threeQuestions(cfgd, pins){
     + '<span class="hint mono">config sha ' + esc((cfgd.sha || "").slice(0, 8)) + "</span></div>"
     + (S.sel.showDerived ? derivedBlock() : "")
     + "</div>";
+}
+/* The corners row: the chosen corners only, as chips (x removes one, never the last -- a
+   project needs a corner); one box that finds a section of the corner include as you type
+   (Up/Down, Enter or a click adds it, Esc closes); what one more corner costs in runs; and this
+   machine's usual corners, kept per include file. What is typed, whether the list is open and
+   which row is lit live in S.sel, so a re-render (a job poll, a probe landing) draws them back
+   as they were. */
+function cornerChoices(known, corners, q){
+  q = String(q || "").trim().toLowerCase();
+  return known.filter(function(s){
+    return corners.indexOf(s) < 0 && (!q || s.toLowerCase().indexOf(q) >= 0);
+  });
+}
+/* the lit row: the one Up/Down moved to, else the typed name's own, else the first; none while
+   the box is empty (Enter then asks for a name) */
+function cornerHi(list, q){
+  if (S.sel.cornerHi !== undefined) return Math.min(S.sel.cornerHi, list.length - 1);
+  q = String(q || "").trim().toLowerCase();
+  if (!q || !list.length) return -1;
+  for (var i = 0; i < list.length; i++) if (list[i].toLowerCase() === q) return i;
+  return 0;
+}
+function cornerRow(corners, pins){
+  /* the sections the corner include's file declares, when the server could read it; else only
+     the corner line's own section -- no corner name is ever made up here */
+  var known = (pins && pins.section_choices && pins.section_choices.length)
+    ? pins.section_choices.slice() : [];
+  var sf = (pins && pins.section_file) || null;
+  var q = typed("in:corner", "");
+  var list = cornerChoices(known, corners, q);
+  var hi = cornerHi(list, q);
+  var open = !!S.sel.cornerOpen;
+  var add = function(name){
+    S.sel.cornerOpen = false; delete S.sel.cornerHi;
+    if (corners.indexOf(name) < 0) patchConfig("corners", corners.concat([name]), "in:corner");
+    else { dropTyped("in:corner"); render(); }
+  };
+  /* a corner typed by name: checked against the declared sections when the file was read */
+  var addTyped = function(v){
+    var txt = String(v || "").trim();
+    var bad = "";
+    if (!txt) bad = "type a section name of the corner include, e.g. " + (known[0] || "TOP_TT");
+    else if (!/^[A-Za-z0-9_.+-]+$/.test(txt)) bad = '"' + txt + '" is not a section name (letters, digits, _ . + -)';
+    else if (sf && sf.read && known.indexOf(txt) < 0) bad = sf.file + " declares no section " + txt;
+    setBad("in:corner", bad);
+    if (bad){ S.sel["in:corner"] = txt; S.sel.cornerOpen = false; render(); return; }
+    add(txt);
+  };
+  /* Enter: the lit row of the open list, else the name as typed */
+  var enter = function(v){ if (open && hi >= 0) add(list[hi]); else addTyped(v); };
+  var combo = regAction(function(kind, e, n){
+    var show = function(on){
+      S.sel.cornerOpen = on;
+      var l = el("cornerlist"); if (l) l.style.display = on ? "" : "none";
+      var b = el("cornerinp"); if (b) b.setAttribute("aria-expanded", on ? "true" : "false");
+    };
+    if (kind === "focus" || kind === "click"){
+      /* focus put back by a re-render is not a new visit: an Esc-closed list stays closed */
+      if (kind === "click" || !S.sel.cornerFocus){ S.sel.cornerFocus = true; show(true); }
+      return;
+    }
+    if (kind === "blur"){
+      setTimeout(function(){
+        var a = document.activeElement;
+        if (a && a.id === "cornerinp") return;          /* a re-render put the cursor back */
+        S.sel.cornerFocus = false; show(false);
+      }, 0);
+      return;
+    }
+    if (kind === "input"){
+      if (n.value) S.sel["in:corner"] = n.value; else delete S.sel["in:corner"];
+      delete S.sel.cornerHi; setBad("in:corner", "");
+      S.sel.cornerOpen = true; render();
+      return;
+    }
+    var k = e && e.key;
+    if (k === "ArrowDown" || k === "ArrowUp"){
+      e.preventDefault();
+      var at = open ? hi : -1;
+      if (list.length) S.sel.cornerHi = k === "ArrowDown" ? Math.min(at + 1, list.length - 1) : Math.max(at - 1, 0);
+      S.sel.cornerOpen = true; render();
+      var lit = document.querySelector && document.querySelector("#cornerlist .opt.on");
+      if (lit && lit.scrollIntoView) lit.scrollIntoView({ block: "nearest" });
+    } else if (k === "Enter"){
+      e.preventDefault(); enter(n.value);
+    } else if (k === "Escape" && open){
+      e.preventDefault(); e.stopPropagation();          /* closes the list, nothing else */
+      delete S.sel.cornerHi; show(false);
+    }
+  });
+  var chips = corners.map(function(c){
+    var rm = corners.length > 1
+      ? function(){ patchConfig("corners", corners.filter(function(x){ return x !== c; })); } : null;
+    var ctx = regCtx({ row: { name: c }, only: function(){ patchConfig("corners", [c]); }, remove: rm });
+    var x = rm
+      ? '<button class="x" data-act="' + regAction(rm) + '" title="remove ' + esc(c) + '" aria-label="remove '
+        + esc(c) + '">&times;</button>'
+      : '<button class="x" disabled title="the last corner cannot be removed: a project needs at least one'
+        + ' -- add another first" aria-label="remove ' + esc(c) + '">&times;</button>';
+    return '<span class="chip on rc"' + rc("corner", "corners " + c, ctx) + ">" + esc(c) + x + "</span>";
+  }).join(" ");
+  var none = q
+    ? (sf && sf.read ? esc(sf.file) + " declares no section matching " + esc(q.trim())
+       : "Enter adds " + esc(q.trim()) + " as typed (not verified" + (sf ? ": " + esc(sf.file) + " could not be read" : "") + ")")
+    : known.length ? "every declared section is chosen"
+    : "no sections to offer: type a section name";
+  var opts = list.length ? list.map(function(s, i){
+    return '<button class="opt' + (i === hi ? " on" : "") + '" id="copt-' + i + '" role="option" tabindex="-1"'
+      + (i === hi ? ' aria-selected="true"' : "") + ' data-act="' + regAction(function(){ add(s); }) + '">'
+      + esc(s) + "</button>";
+  }).join("") : '<div class="none hint">' + none + "</div>";
+  var box = '<span class="combo"><input class="inp mono' + badCls("in:corner") + '" id="cornerinp" style="width:190px"'
+    + ' data-keepfocus="1" data-combo="' + combo + '" role="combobox" aria-autocomplete="list"'
+    + ' aria-controls="cornerlist" aria-expanded="' + (open ? "true" : "false") + '"'
+    + (open && hi >= 0 ? ' aria-activedescendant="copt-' + hi + '"' : "")
+    + ' placeholder="add a corner&hellip;" aria-label="add a corner: type to find a section" autocomplete="off"'
+    + ' value="' + esc(q) + '">'
+    + '<div class="combolist" id="cornerlist" role="listbox" data-combolist="1"'
+    + (open ? "" : ' style="display:none"') + ">" + opts + "</div></span>";
+  /* what one more corner costs: the runs of the first corner in the plan as it compiles now --
+     nothing while no plan compiles (no rail modeled yet), never a made-up number */
+  var pl = want("plan", "/api/p/" + P() + "/plan", "plan");
+  var per = pl && pl.by_corner ? pl.by_corner[corners[0]] : 0;
+  var cost = per > 0 ? '<span class="hint" title="the runs one corner takes in the plan as it stands:'
+    + ' every run is repeated per corner">each corner &asymp; +' + per + " runs</span>" : "";
+  var note = !sf ? ""
+    : sf.read ? '<span class="hint">type to find one of the ' + known.length + " sections " + esc(sf.file) + " declares</span>"
+    : '<span class="hint">' + ICON.warn + " could not read " + esc(sf.file) + " on this machine"
+      + ' <span class="mono" title="' + esc((sf.searched || []).join("\n")) + '">(looked in '
+      + (sf.searched || []).length + " places)</span>: only its current section is offered; type the others"
+      + " -- they are not verified until the simulator reads them</span>";
+  var pad = '<div class="rowflex"><span class="hint" style="width:66px"></span>';
+  return '<div class="rowflex"><span class="hint" style="width:66px">corners</span>'
+    + chips + box + badMsg("in:corner") + cost + "</div>"
+    + usualCorners(corners, sf, pad)
+    + (note ? pad + note + "</div>" : "");
+}
+/* "My usual corners", this machine's, kept per corner include file (another PDK file never
+   gets these names). Only ever applied by the button -- a new project is not given them. */
+function usualCorners(corners, sf, pad){
+  if (!sf || !sf.file) return "";
+  var key = "usual:" + sf.file + (sf.read ? ":read" : "");
+  var u = want(key, "/api/p/" + P() + "/corners/usual");
+  if (!u || !u.file) return "";
+  var same = function(a, b){
+    return a.length === b.length && a.slice().sort().join("\n") === b.slice().sort().join("\n");
+  };
+  var save = regAction(function(){
+    api("/api/p/" + P() + "/corners/usual", { method:"PUT", body:{ corners: corners.slice() } })
+      .then(function(d){
+        S.data[key] = d;
+        S.toast = "saved as your usual corners";
+        render(); setTimeout(function(){ S.toast = ""; render(); }, 1400);
+      }, showErr);
+  });
+  var use = regAction(function(){ patchConfig("corners", u.corners.slice()); });
+  var out = [];
+  if (!same(u.saved || [], corners)){
+    out.push('<button class="btn sm" data-act="' + save + '" title="remember these corners on this machine for '
+      + esc(u.file) + '">Save as my usual corners</button>');
+  } else {
+    out.push('<span class="hint">' + ICON.ok + " your usual corners</span>");
+  }
+  if ((u.corners || []).length && !same(u.corners, corners)){
+    out.push('<button class="btn sm" data-act="' + use + '">Use my usual corners ('
+      + esc(u.corners.join(", ")) + ")</button>");
+  }
+  if ((u.skipped || []).length){
+    out.push('<span class="hint">' + ICON.warn + " " + esc(u.skipped.join(", "))
+      + (u.skipped.length > 1 ? " are" : " is") + " not in " + esc(u.file) + ", skipped</span>");
+  }
+  return pad + out.join("") + "</div>";
 }
 function derivedBlock(){
   /* asked here, not only when the panel opens: a saved answer forgets it, and it follows */

@@ -1977,6 +1977,71 @@ class Api:
         cfg.save(path)
         return self.site_get()
 
+    # ---------------------------------------------------------------- usual corners
+    def _corner_file(self, project: str) -> dict | None:
+        """The project's corner include as the New screen sees it -- {file, read, choices} --
+        or None when the bench has no corner line (nothing to keep usual corners under)."""
+        pr = Project(project, self.root)
+        ent = pr.scanned()
+        inc = _include_payload(ent.nl, pr.pins(ent.netlist()))
+        sf = inc.get("section_file")
+        if not sf:
+            return None
+        return {"file": sf["file"], "read": bool(sf["read"]),
+                "choices": list(inc.get("section_choices") or [])}
+
+    def usual_corners(self, project: str) -> dict:
+        """The corners this machine keeps as usual for the project's corner include file.
+
+        Kept in site.json per file name, so another PDK file never gets this one's names.
+        `saved` is what was stored; `corners` what "Use my usual corners" sets -- when the file
+        was read, only the names it declares -- and `skipped` the saved names it does not."""
+        empty = {"file": "", "read": False, "saved": [], "corners": [], "skipped": []}
+        if self.demo:
+            return empty
+        from .site import SiteConfig
+        cf = self._corner_file(project)
+        if cf is None:
+            return empty
+        site = SiteConfig.load(site_path(self.root), env=False)
+        kept, skipped = site.usual_for(cf["file"], cf["choices"] if cf["read"] else None)
+        return {"file": cf["file"], "read": cf["read"], "saved": site.usual_for(cf["file"])[0],
+                "corners": kept, "skipped": skipped}
+
+    def set_usual_corners(self, project: str, body: dict) -> dict:
+        """"Save as my usual corners": {"corners": [...]} stored under the project's corner
+        include file in site.json ([] forgets them). A name the read file does not declare is
+        refused, the way a corner is."""
+        from .site import SECTION_NAME, SiteConfig
+        where = f"PUT /api/p/{project}/corners/usual"
+        corners = (body if isinstance(body, dict) else {}).get("corners")
+        if not isinstance(corners, list) or not all(
+                isinstance(c, str) and SECTION_NAME.match(c) for c in corners):
+            raise _err("the usual corners are not a list of section names.",
+                       "They are the section names of the corner include, e.g. TOP_TT_RFTYP -- "
+                       "letters, digits, _ . + -.",
+                       ['Send {"corners": ["TOP_TT", "TOP_SS"]}', 'Or {"corners": []} to forget them'],
+                       where)
+        if self.demo:
+            return self.usual_corners(project)
+        cf = self._corner_file(project)
+        if cf is None:
+            raise _err(f"{project}'s netlist has no corner include line.",
+                       "Usual corners are kept per corner include file (the include line whose "
+                       "section= is the process corner); this bench has none to keep them under.",
+                       ["Load a bench whose PDK include line carries section=<corner>"], where)
+        lacking = [c for c in corners if cf["read"] and c not in cf["choices"]]
+        if lacking:
+            raise _err(f"{cf['file']} declares no section {', '.join(lacking)}.",
+                       f"The usual corners of {cf['file']} are its own sections: "
+                       f"{', '.join(cf['choices'])}.",
+                       ["Remove it from the corners, then save them again"], where)
+        path = site_path(self.root)
+        site = SiteConfig.load(path, env=False)
+        site.set_usual(cf["file"], corners)
+        site.save(path)
+        return self.usual_corners(project)
+
     # ---------------------------------------------------------------- Home
     def projects(self) -> dict:
         if self.demo:
@@ -2615,10 +2680,14 @@ class Api:
                 row["cpu_hours"] = round(row.get("cpu_seconds", 0.0) / 3600.0, 2)
         cfg = pr.config()
         cells = len(cfg.corner_names()) * len(cfg.temps_c) * len(cfg.vset_codes)
+        # the ticked runs per corner: what one more corner costs (the New screen's corners row)
+        by_corner: dict[str, int] = {}
+        for r in plan.runs(enabled_only=True):
+            by_corner[r.run.process] = by_corner.get(r.run.process, 0) + 1
         return {"project": project, "config_sha": plan.config_sha,
                 "derived_sha": plan.derived_sha, "groups": rows,
                 "ticks": pr.state().plan_ticks, "cost": plan.cost_summary(),
-                "cells": cells, "cached": cached,
+                "cells": cells, "cached": cached, "by_corner": by_corner,
                 "states": [{"key": s.key, "label": s.label, "currents": s.currents}
                            for s in plan.states],
                 "notes": plan.notes}
@@ -4830,6 +4899,16 @@ def _r_import(api, h, a, q, b):
 @route("GET", r"/api/p/<project>/pins")
 def _r_pins(api, h, a, q, b):
     return api.pins(a["project"])
+
+
+@route("GET", r"/api/p/<project>/corners/usual")
+def _r_usual_corners(api, h, a, q, b):
+    return api.usual_corners(a["project"])
+
+
+@route("PUT", r"/api/p/<project>/corners/usual")
+def _r_usual_corners_put(api, h, a, q, b):
+    return api.set_usual_corners(a["project"], b)
 
 
 @route("PUT", r"/api/p/<project>/pins/<pin>")
