@@ -103,8 +103,8 @@
 | 端口类型 | 块 | 参数 | 观测量 | 依赖轴 | 档 |
 |---|---|---|---|---|---|
 | 电压轨 | dc | vout(load, T, vset) 表 + dropout + 限流 | `dc_load`, `dc_temp` | process, T(连续), vset, load | hb |
-| 电压轨 | zout | RLC 梯 + 有源段 | `ac_zout` | process, T, vset, load | hb |
-| 电压轨 | psrr | 实极点段 + 复极点段（gm-C 实现）| `ac_psrr` | process, T, vset, load | hb |
+| 电压轨 | zout | RLC 梯 + 有源段 | `ac_zout` | process, T, load（只在标称档）| hb |
+| 电压轨 | psrr | 实极点段 + 复极点段（gm-C 实现）| `ac_psrr` | process, T, load（只在标称档）| hb |
 | 电压轨 | noise | 白 + 1/f + Lorentzian 组 | `noise_v` | process, T, load | hb |
 | 电压轨 | load_en | 跌落/过冲的非线性辅助项 | `tran_load_on`, `tran_load_off` | process, T | ls（逐项开关 + HB 体检）|
 | 电压轨 | no_sink | 单向导通约束 | 无（发射器常量）| 无 | hb |
@@ -117,6 +117,8 @@
 档的含义：`hb` 默认开，进 RF/HB 交付；`ls` 每项单独开关，必须过 HB 首步残差体检才允许默认开；`en` 只保证消费者台子切 EN 不炸，不签核。
 
 **测量计划由这张表 × 项目配置的轴自动推出**，按 AC 叠加去重（一次电源注入读全部端口）、按网表分组。每条 run 都能回答"我为哪个参数而存在"。
+
+**输出档（2026-09-30）：** 档位在芯片上是固定的，设计者只在仿真里挪它做 PVT 的 V（整条轨上下平移）。所以 `vset_codes` 的第一个是**标称档**：所有小信号（Zout、PSRR、噪声）只在标称档测；其余档只测 DC 输出（vout、vout_tc、dropout、限流、偏置 I-V）。多于一个档时，计划多一组**档位检查**（`code_check`）：每个角、最冷和最热温度、标称负载态，在最低和最高档（等于标称的跳过）再跑一次各轨的 Zout 注入和电源注入。这组 run 不喂任何参数、不进拟合，结果存在单独的 `codecheck/` 数据集；报告里拿同角同温的标称档实测曲线对比，在关心频带内给出每条轨 |ΔZout|、|ΔPSRR| 的最大 dB 和所在频率（≤2 dB ok，≤6 dB marginal，更大 bad）。只报告，不挡交付。
 
 ## 2. 数据集（表征结果，有维度）
 
@@ -131,7 +133,7 @@
     "freq_hz": "per-variable coordinate", "time_s": "per-variable coordinate"
   },
   "variables": {
-    "ac_zout.pll":   {"dims": ["process", "temp_c", "vset", "load_a", "freq_hz"], "dtype": "complex128", "file": "ac_zout.pll.npy", "coord": "freq_ac.npy"},
+    "ac_zout.pll":   {"dims": ["process", "temp_c", "load_a", "freq_hz"], "dtype": "complex128", "file": "ac_zout.pll.npy", "coord": "freq_ac.npy"},
     "noise_v.pll":   {"dims": ["process", "temp_c", "vset", "load_a", "freq_hz"], "dtype": "float64", "unit": "V^2/Hz", "file": "…"},
     "dc_iv.iptat":   {"dims": ["process", "temp_c", "vset", "vpin_v"], "dtype": "float64", "unit": "A", "file": "…"},
     "tran_load_on.pll": {"dims": ["process", "temp_c", "vset", "time_s"], "dtype": "float64", "file": "…", "coord": "t_load_on.pll.npy"}
@@ -142,6 +144,7 @@
 
 规则：
 - 变量名 = `观测量.端口`，维度顺序固定为 `process, temp_c, vset, [load_a], [扫描坐标]`。
+- 小信号变量（`ac_zout`、`ac_psrr`）没有 `vset` 维：它们是标称档的。档位检查的 run 存在旁边的 `codecheck/` 目录（同一种数据集，但按档存，带 `vset` 维），拟合器从不打开它。
 - 缺格子用 NaN 填并在 `missing` 里登记原因，拟合器看得见"没跑"和"跑坏了"的区别。
 - 数据集在 `$PMUKIT_DATA/<project>/dataset/`，不进 git。
 
@@ -185,7 +188,7 @@ $PMUKIT_DATA/<project>/deliver/<stamp>/
   PMU_<project>_ss.va
   PMU_<project>_ff.va
   envelope.json              有效包络：频率上限、负载范围、温度范围、VSET 档、哪些 ls 项默认开
-  report.md                  每角分块评分、HB 体检结果、未跑项清单
+  report.md                  每角分块评分、HB 体检结果、未跑项清单、输出档一节（小信号来自标称档 + 档位检查表）
   grades.json                report.md 的机读版；graded_by = verify / fit，provisional = 评分为何只是临时的
   provenance.json            config_sha、dataset_sha、pmukit 版本、表征时 TB 状态、日期
   interface.json             PMU 的引脚（按 PMU 的顺序）、哪些是直通脚、模块名和实例行（所有角同一行）
@@ -197,7 +200,7 @@ $PMUKIT_DATA/<project>/deliver/<stamp>/
   - 模型里没有东西的脚是**直通脚**（pass-through）：照样声明成端口，内部只经 1 GΩ 接到模型的地，免得台子里悬空时 DC 无解。包括：没有角色的脚（TESTMODE）、EN（发射出的模型**没有使能行为**——EN 怎么驱动都无效，模型始终是开的；EN 上电斜坡的拟合数据在 grades 里，模型不回放它）、没能发射的轨/偏置、没有任何块回流到的地脚、标了 `ignore` 的脚。
   - 地脚按 PMU 的名字留在 PMU 的位置上；系统台子里照旧接 `0`。
   - 名字不是合法 Verilog-A 标识符的直通脚（读不到子电路时引脚按网名叫，如 `0#9`）改成合法名，**位置不变**——按位置连接，名字只是给人看的。
-  - 实例参数不变：`vset`、`load_en_<轨>`。
+  - 实例参数不变：`vset`、`load_en_<轨>`。台子声明了档位变量（`vset_param`）时，实例行写 `vset=<变量名>`（如 `vset=LDO_VSET`），设计者自己的 V 角直接带动模型，不用改实例；没声明时写标称档的数字。不在已表征档位里的档就近取最近的已表征档；小信号在任何档都来自标称档。
   - `report.md` 的「Pins」一节逐脚列出，直通脚标明，并说清后果（例如 EN 无效 → 模型始终开）；`.scs` 注释和 `interface.json` 给出可直接粘贴的实例行：台子里原来那一行，master 换成模型。
   - derived config 里没有 PMU 引脚顺序（旧项目）时退回「电源、轨、偏置、stub、地」的顺序，并在报告和注释里明说；重读网表再交付即可。
 - 每个 `.va` 文件头重复一遍 `provenance.json` 的内容，文件脱离目录也能追溯。
@@ -250,6 +253,6 @@ $PMUKIT_DATA/<project>/deliver/<stamp>/
 ## 已确认（2026-09-15）
 
 1. 交付形式：corner 设置靠模型文件的 `section` 切工艺角 → 契约 4 的 `.scs` 库形式成立。
-2. `vset` 用档位号；网表里由一个设计变量控制输出电压，程序直接改写。变量名由设计者定（2026-09-24 更正：原先写死 `VSET`），配置里 `vset_param` 指定；要跑多个档而网表里没声明这个变量时，程序拒绝（否则每档跑的是同一个电路）。
+2. `vset` 用档位号；网表里由一个设计变量控制输出电压，程序直接改写。变量名由设计者定（2026-09-24 更正：原先写死 `VSET`），配置里 `vset_param` 指定；要跑多个档而网表里没声明这个变量时，程序拒绝（否则每档跑的是同一个电路）。2026-09-30：第一个档是标称档，小信号只在它上面测，其余档只测 DC + 报告里的档位检查（见契约 1 下的「输出档」）。
 3. 源前缀 `IL_`/`VB_`/`VS_`/`VEN_` 接受；配 schematic 模板。
 4. 工艺角由工具改 PDK include 行生成；用户只导一份网表。

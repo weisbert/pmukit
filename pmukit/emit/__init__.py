@@ -35,7 +35,7 @@ from .primitives import FORBIDDEN, WHITELIST, Netlist
 from .va import build_va, emit_va, module_name
 
 __all__ = ["deliver", "deliver_project", "saved_fit", "delivery_grades", "verify_state",
-           "verify_inputs", "STALE_VERIFY", "NO_VERIFY", "emit_va", "build_va", "module_name", "lint", "primitives", "scs",
+           "instance_params", "verify_inputs", "STALE_VERIFY", "NO_VERIFY", "emit_va", "build_va", "module_name", "lint", "primitives", "scs",
            "Netlist", "WHITELIST", "FORBIDDEN", "HB_CHECK_NAME"]
 
 #: Where the full conditioning report lands inside the deliverable (report.md links to it).
@@ -254,7 +254,7 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
             provenance=None, stamp=None, hb_robust: bool = True, harmonic: int = lint.HARMONIC,
             flicker_mode: str = "bank", ls_default_on=(), not_run=(), dataset_sha: str = "",
             tb_state_note: str = "", netlist_sha: str = "", graded_by: str = "",
-            provisional: str = "", on_progress=None) -> pathlib.Path:
+            provisional: str = "", on_progress=None, code_check=None) -> pathlib.Path:
     """Write the whole contract-4 deliverable and return its stamped directory.
 
     One `.va` per process corner -- every one defining the SAME module `PMU_<project>` -- the
@@ -263,6 +263,8 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
     `hb_check.txt` -- the full conditioning report.  `grades` comes from `pmukit.verify`; when it
     is not supplied the report says so honestly instead of inventing a verdict, and
     `provisional` is the sentence report.md prints when the grades are the fit's own.
+    `code_check` is the output-code check (`pmukit.verify.codecheck`); None computes it from the
+    project's datasets.  It is report-only: whatever it says, the deliverable is written.
 
     With no `fit=`, the saved fit (fit.json) is used -- see `saved_fit()`; nothing is re-fitted
     unless it is missing or older than the dataset.  `deliver_project()` is the whole step the
@@ -339,8 +341,7 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
     envelope = _envelope(d, rails_seen, corner_list, ls_default_on, env_notes,
                          ports=(set(rails_seen) | set(d.biases or {}) | set(d.en or {})))
     iface = d.interface or {}
-    codes = [c for c in ((d.vset or {}).get("codes") or []) if c is not None]
-    params = [("vset", int(codes[0]))] if codes else []
+    params = instance_params(d)
     writer.write_scs(provenance=prov,
                      extra_lines=scs.extra_lines(modules, library=f"PMU_{project}",
                                                  ports_by_corner=ports_by_corner,
@@ -363,13 +364,16 @@ def deliver(project: str, *, root=None, fit=None, derived=None, corners=None, gr
     hb_check["detail"] = (f"full element-by-element conditioning report, the primitive whitelist "
                           f"and the emitter notes: {HB_CHECK_NAME}")
 
+    if code_check is None:
+        code_check = _code_check(project, d, root)
     writer.write_report(envelope=envelope,
                         grades=[g if isinstance(g, Grade) else Grade.from_json(g)
                                 for g in (grades or [])],
                         hb_check=hb_check,
                         not_run=list(not_run) + _never_run(skipped, corner_list),
                         stubs=list(d.stubs or {}), pins=pins, graded_by=graded_by,
-                        provisional=provisional)
+                        provisional=provisional, code_check=code_check,
+                        vset=dict(params).get("vset"))
     writer.write_provenance(prov)
     (writer.path / HB_CHECK_NAME).write_text(
         _hb_check_text(project, checks, notes, hb_robust), encoding="utf-8", newline="\n")
@@ -461,6 +465,32 @@ def deliver_project(project: str, *, root=None, derived=None, on_progress=None,
                   on_progress=lambda m, f: say(m, start + (0.99 - start) * f), **kw)
     return {"path": out, "stamp": out.name, "refit": refit, "verify": state,
             "graded_by": kw.get("graded_by", ""), "provisional": kw.get("provisional", "")}
+
+
+def instance_params(d: DerivedConfig) -> list:
+    """The instance line's parameters: `[("vset", <value>)]`, or [] when there is no code.
+
+    The model's only code knob is its instance parameter `vset`.  When the bench declares the
+    code variable (`derived.vset.declared`), the value is that VARIABLE -- `vset=LDO_VSET` -- so the
+    designer's own V corners move the model with no edit to the instance; otherwise it is the
+    nominal code as a number."""
+    v = d.vset or {}
+    codes = [c for c in (v.get("codes") or []) if c is not None]
+    if not codes:
+        return []
+    name = str(v.get("param") or "")
+    if name and v.get("declared"):
+        return [("vset", name)]
+    return [("vset", int(codes[0]))]
+
+
+def _code_check(project: str, d: DerivedConfig, root) -> dict:
+    """The output-code check for report.md / grades.json -- never a reason not to deliver."""
+    try:
+        cc = importlib.import_module("pmukit.verify.codecheck")
+        return cc.for_project(project, root=root, derived=d)
+    except (ImportError, PmuError) as exc:
+        return {"codes": [], "rows": [], "error": str(getattr(exc, "what", exc))}
 
 
 def _pins_for_report(iface_by_corner: dict) -> list:

@@ -721,9 +721,15 @@ def derive(cfg: ProjectConfig, pins=None, site=None) -> DerivedConfig:
         nominal = None
     if nominal in codes:
         codes = [nominal] + [c for c in codes if c != nominal]
+    # `declared`: does the bench itself declare the variable? Then the delivered instance line
+    # writes `vset=<name>` and the designer's own V corners move the model; None = not known
+    # (no netlist read yet), which the emitter treats like False: the nominal code as a number.
     d.vset = {"codes": codes, "param": name,
+              "declared": (name in declared) if isinstance(declared, Mapping) else None,
               "provenance": f"config.vset_codes -> the netlist parameter {name} (config."
-                            f"vset_param) is rewritten per code (0b row: VSET)"}
+                            f"vset_param) is rewritten per code (0b row: VSET); the first code is "
+                            f"the nominal one -- every small-signal run is at it, the other codes "
+                            f"measure the DC output (plus the report-only Zout/PSRR code check)"}
 
     # -- frequency / noise / grouping (config-only) ---------------------------
     stop_hz = float(cfg.care_up_to_hz)

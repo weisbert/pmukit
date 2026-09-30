@@ -55,7 +55,8 @@ __all__ = ["Limit", "LIMITS", "DEFAULT_DB", "DEFAULT_PCT", "limit_for", "explain
            "band_for", "grade_block", "grade_project", "rollup", "rollup_table",
            "worst", "GRADES", "flagged_parameters", "partial_variables", "never_run_lines",
            "headline", "default_off", "switch_for", "off_note", "block_verdict",
-           "short_reason", "is_held", "HELD_MARK"]
+           "short_reason", "is_held", "HELD_MARK", "CODE_CHECK_OK_DB", "CODE_CHECK_MARGINAL_DB",
+           "CODE_CHECK_GRADES"]
 
 
 # --------------------------------------------------------------------------- the table
@@ -169,6 +170,17 @@ DEFAULT_DB = Limit(green=1.0, yellow=3.0, unit="dB",
                    why="fallback for an unlisted dB metric: the spectral row.")
 DEFAULT_PCT = Limit(green=1.0, yellow=3.0, unit="%",
                     why="fallback for an unlisted % metric: the percent row.")
+
+#: The output-code check (`verify.codecheck`): measured against measured -- the nominal code's
+#: Zout / PSRR curve against the lowest / highest code's, same corner, same temperature -- the
+#: largest |difference| in dB over the care band.  It is NOT a block grade and never enters one:
+#: the small-signal blocks are fitted at the nominal code only and the check says how far that
+#: carries.  2 dB is what the feedback ratio alone moves across a code range (beta changes about
+#: 20 %), i.e. "other codes change the DC output only" holds.  6 dB -- a factor of 2 -- is past
+#: anything beta explains: the loop is losing gain, which at the top codes means headroom.
+CODE_CHECK_OK_DB = 2.0
+CODE_CHECK_MARGINAL_DB = 6.0
+CODE_CHECK_GRADES = ("ok", "marginal", "bad")
 
 
 def limit_for(metric: str) -> tuple[Limit | None, bool]:

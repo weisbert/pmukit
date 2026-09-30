@@ -15,6 +15,7 @@ No module under `pmukit/fit/` may launch a process: every curve the Model screen
 """
 from __future__ import annotations
 
+import contextvars
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -32,6 +33,11 @@ TWO_PI = 2.0 * np.pi
 #: `vout` and `idc` are the values AT this temperature and `vout_tc` / `ptat_slope` are the
 #: slopes away from it, so a parameter table needs no hidden context to be evaluated.
 T_REF_C = 25.0
+
+#: The nominal output code (`derived.vset.codes[0]`) while `fit_project` runs.  The small-signal
+#: variables carry no vset axis; a dataset written before they became nominal-code only stores
+#: them PER CODE, and such a variable is read at this code (see `_cell_for_var`).
+NOMINAL_VSET: contextvars.ContextVar = contextvars.ContextVar("pmukit_nominal_vset", default=None)
 
 
 # --------------------------------------------------------------------------- the result
@@ -204,9 +210,27 @@ def _cell_for_var(ds, var: str, cell: dict) -> dict:
     out = {}
     for dim in cells:
         if dim not in cell:
-            raise NoData(f"{var} is stored over {dim} but the fit cell does not name it")
+            code = _stored_code(ds) if dim == "vset" else None
+            if code is None:
+                raise NoData(f"{var} is stored over {dim} but the fit cell does not name it")
+            out[dim] = code
+            continue
         out[dim] = cell[dim]
     return out
+
+
+def _stored_code(ds):
+    """The code a block WITHOUT a vset axis reads a per-code variable at -- a dataset from before
+    the small-signal blocks became nominal-code only: the one code of a one-code axis, else the
+    nominal code `fit_project` was given.  None when neither is known."""
+    try:
+        axis = list(ds.axis("vset"))
+    except Exception:                                 # noqa: BLE001 -- no vset axis at all
+        return None
+    if len(axis) == 1:
+        return axis[0]
+    nominal = NOMINAL_VSET.get()
+    return next((a for a in axis if nominal is not None and _same(a, nominal)), None)
 
 
 def _psd_to_amplitude(values: np.ndarray, unit: str) -> tuple[np.ndarray, str]:

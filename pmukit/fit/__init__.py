@@ -32,7 +32,7 @@ from .. import jsonio, spec
 from ..dataset import cell_key
 from ..errors import PmuError
 from . import bias, dc, en, identifiability, load_en, noise, psrr, zout
-from ._base import BlockFit, T_REF_C, block_cell, missing_fit, var_layout
+from ._base import NOMINAL_VSET, BlockFit, T_REF_C, block_cell, missing_fit, var_layout
 
 __all__ = ["BlockFit", "FitResult", "fit_port", "fit_project", "MODULES", "LONG_BLOCKS",
            "T_REF_C", "zout", "psrr", "noise", "dc", "bias", "load_en", "en", "identifiability"]
@@ -342,7 +342,20 @@ def fit_project(dataset, derived=None, *, tiers=("hb", "ls", "en"), on_event=Non
     processes = _axis(dataset, "process")
     temps = _axis(dataset, "temp_c")
     vsets = _axis(dataset, "vset")
+    codes = list((getattr(derived, "vset", None) or {}).get("codes") or [])
+    token = NOMINAL_VSET.set(codes[0] if codes else None)
+    try:
+        _fit_cells(dataset, derived, res, table, processes, temps, vsets, tiers, on_event,
+                   on_progress, on_block)
+    finally:
+        NOMINAL_VSET.reset(token)
+    _cft_spread_note(res)
+    return res
 
+
+def _fit_cells(dataset, derived, res, table, processes, temps, vsets, tiers, on_event,
+               on_progress, on_block) -> None:
+    """The loop of `fit_project`: every port, every cell of the project's own axes."""
     loads_of = {port: (_axis(dataset, "load_a", port) if ptype == "rail" else [None])
                 for port, ptype in table.items()}
     total = sum(len(processes) * len(temps) * len(vsets) * len(loads_of[p]) for p in table)
@@ -379,8 +392,6 @@ def fit_project(dataset, derived=None, *, tiers=("hb", "ls", "en"), on_event=Non
                                 on_event({"port": bf.port, "block": bf.block,
                                           "cell": dict(bf.cell), "score": bf.score,
                                           "metric": bf.metric, "missing": bf.missing})
-    _cft_spread_note(res)
-    return res
 
 
 def _cft_spread_note(res: FitResult) -> None:

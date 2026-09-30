@@ -123,7 +123,7 @@ const out = {};
   act(nodes.main.innerHTML, /id="fmaxinp"[^>]*data-enter="(a\d+)"/)('fast');
   t.fast = nodes.main.innerHTML.match(/fielderr[^>]*>[^<]*(<svg[\s\S]*?<\/svg>)?([^<]*)/)[2];
   t.fast_kept = nodes.main.innerHTML.includes('value="fast"');
-  const codes = () => act(nodes.main.innerHTML, /id="vsetinp"[^>]*data-enter="(a\d+)"/);
+  const codes = () => act(nodes.main.innerHTML, /id="vsetalso"[^>]*data-enter="(a\d+)"/);
   codes()('abc'); t.abc = nodes.main.innerHTML.includes('&quot;abc&quot; is not an integer');
   codes()('1,x,5'); t.x = nodes.main.innerHTML.includes('&quot;x&quot; is not an integer');
   t.puts_before_codes = puts().length;
@@ -148,6 +148,31 @@ const out = {};
     r[s + '|' + u] = sandbox.readEng(s, u);
   t.readEng = r;
   out.typed = t;
+
+  // ---- 4b. the two code boxes: nominal + "also output voltage at", saved as [nominal, ...others]
+  fresh('new', { pins:PINS, netlistsrc:{ source:null, copy:COPY }, config:JSON.parse(JSON.stringify(CONFIG)) });
+  S.data.config.config.vset_codes = [10];
+  ROUTES['PUT /api/p/p/config'] = echoConfig;
+  sandbox.render();
+  const c = { nom_prefill: /id="vsetnom"[^>]*value="10"/.test(nodes.main.innerHTML),
+              also_empty: /id="vsetalso"[^>]*value=""/.test(nodes.main.innerHTML),
+              hint: nodes.main.innerHTML.includes('the other codes measure the DC output only') };
+  const also = () => act(nodes.main.innerHTML, /id="vsetalso"[^>]*data-enter="(a\d+)"/);
+  const nom = () => act(nodes.main.innerHTML, /id="vsetnom"[^>]*data-enter="(a\d+)"/);
+  also()('8 12'); await flush(); sandbox.render();
+  c.saved = puts().slice(-1)[0].body.config.vset_codes;
+  c.also_after = (nodes.main.innerHTML.match(/id="vsetalso"[^>]*value="([^"]*)"/) || [])[1];
+  const n0 = puts().length;
+  also()('8 z');
+  c.bad_also = nodes.main.innerHTML.includes('&quot;z&quot; is not an integer');
+  c.bad_also_kept = nodes.main.innerHTML.includes('value="8 z"');
+  nom()('10 11');
+  c.two_nominal = nodes.main.innerHTML.includes('the nominal code is ONE integer');
+  c.nothing_sent = puts().length === n0;
+  S.sel = {}; sandbox.render();
+  nom()('12'); await flush(); sandbox.render();
+  c.renominal = puts().slice(-1)[0].body.config.vset_codes;
+  out.codes = c;
 
   // ---- 5. measure one rail: the others (saved or typed) are left alone
   fresh('new', { pins:PINS, netlistsrc:{ source:null, copy:COPY }, config:JSON.parse(JSON.stringify(CONFIG)) });
@@ -255,8 +280,24 @@ def test_bad_input_is_named_next_to_the_field_and_nothing_is_sent(page):
     assert t["fast_kept"], "the bad text stays in the box to be fixed"
     assert t["abc"] and t["x"], "a bad code token is named, never dropped"
     assert t["puts_before_codes"] == 1
-    assert t["codes_put"] == [1, 3, 5]
+    # typed into "also output voltage at": the saved nominal (3) stays first, not repeated
+    assert t["codes_put"] == [3, 1, 5]
     assert t["bad_load_not_sent"]
+
+
+def test_the_code_boxes_save_the_nominal_first_and_refuse_a_bad_token(page):
+    """The code is fixed on the chip: one nominal code (every measurement) and the others (the DC
+    output only). The two boxes save together as vset_codes = [nominal, ...others]."""
+    c = page["codes"]
+    assert c["nom_prefill"] and c["also_empty"], "nominal prefilled from the first code"
+    assert c["hint"], "the row says what the other codes measure"
+    assert c["saved"] == [10, 8, 12]
+    assert c["also_after"] == "8, 12", "the saved others come back in their box"
+    assert c["bad_also"] and c["bad_also_kept"], "a bad token is named, the typing kept"
+    assert c["two_nominal"], "the nominal box takes ONE code"
+    assert c["nothing_sent"], "a refused box sends nothing"
+    # a new nominal that was among the others is not listed twice
+    assert c["renominal"] == [12, 8]
 
 
 def test_off_current_zero_is_saved_and_only_typed_boxes_are_read(page):

@@ -727,6 +727,11 @@ class Dataset:
         out = arr[idx]
         return _ro(out if isinstance(out, np.ndarray) else np.asarray(out))
 
+    def var_dims(self, var: str) -> tuple[str, ...]:
+        """The variable's dims as declared: its cell axes in the fixed order, then its sweep
+        coordinate. A reader builds a cell from this instead of assuming which axes it has."""
+        return tuple(self._record(var)["dims"])
+
     def coord(self, var: str) -> np.ndarray | None:
         """The variable's sweep coordinate, or None when it has no trailing axis."""
         rec = self._record(var)

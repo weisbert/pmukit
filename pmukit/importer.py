@@ -62,7 +62,14 @@ from .ledger import Ledger, Run
 from .netlist import PREFIX_ROLE, Netlist, parse_number
 
 __all__ = ["import_run", "import_external", "import_csv", "mark_run_missing",
-           "dims_from_plan", "open_or_create", "variable_spec", "TRAN_POINTS"]
+           "dims_from_plan", "open_or_create", "variable_spec", "TRAN_POINTS", "CODE_CHECK_DIR"]
+
+#: The output-code check's own dataset, beside `dataset/` in the project directory.  Its runs
+#: (`plan.CODE_CHECK`) measure Zout / PSRR at codes the fitter must never see, and the main
+#: dataset stores those variables WITHOUT a vset axis -- written there, a check run would land on
+#: the nominal code's cell.  So they live here, stored per code (`per_code=True`), and only
+#: `verify.codecheck` reads them.
+CODE_CHECK_DIR = "codecheck"
 
 #: A transient is resampled onto this many uniform points.  Contract 2 gives ONE coordinate per
 #: variable, and a solver picks different time points at every corner, so the stored grid has to
@@ -395,8 +402,12 @@ def _analyses(text: str) -> list[dict]:
 
 
 # =============================================================================== dataset shape
-def variable_spec(observable: str, port_type: str) -> dict:
+def variable_spec(observable: str, port_type: str, *, per_code: bool = False) -> dict:
     """``{"dims", "coord", "dtype", "unit"}`` for one contract-2 variable.
+
+    `per_code=True` adds the `vset` cell axis whatever the spec says: the output-code check's
+    dataset (`CODE_CHECK_DIR`) keeps the small-signal variables per code, where the main dataset
+    keeps them at the nominal code only.
 
     The axes come from `spec` (contract 1), translated into contract 2's storage order:
 
@@ -431,6 +442,8 @@ def variable_spec(observable: str, port_type: str) -> dict:
             if param.observable == observable:
                 need.update(param.axes)
     coord, dtype, unit = COORD[observable]
+    if per_code:
+        need.add("vset")
     if observable == "dc_temp":
         need.discard("temp_c")
         need.discard("temp_cont")
@@ -749,13 +762,14 @@ def _target_coord(coord_name: str, axis: np.ndarray, analysis_stmt: dict) -> np.
 
 
 # =============================================================================== the cell
-def _cell_for(var: str, run: Run, deck: Deck, dataset: Dataset, plan=None
-              ) -> tuple[dict, list[str]]:
+def _cell_for(var: str, run: Run, deck: Deck, dataset: Dataset, plan=None,
+              per_code: bool = False) -> tuple[dict, list[str]]:
     """The dataset cell one run fills for one variable, with every axis value snapped to the
     declared axis.  Raises when a value is not on an axis -- a cell nobody declared is a plan /
     dataset mismatch, not something to invent a slot for."""
     _obs, port = modelspec.split_variable(var)
-    cell_dims = [d for d in CELL_DIMS if d in variable_spec(_obs, deck.port_type(port))["dims"]]
+    cell_dims = [d for d in CELL_DIMS
+                 if d in variable_spec(_obs, deck.port_type(port), per_code=per_code)["dims"]]
     notes: list[str] = []
     cell: dict = {}
     for dim in cell_dims:
@@ -822,8 +836,12 @@ def _snap(axis: list, value, dim: str, var: str, notes: list[str]):
 
 # =============================================================================== (a) own runs
 def import_run(run: Run, psf_dir, dataset: Dataset, *, plan=None, netlist_text: str | None = None,
-               source_path: str = "", pmu_inst: str = "", want: tuple | None = None) -> dict:
+               source_path: str = "", pmu_inst: str = "", want: tuple | None = None,
+               per_code: bool = False) -> dict:
     """Derive every variable this run `reads` and put it into the dataset.
+
+    `per_code=True` stores every variable with a `vset` axis -- the output-code check's dataset
+    (`CODE_CHECK_DIR`), never the main one.
 
     Returns ``{"run_id", "filled": [var...], "missing": ["var: why"...], "notes": [...]}``.  A
     variable that cannot be derived is registered with `mark_missing` (when its storage exists)
@@ -846,13 +864,13 @@ def import_run(run: Run, psf_dir, dataset: Dataset, *, plan=None, netlist_text: 
         psf_path, stmt = psf_for(d, run.analysis, deck, want)
     except PmuError as exc:
         for var in run.reads:
-            _mark(dataset, var, run, deck, plan, f"{exc.what} {exc.why}", report)
+            _mark(dataset, var, run, deck, plan, f"{exc.what} {exc.why}", report, per_code)
         return report
     try:
         parsed = psfmod.read_psf(psf_path)
     except PmuError as exc:
         for var in run.reads:
-            _mark(dataset, var, run, deck, plan, f"{exc.what} {exc.why}", report)
+            _mark(dataset, var, run, deck, plan, f"{exc.what} {exc.why}", report, per_code)
         return report
 
     reads, expand_notes = _expand_reads(run.reads, deck, parsed)
@@ -861,9 +879,9 @@ def import_run(run: Run, psf_dir, dataset: Dataset, *, plan=None, netlist_text: 
         try:
             self_coord, values, notes = _derive(var, parsed, deck, run, str(psf_path))
             report["notes"].extend(notes)
-            _store(var, self_coord, values, run, deck, dataset, plan, stmt, report)
+            _store(var, self_coord, values, run, deck, dataset, plan, stmt, report, per_code)
         except PmuError as exc:
-            _mark(dataset, var, run, deck, plan, f"{exc.what} {exc.why}", report)
+            _mark(dataset, var, run, deck, plan, f"{exc.what} {exc.why}", report, per_code)
     if source_path:
         report["source_path"] = source_path
     return report
@@ -905,9 +923,9 @@ def _expand_reads(reads, deck: Deck, parsed: dict) -> tuple[list[str], list[str]
     return out, notes
 
 
-def _store(var, axis, values, run, deck, dataset, plan, stmt, report) -> None:
+def _store(var, axis, values, run, deck, dataset, plan, stmt, report, per_code=False) -> None:
     observable, port = modelspec.split_variable(var)
-    vspec = variable_spec(observable, deck.port_type(port))
+    vspec = variable_spec(observable, deck.port_type(port), per_code=per_code)
     coord_name = vspec["coord"]
     target = _target_coord(coord_name, axis, stmt or {})
 
@@ -937,7 +955,7 @@ def _store(var, axis, values, run, deck, dataset, plan, stmt, report) -> None:
                     f"extremum by {abs(true_pk - kept_pk) / true_pk * 100:.2f} % "
                     f"({true_pk:.6g} -> {kept_pk:.6g})")
 
-    cell, notes = _cell_for(var, run, deck, dataset, plan)
+    cell, notes = _cell_for(var, run, deck, dataset, plan, per_code)
     report["notes"].extend(notes)
     if dataset.has(var, cell):
         old = np.asarray(dataset.get(var, cell))
@@ -955,12 +973,12 @@ def _store(var, axis, values, run, deck, dataset, plan, stmt, report) -> None:
     report["filled"].append(f"{var} @ {cell_key(cell)}")
 
 
-def _mark(dataset, var, run, deck, plan, reason, report) -> None:
+def _mark(dataset, var, run, deck, plan, reason, report, per_code=False) -> None:
     """Register one cell as 'ran and broke', or say why even that was not possible."""
     text = f"run {run.run_id} ({run.analysis}): {reason}".strip()
     try:
         if var in dataset.variables():
-            cell, _notes = _cell_for(var, run, deck, dataset, plan)
+            cell, _notes = _cell_for(var, run, deck, dataset, plan, per_code)
             dataset.mark_missing(var, cell, text)
             report["missing"].append(f"{var} @ {cell_key(cell)}: {reason}")
             return
@@ -973,7 +991,8 @@ def _mark(dataset, var, run, deck, plan, reason, report) -> None:
 
 
 def mark_run_missing(run: Run, dataset: Dataset, reason: str, *, plan=None,
-                     netlist_text: str | None = None, pmu_inst: str = "") -> dict:
+                     netlist_text: str | None = None, pmu_inst: str = "",
+                     per_code: bool = False) -> dict:
     """Register every cell a FAILED run should have filled, with the failure reason."""
     report = {"run_id": run.run_id, "filled": [], "missing": [], "notes": []}
     if dataset is None:
@@ -988,7 +1007,7 @@ def mark_run_missing(run: Run, dataset: Dataset, reason: str, *, plan=None,
         text = deck_path.read_text(encoding="utf-8", errors="replace") if deck_path else ""
     deck = Deck(text or "", run.netlist_path, pmu_inst=pmu_inst)
     for var in run.reads:
-        _mark(dataset, var, run, deck, plan, reason, report)
+        _mark(dataset, var, run, deck, plan, reason, report, per_code)
     return report
 
 
@@ -1021,7 +1040,9 @@ def import_external(dirs, plan, ledger: Ledger, dataset: Dataset, *,
     (see `import_csv`) -- a CSV carries no netlist, so pmukit refuses to infer what it is.
     """
     report: dict = {"filled": [], "unmatched": [], "still_to_run": [], "notes": []}
-    planned = list(plan.runs(enabled_only=False))
+    # The output-code check's runs are left out: their results belong in the code-check dataset
+    # (`CODE_CHECK_DIR`), and written into this one they would land on the nominal code's cell.
+    planned = [p for p in plan.runs(enabled_only=False) if not getattr(p, "check", "")]
     wanted = {p.run_id: p for p in planned}
     cache: dict[str, Deck] = {}
     sigs: dict[str, dict] = {}

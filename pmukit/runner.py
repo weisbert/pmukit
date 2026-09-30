@@ -219,6 +219,7 @@ class Runner:
         self._dataset = None if dataset is False else dataset
         self._own_dataset = dataset is None
         self._no_dataset = dataset is False
+        self._check_dataset = None
 
     # ------------------------------------------------------------------ construction helpers
     def _make_backend(self):
@@ -260,6 +261,29 @@ class Runner:
                 paths.project_dir(self.project) / "dataset", self.plan,
                 project=self.project, config_sha=self.config_sha or self.plan.config_sha)
         return self._dataset
+
+    def _check_dataset_locked(self):
+        """The output-code check's dataset (`importer.CODE_CHECK_DIR`), beside the main one.
+
+        A check run measures Zout / PSRR at a code the fit must never see; the main dataset
+        stores those without a vset axis, so imported there it would overwrite the nominal
+        code's cell.  Here it is stored per code, and only `verify.codecheck` reads it."""
+        if self._check_dataset is None:
+            from . import importer
+            main = self._dataset_locked()
+            base = (pathlib.Path(main.path).parent if getattr(main, "path", None) is not None
+                    else paths.project_dir(self.project))
+            self._check_dataset = importer.open_or_create(
+                base / importer.CODE_CHECK_DIR, self.plan,
+                project=self.project, config_sha=self.config_sha or self.plan.config_sha)
+        return self._check_dataset
+
+    def _target_locked(self, run_id: str):
+        """(dataset, per_code) a finished run imports into: the check's own, or the main one."""
+        planned = self._planned.get(run_id)
+        if planned is not None and getattr(planned, "check", ""):
+            return self._check_dataset_locked(), True
+        return self._dataset_locked(), False
 
     # ------------------------------------------------------------------ run directories
     def workdir(self, run_id: str) -> pathlib.Path:
@@ -430,9 +454,10 @@ class Runner:
             return self._get(run_id) or run
         from . import importer
         with self._lock:                       # the dataset owns buffers and one index.json
-            ds = self._dataset_locked()
+            ds, per_code = self._target_locked(run_id)
             report = importer.import_run(self.ledger.get(run_id) or run, psf_dir, ds,
-                                         plan=self.plan, pmu_inst=self.pmu_inst)
+                                         plan=self.plan, pmu_inst=self.pmu_inst,
+                                         per_code=per_code)
             self.reports[run_id] = report
         # The ledger status stays `done`: pmukit ran this itself.  `imported` means the results
         # came from somewhere else and carries `source_path`; conflating them would let a
@@ -484,9 +509,10 @@ class Runner:
         if not self._no_dataset:
             from . import importer
             with self._lock:
-                importer.mark_run_missing(job.run, self._dataset_locked(),
-                                          f"run failed: {what}", plan=self.plan,
-                                          netlist_text=job.netlist_text, pmu_inst=self.pmu_inst)
+                ds, per_code = self._target_locked(job.run_id)
+                importer.mark_run_missing(job.run, ds, f"run failed: {what}", plan=self.plan,
+                                          netlist_text=job.netlist_text, pmu_inst=self.pmu_inst,
+                                          per_code=per_code)
         return self._get(job.run_id) or job.run
 
     # ------------------------------------------------------------------ operator controls

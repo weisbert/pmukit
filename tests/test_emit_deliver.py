@@ -238,7 +238,8 @@ def test_the_real_fitter_output_goes_straight_into_the_emitter(tmp_path):
     assert FBIAS in built["biases"], built["skipped"]
 
     # the numbers that reached the module are the numbers the fitter produced
-    z = res.get(FRAIL, "zout", {"process": "tt", "temp_c": 25.0, "vset": 3, "load_a": 5e-4})
+    # small-signal blocks are keyed without a code: they are the nominal code's
+    z = res.get(FRAIL, "zout", {"process": "tt", "temp_c": 25.0, "load_a": 5e-4})
     assert f"{z.params['Ra']:.6e}" in built["text"]
     dc = res.get(FRAIL, "dc", {"process": "tt", "vset": 3, "load_a": 5e-4})
     assert f"{dc.params['vout'] + z.params['Ra'] * 5.0e-4:.6e}" in built["text"]

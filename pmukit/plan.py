@@ -20,9 +20,13 @@ How a plan is built
    run per load state, otherwise the nominal state; `temp_c` or `temp_cont` -> one run per declared
    temperature.  The single exception is `dc_temp`, which IS the continuous temperature sweep: one
    run sweeps the whole range internally, and its ledger `temp_c` is NaN ("not at one temperature").
+   Only the DC families carry `vset`: every small-signal run is at the nominal code.
 4. `run_id` is a content hash (netlist sha + corner + analysis + stimulus + cell), so re-planning
    an unchanged run collides with the finished one and is reported `skipped_cached`.  Resume is a
    property of the identifier, not a separate mechanism.
+5. With more than one code, the OUTPUT-CODE CHECK group re-runs each rail's Zout injection and
+   the supply injection at the lowest and the highest code (`_code_check`).  Those runs feed no
+   parameter: they are compared with the nominal code's own curves in the report, never fitted.
 
 Load states
 -----------
@@ -78,6 +82,13 @@ GROUP_TITLE = {
     "tran_en": ("Enable ramp", "how the rails and biases come up when EN goes high -- usable, "
                                "not signed off"),
 }
+
+#: The Plan group of the output-code check, and the `PlannedRun.check` tag of its runs.
+CODE_CHECK = "code_check"
+CODE_CHECK_TITLE = ("Output-code check (Zout, PSRR)",
+                    "not fitted: each rail's Zout and the supply injection once more at the lowest "
+                    "and the highest code, compared with the nominal code's curves in the report -- "
+                    "a headroom collapse at an extreme code is shown instead of assumed away")
 
 
 # ------------------------------------------------------------------------------ load states
@@ -199,6 +210,9 @@ class PlannedRun:
     feeds: tuple[tuple[str, str, str], ...]        # (port, block, param)
     group_id: str
     cost_s: float = 0.0
+    check: str = ""
+    """`CODE_CHECK` for a run of the output-code check: its results go to the code-check dataset,
+    never to the one the fitter reads.  Empty for every run that feeds a parameter."""
 
     @property
     def run_id(self) -> str:
@@ -206,6 +220,12 @@ class PlannedRun:
 
     def why(self) -> str:
         """The Plan screen's Why panel, one sentence, built from `feeds`."""
+        if self.check == CODE_CHECK:
+            return (f"This run feeds no parameter: it measures "
+                    f"{', '.join(sorted(set(self.run.reads)))} at {self.run.cell_text()}, and the "
+                    "report compares it with the nominal code's "
+                    "own measurement at the same corner and temperature -- the small-signal "
+                    "blocks are measured at the nominal code only, and this checks that holds.")
         if not self.feeds:
             return "no parameter claims this run -- it would produce nothing"
         by_port: dict[str, list[str]] = {}
@@ -639,7 +659,72 @@ def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
                 g = groups[gid] = Group(id=gid, title=title, why=why, analysis=b["analysis"])
                 plan.groups.append(g)
             g.runs.append(pr)
+
+    # 4) the output-code check: report-only, never fitted.
+    _code_check(plan, cfg, derived, netlist, families, family_order, nominal,
+                site=site, pins=pins, cost=cost)
     return plan
+
+
+def check_codes(derived: DerivedConfig) -> list[int]:
+    """The codes the output-code check runs at: the lowest and the highest configured code, less
+    the nominal one (`derived.vset.codes[0]`). Empty when only one code is configured."""
+    codes = [int(c) for c in ((derived.vset or {}).get("codes") or [])]
+    if len(codes) < 2:
+        return []
+    return [c for c in sorted({min(codes), max(codes)}) if c != codes[0]]
+
+
+def check_temps(derived: DerivedConfig) -> list[float]:
+    """The coldest and the hottest declared temperature -- where headroom runs out first."""
+    temps = sorted(float(t) for t in ((derived.temps_c or {}).get("points") or [])) or [25.0]
+    return sorted({temps[0], temps[-1]})
+
+
+def _code_check(plan: Plan, cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
+                families: dict, family_order: list, nominal: LoadState, *, site, pins,
+                cost: CostFn) -> None:
+    """The output-code check: each rail's Zout injection and the supply injection, again, at the
+    lowest and the highest code -- per corner, at the coldest and the hottest temperature, at the
+    nominal load state.
+
+    The small-signal blocks are measured at the nominal code only (spec `_RAIL_AC`); what that
+    assumes -- another code moves Zout and PSRR by a couple of dB -- is CHECKED here rather than
+    assumed, because a headroom collapse at the top codes is not a couple of dB.  These runs feed
+    no parameter: their `feeds` are empty (un-ticking the group costs no block), and `check`
+    sends their results to the separate code-check dataset (runner -> importer `per_code=True`),
+    where `verify.codecheck` compares them with the nominal code's measured curves.  The fitter
+    only ever opens the main dataset, so it cannot see them.
+    """
+    codes = check_codes(derived)
+    if not codes:
+        return
+    rails = set(derived.rails or {})
+    corners = list((derived.process or {}).get("corners", [])) or ["tt"]
+    group = None
+    for key in family_order:
+        f = families[key]
+        if f["analysis"] != "ac":
+            continue
+        reads = [v for v in f["reads"]
+                 if v.split(".", 1)[0] in ("ac_zout", "ac_psrr") and v.split(".", 1)[1] in rails]
+        if not reads:
+            continue
+        for corner in corners:
+            for temp in check_temps(derived):
+                for code in codes:
+                    b = dict(f, reads=reads, own_reads=reads, feeds=[], corner=corner, temp=temp,
+                             code=code, state=nominal, load_axis=("load_a" in f["axes"]))
+                    pr = _build_run(cfg, derived, netlist, b, site=site, pins=pins)
+                    pr.cost_s = cost(pr.run, derived)
+                    pr.check = pr.group_id = CODE_CHECK
+                    if group is None:
+                        title, why = CODE_CHECK_TITLE
+                        group = Group(id=CODE_CHECK, title=f"{title} -- codes "
+                                      f"{', '.join(str(c) for c in codes)}", why=why,
+                                      analysis="ac")
+                        plan.groups.append(group)
+                    group.runs.append(pr)
 
 
 def _load_writers(var: str, var_axes, family_axes, states: Sequence[LoadState],
