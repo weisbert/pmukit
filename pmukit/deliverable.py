@@ -492,7 +492,8 @@ class DeliverableWriter:
                      hb_check: dict | None = None, not_run: list[str],
                      stubs: list[str] | None = None,
                      pins: list[dict] | None = None, graded_by: str = "",
-                     provisional: str = "") -> pathlib.Path:
+                     provisional: str = "", code_check: dict | None = None,
+                     vset=None) -> pathlib.Path:
         """Renders report.md plus its machine-readable sidecar grades.json.
 
         `pins` is the module's pin list in the PMU's order ({pin, modeled, what, role}); the
@@ -501,14 +502,20 @@ class DeliverableWriter:
         `graded_by` says where the grades came from ("verify" or "fit"); `provisional` is the
         sentence saying why they are not verify's verdict on THIS fit (verify is older than the
         fit, or never ran). Both land in grades.json, and `provisional` is printed in report.md
-        next to the stamp and above the trust table."""
+        next to the stamp and above the trust table.
+
+        `code_check` is the output-code check (`pmukit.verify.codecheck.compare`): report-only, it
+        gets its own section and its own key in grades.json and never touches a grade.  `vset` is
+        what the instance line sets the model's `vset` to (the code variable, or the nominal code),
+        so the Pins section can say how a code outside the characterized list behaves."""
         grades = [g if isinstance(g, Grade) else Grade.from_json(g) for g in grades]
         not_run = [str(x) for x in (not_run or [])]
         stubs = [str(x) for x in (stubs or [])]
         pins = [dict(p) for p in (pins or [])]
         text = render_report(project=self.project, stamp=self.stamp, envelope=envelope,
                              grades=grades, hb_check=hb_check, not_run=not_run, stubs=stubs,
-                             pins=pins, provisional=provisional)
+                             pins=pins, provisional=provisional, code_check=code_check,
+                             vset=vset)
         jsonio.write(self.path / GRADES_NAME, {
             "project": self.project, "stamp": self.stamp,
             "graded_by": str(graded_by or ("fit" if provisional else
@@ -517,6 +524,7 @@ class DeliverableWriter:
             "grades": [g.to_json() for g in grades],
             "hb_check": hb_check, "not_run": not_run, "stubs": stubs,
             "pass_through": [p.get("pin") for p in pins if not p.get("modeled", True)],
+            "code_check": dict(code_check or {}),
         })
         return self._write(REPORT_NAME, text)
 
@@ -592,9 +600,10 @@ def _md_cell(text: str) -> str:
     return _oneline(text).replace("|", "/") or "--"
 
 
-def _pins_section(pins: list[dict]) -> list[str]:
+def _pins_section(pins: list[dict], envelope: Envelope | None = None, vset=None) -> list[str]:
     """Contract 4: the model has the PMU's pins in the PMU's order. Say which ones are only
-    declared -- a consumer who drives EN and sees nothing happen must find the reason here."""
+    declared -- a consumer who drives EN and sees nothing happen must find the reason here --
+    and what the instance's `vset` does."""
     through = [p for p in pins if not p.get("modeled", True)]
     out = ["## Pins", "",
            "The model has the same pins, in the same order, as the PMU subcircuit: replace the "
@@ -613,12 +622,82 @@ def _pins_section(pins: list[dict]) -> list[str]:
             out.append("- **EN has no effect:** the model is always on. Driving EN low in the "
                        "system bench does not turn the rails or the biases off.")
         out.append("")
+    out += _vset_usage(envelope, vset)
+    return out
+
+
+def _vset_usage(envelope: Envelope | None, vset) -> list[str]:
+    """The instance's one code knob, in the words a consumer needs before moving it."""
+    codes = list(envelope.vset_codes) if envelope is not None else []
+    if vset is None or not codes:
+        return []
+    if isinstance(vset, str):
+        how = (f"the instance line sets `vset={vset}` -- your bench's own code variable, so "
+               "moving it (the V of your PVT) moves the model with no edit to the instance")
+    else:
+        how = (f"the instance line sets `vset={vset}`, the nominal code (the bench did not "
+               "declare the code variable); write your code variable there to move the rail")
+    line = f"- **Output code:** {how}."
+    if len(codes) > 1:
+        line += (f" A code outside the characterized ones ({vset_text(codes)}) snaps to the "
+                 f"nearest characterized code; the small-signal blocks (Zout, PSRR, noise) are "
+                 f"from code {codes[0]} at every code.")
+    return [line, ""]
+
+
+def _code_check_section(cc: dict | None) -> list[str]:
+    """`Output code: other codes`: the small-signal blocks are from the nominal code, and what
+    the report-only Zout / PSRR check at the extreme codes found (`pmukit.verify.codecheck`)."""
+    cc = cc or {}
+    codes = list(cc.get("codes") or [])
+    if not codes and not cc.get("error"):
+        return []
+    nominal = cc.get("nominal")
+    others = [c for c in (cc.get("all_codes") or []) if c != nominal]
+    out = ["## Output code: other codes", ""]
+    if cc.get("error") and not codes:
+        return out + [f"- The output-code check could not be read: {_oneline(cc['error'])}. "
+                      "Nothing in the model depends on it.", ""]
+    care = float(cc.get("care_up_to_hz") or 0.0)
+    lim = dict(cc.get("limits_db") or {})
+    out += [f"Small-signal (Zout, PSRR, noise) is from code {nominal}. The other code"
+            f"{'s' if len(others) > 1 else ''} ({', '.join(str(c) for c in others)}) change"
+            f"{'' if len(others) > 1 else 's'} the DC output only: the rail voltage is measured "
+            "and modeled per code, the small-signal blocks are not.", "",
+            f"Check, report only (nothing here is fitted): Zout and PSRR measured at code"
+            f"{'s' if len(codes) > 1 else ''} {', '.join(str(c) for c in codes)} against code "
+            f"{nominal}, same corner, temperature and load"
+            + (f", up to {_eng(care, 'Hz')}" if care > 0 else "")
+            + f". ok <= {lim.get('ok', 2.0):g} dB, marginal <= {lim.get('marginal', 6.0):g} dB, "
+            "bad above.", "",
+            "| rail | code | corner | temp | Zout | PSRR | result |",
+            "|---|---|---|---|---|---|---|"]
+    flagged = []
+    for r in cc.get("rows") or []:
+        cells = []
+        for key in ("zout", "psrr"):
+            db, hz = r.get(f"{key}_db"), float(r.get(f"{key}_hz") or 0.0)
+            cells.append("not checked" if db is None else
+                         f"{float(db):.1f} dB at {_eng(float(f'{hz:.2g}'), 'Hz')}")
+        grade = str(r.get("grade") or "")
+        mark = "**RED:** " if grade == "bad" else ""
+        out.append(f"| {_md_cell(r.get('port', ''))} | {r.get('code')} | "
+                   f"{_md_cell(r.get('corner', ''))} | {_num(r.get('temp_c', 0.0))} C | "
+                   f"{cells[0]} | {cells[1]} | {mark}{grade or '--'} |")
+        if grade in ("bad", "marginal"):
+            flagged.append(f"- {mark}{_oneline(r.get('text', ''))}")
+    if not cc.get("rows"):
+        out.append("| -- | -- | -- | -- | -- | -- | no rail to check |")
+    out.append("")
+    if flagged:
+        out += flagged + [""]
     return out
 
 
 def render_report(*, project: str, stamp: str, envelope: Envelope, grades: list[Grade],
                   hb_check: dict | None, not_run: list[str], stubs: list[str],
-                  pins: list[dict] | None = None, provisional: str = "") -> str:
+                  pins: list[dict] | None = None, provisional: str = "",
+                  code_check: dict | None = None, vset=None) -> str:
     """report.md as CONTRACTS.md section 0c and section 4 describe it."""
     out = _fixed_paragraph(project, envelope, not_run, stubs)
     out += [f"Deliverable stamp `{stamp}`. Anything outside the valid range above is marked "
@@ -657,7 +736,12 @@ def render_report(*, project: str, stamp: str, envelope: Envelope, grades: list[
 
     # 3b -- the pins: the same pins in the same order as the PMU, and which ones do nothing
     if pins:
-        out += _pins_section(pins)
+        out += _pins_section(pins, envelope, vset)
+    else:
+        out += _vset_usage(envelope, vset)
+
+    # 3c -- the output code: small-signal from the nominal code, and the check at the others
+    out += _code_check_section(code_check)
 
     # 4 -- one line per corner per rail, no internal scores
     out += ["## Trust per corner and rail", ""] + warn + [

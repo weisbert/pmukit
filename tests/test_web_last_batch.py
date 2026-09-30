@@ -145,8 +145,8 @@ const out = {};
     for (let i = 0; i < 5; i++){ pg.sandbox.render(); await flush(); }
     s.kept_while_nothing_changed = !!pg.S.errs.new && banner(pg.nodes.main.innerHTML) !== '';
     /* a successful save of the codes on the same screen */
-    const set = act(pg, pg.nodes.main.innerHTML, /id="vsetinp"[^>]*data-enter="(a\d+)"/);
-    set('1, 3'); await settle(); pg.sandbox.render(); await settle(); pg.sandbox.render();
+    const set = act(pg, pg.nodes.main.innerHTML, /id="vsetalso"[^>]*data-enter="(a\d+)"/);
+    set('1'); await settle(); pg.sandbox.render(); await settle(); pg.sandbox.render();
     s.after_save = { err: !!pg.S.errs.new, banner: banner(pg.nodes.main.innerHTML),
                      row: refusedRow(pg.nodes.main.innerHTML) !== '', job: pg.S.job };
     out.once = s;

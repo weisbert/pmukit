@@ -3054,6 +3054,15 @@ class Api:
             valid = _envelope_text(ver.get("envelope") or {}) or _valid_from_derived(pr.derived())
         except PmuError:                                               # pragma: no cover - no cfg
             valid = {}
+        # The output-code check, as one line of the Valid-range box: report-only, never a grade.
+        try:
+            cc = _lazy("pmukit.verify.codecheck", "The output-code check")
+            line = cc.summary_line(cc.for_project(pr.name, root=pr.dir.parent,
+                                                  derived=pr.derived()))
+            if line:
+                valid["code check"] = line
+        except (PmuError, NotLanded):                                  # pragma: no cover
+            pass
         runs_consumed = 0
         try:
             with pr.ledger() as led:
@@ -3266,6 +3275,12 @@ class Api:
                     "cell_label": _cell_label(full), "empty": True, "why": why,
                     "unit": unit, "label": label, "source": var,
                     "score": bf.get("score"), "metric": bf.get("metric", "")}
+        # The cell the variable is STORED on: the small-signal blocks carry no code (they are the
+        # nominal code's), and a dataset from before that stores them per code -- read it there.
+        dims = set(ds.var_dims(var))
+        stored = {k: v for k, v in full.items() if k in dims}
+        if "vset" in dims and "vset" not in stored:
+            stored["vset"] = next(iter((pr.derived().vset or {}).get("codes") or []), 0)
         x = ds.coord(var)
         if x is None:
             raise _err("%s has no coordinate in the dataset." % var,
@@ -3273,7 +3288,7 @@ class Api:
                        "without one.",
                        ["Re-import or re-run the measurement behind this block"],
                        str(pr.dataset_path))
-        gt = ds.get(var, full)
+        gt = ds.get(var, stored)
         spectral = obs.startswith(("ac_", "noise_"))
         kwargs = {"f": x} if spectral else {"T": x}
         if block in ("psrr", "noise") and port_type == "rail":

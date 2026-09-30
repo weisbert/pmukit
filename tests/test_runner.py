@@ -149,7 +149,7 @@ def test_fake_end_to_end_fills_the_dataset(workshop):
     assert cov["totals"]["missing"] == 0
     assert cov["totals"]["filled"] == cov["totals"]["declared"]
     # the physics actually arrived, with the right sign
-    z = np.asarray(ds.get("ac_zout.a", {"process": "tt", "temp_c": 27.0, "vset": 3,
+    z = np.asarray(ds.get("ac_zout.a", {"process": "tt", "temp_c": 27.0,
                                         "load_a": ds.axis("load_a", "a")[0]}))
     assert np.all(z.real > 0)                  # Zout of a stable rail is passive
     # (R_dc + jwL) || (esr + 1/jwC): a FINITE DC floor, a resonance well above it, an ESR floor

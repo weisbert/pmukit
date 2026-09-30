@@ -118,8 +118,11 @@ def test_temp_cont_becomes_a_cell_dim_everywhere_but_dc_temp():
     assert dc_temp["dims"] == ("process", "vset", "load_a", "temp_sweep_c")   # temp_c dropped
     assert variable_spec("dc_temp", "bias")["dims"] == ("process", "vset", "temp_sweep_c")
 
-    assert variable_spec("ac_zout", "rail")["dims"] == ("process", "temp_c", "vset", "load_a",
-                                                        "freq_hz")
+    # small-signal is at the nominal code only: no vset axis ...
+    assert variable_spec("ac_zout", "rail")["dims"] == ("process", "temp_c", "load_a", "freq_hz")
+    # ... except in the output-code check's own dataset, which keeps it per code
+    assert variable_spec("ac_zout", "rail", per_code=True)["dims"] == (
+        "process", "temp_c", "vset", "load_a", "freq_hz")
     assert variable_spec("ac_psrr", "bias")["dims"] == ("process", "temp_c", "freq_hz")
     assert variable_spec("ac_psrr", "bias")["unit"] == "A/V"
     assert variable_spec("ac_psrr", "rail")["unit"] == "V/V"
@@ -161,7 +164,7 @@ def test_zout_sign_is_read_off_the_injection_direction(tmp_path, ds):
                             "traces": {"VDD0P8_A": v}}})
     rep = importer.import_run(ac_run(["ac_zout.a"]), d / "raw", ds, pmu_inst="PMU_TOP")
     assert rep["missing"] == []
-    z = np.asarray(ds.get("ac_zout.a", {"process": "tt", "temp_c": 27.0, "vset": 3,
+    z = np.asarray(ds.get("ac_zout.a", {"process": "tt", "temp_c": 27.0,
                                         "load_a": 5e-4}))
     assert z[0] == pytest.approx(complex(6.4, 0.1))
     assert not any("negative" in n for n in rep["notes"])
@@ -176,7 +179,7 @@ def test_the_reversed_injection_gives_the_other_sign(tmp_path, ds):
                 {"acz.ac": {"axis": "freq", "unit": "Hz", "xs": FREQ,
                             "traces": {"VDD0P8_A": v}}})
     rep = importer.import_run(ac_run(["ac_zout.a"]), d / "raw", ds, pmu_inst="PMU_TOP")
-    z = np.asarray(ds.get("ac_zout.a", {"process": "tt", "temp_c": 27.0, "vset": 3,
+    z = np.asarray(ds.get("ac_zout.a", {"process": "tt", "temp_c": 27.0,
                                         "load_a": 5e-4}))
     assert z[0] == pytest.approx(complex(-6.4, -0.1))
     # ... and an active LF Zout is REPORTED, never silently flipped
@@ -259,7 +262,7 @@ def test_psrr_divides_by_the_supply_and_says_when_it_assumed_the_drive(tmp_path,
                             "traces": {"VDD0P8_A": v}}})
     run = ac_run(["ac_psrr.a"], stimulus="VS_VDDA_1V0")
     rep = importer.import_run(run, d / "raw", ds, pmu_inst="PMU_TOP")
-    got = np.asarray(ds.get("ac_psrr.a", {"process": "tt", "temp_c": 27.0, "vset": 3,
+    got = np.asarray(ds.get("ac_psrr.a", {"process": "tt", "temp_c": 27.0,
                                           "load_a": 5e-4}))
     assert got[0] == pytest.approx(complex(1e-3, 0.0))
     assert any("was not saved" in n for n in rep["notes"])      # the assumption is stated
@@ -275,7 +278,7 @@ def test_psrr_uses_the_measured_supply_node_when_it_was_saved(tmp_path, ds):
                                        "VDDA_1V0": [complex(2.0, 0)] * len(FREQ)}}})
     run = ac_run(["ac_psrr.a"], stimulus="VS_VDDA_1V0")
     rep = importer.import_run(run, d / "raw", ds, pmu_inst="PMU_TOP")
-    got = np.asarray(ds.get("ac_psrr.a", {"process": "tt", "temp_c": 27.0, "vset": 3,
+    got = np.asarray(ds.get("ac_psrr.a", {"process": "tt", "temp_c": 27.0,
                                           "load_a": 5e-4}))
     assert got[0] == pytest.approx(complex(1e-3, 0.0))          # 2 mV / 2 V
     assert not any("was not saved" in n for n in rep["notes"])
@@ -326,7 +329,7 @@ def test_a_different_sweep_is_resampled_onto_the_stored_coordinate(tmp_path, ds)
     rep = importer.import_run(ac_run(["ac_zout.a"]), other / "raw", ds, pmu_inst="PMU_TOP")
     assert rep["missing"] == []
     assert any("resampled" in n for n in rep["notes"])
-    z = np.asarray(ds.get("ac_zout.a", {"process": "tt", "temp_c": 27.0, "vset": 3,
+    z = np.asarray(ds.get("ac_zout.a", {"process": "tt", "temp_c": 27.0,
                                         "load_a": 5e-4}))
     assert z[2] == pytest.approx(complex(100.0, 0.0), rel=1e-6)
 
@@ -342,7 +345,7 @@ def test_points_outside_the_measured_band_become_nan_never_extrapolation(tmp_pat
                                  "traces": {"VDD0P8_A": [complex(-1, 0)] * 3}}})
     rep = importer.import_run(ac_run(["ac_zout.a"]), narrow / "raw", ds, pmu_inst="PMU_TOP")
     assert any("never extrapolates" in n for n in rep["notes"])
-    z = np.asarray(ds.get("ac_zout.a", {"process": "tt", "temp_c": 27.0, "vset": 3,
+    z = np.asarray(ds.get("ac_zout.a", {"process": "tt", "temp_c": 27.0,
                                         "load_a": 5e-4}))
     assert np.isnan(z[-1])                     # 1 MHz was never measured in the second run
 
@@ -468,9 +471,9 @@ def test_csv_with_a_declaration_lands_in_the_cell(tmp_path, ds):
                  encoding="utf-8")
     rep = importer.import_csv(
         {p: {"variable": "ac_zout.a",
-             "cell": {"process": "tt", "temp_c": 27.0, "vset": 3, "load_a": 5e-4}}}, ds)
+             "cell": {"process": "tt", "temp_c": 27.0, "load_a": 5e-4}}}, ds)
     assert rep["missing"] == []
-    z = np.asarray(ds.get("ac_zout.a", {"process": "tt", "temp_c": 27.0, "vset": 3,
+    z = np.asarray(ds.get("ac_zout.a", {"process": "tt", "temp_c": 27.0,
                                         "load_a": 5e-4}))
     assert z[0] == pytest.approx(complex(-1.0, 0.0))     # a CSV IS the ratio; no sign is applied
 

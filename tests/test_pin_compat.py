@@ -96,7 +96,8 @@ def test_a_positional_instance_from_the_bench_binds_every_net_to_its_own_pin(del
         assert table[port].net == net, (port, net)
     # the instance line the deliverable hands the user IS that line, master swapped
     use = jsonio.read(delivered["out"] / "interface.json")
-    assert use["instance_line"] == f"PMU_TOP ({' '.join(nets)}) PMU_pins vset=3"
+    # the bench declares `parameters VSET=3`, so the code follows the bench's own variable
+    assert use["instance_line"] == f"PMU_TOP ({' '.join(nets)}) PMU_pins vset=VSET"
     assert use["module"] == "PMU_pins"
     # the per-corner map an older reader uses says the same thing on every corner
     assert set(use["instance"].values()) == {use["instance_line"]}
@@ -130,7 +131,7 @@ def test_report_and_scs_say_which_pins_are_pass_through(delivered):
     scs = (out / "PMU_pins.scs").read_text(encoding="utf-8")
     assert "// pass-through (declared, not modeled): EN TESTMODE" in scs
     assert "// PMU_TOP (VDDA_1V0 VDD0P8_A VDD0P8_B VDD0P8_C IB_PTAT IB_POLY EN TESTMODE 0 0 0) " \
-           "PMU_pins vset=3" in scs
+           "PMU_pins vset=VSET" in scs
     grades = jsonio.read(out / "grades.json")
     assert grades["pass_through"] == ["EN", "TESTMODE"]
 

@@ -197,7 +197,14 @@ WHAT = {
 
 # --- the table --------------------------------------------------------------------------
 
-_RAIL_AC = ("process", "temp_c", "vset", "load_a")
+# The rail's small-signal blocks have NO `vset` axis.  The output code is fixed on the chip; a
+# designer moves it only to shift the whole rail for the V of PVT.  Across the code range the DC
+# output is what changes -- Zout / PSRR move ~2 dB (the feedback ratio moves ~20 %) -- and the
+# emitter bakes them at the nominal code anyway (`emit.va.dc_by_vset`), so an AC run per code
+# was simulator time feeding nothing.  They run at the NOMINAL code only; the one nonlinear
+# exception, a headroom collapse at the highest codes, is caught by the plan's report-only
+# code check (`plan.CODE_CHECK`, `verify.codecheck`), never fitted.
+_RAIL_AC = ("process", "temp_c", "load_a")
 _RAIL_DC = ("process", "temp_cont", "vset", "load_a")
 _PT = ("process", "temp_c")
 

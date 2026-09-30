@@ -1019,7 +1019,9 @@ def build_va(port_fits, derived, corner: str, *, provenance=None, hb_robust: boo
     vrf = _supply_tracker(nl, supply, by_pin.get(supply, grounds[0]), f_start)
     if vset_codes != [None]:
         nl.parameter("vset", float(vset_codes[0]),
-                     "output code; characterized codes: " + vset_text(vset_codes))
+                     "output code; characterized codes: " + vset_text(vset_codes)
+                     + (f"; a code outside them snaps to the nearest; Zout/PSRR/noise are from "
+                        f"code {vset_codes[0]} at every code" if len(vset_codes) > 1 else ""))
 
     ls_ports: list[str] = []
     for p in rails:

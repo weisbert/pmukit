@@ -1789,14 +1789,33 @@ function threeQuestions(cfgd, pins){
           + (got ? '<span class="hint">' + ICON.ok + " " + esc(got) + "</span>" : "") + "</td></tr>" : "");
   }).join("");
   var undo = regAction(function(){ doUndo(); });
-  /* Set = Enter. A bad token is named next to the box and nothing is sent; what was typed stays. */
-  var setCodes = regAction(function(v){
-    var txt = typeof v === "string" ? v : el("vsetinp").value;
-    var r = readInts(txt, "VSET code");
-    setBad("in:vset", r.bad);
-    if (r.bad){ S.sel["in:vset"] = txt; render(); return; }
-    patchConfig("vset_codes", r.v, "in:vset");
-  });
+  /* Set = Enter in either box. The nominal code and the others are saved TOGETHER as
+     [nominal, ...others] -- vset_codes keeps its shape, nominal first. A bad token is named next
+     to its box and nothing is sent; what was typed stays. */
+  var codesNow = cfg.vset_codes || [];
+  var nomSaved = codesNow.length ? String(codesNow[0]) : "";
+  var alsoSaved = codesNow.slice(1).join(", ");
+  var codeText = function(id, key, saved, v, which){
+    if (which === key && typeof v === "string") return v;
+    var box = el(id);
+    return box ? box.value : typed(key, saved);
+  };
+  var setCodes = function(which){ return regAction(function(v){
+    var nomTxt = codeText("vsetnom", "in:vset:nom", nomSaved, v, which);
+    var alsoTxt = codeText("vsetalso", "in:vset:also", alsoSaved, v, which);
+    var n = readInts(nomTxt, "nominal code");
+    if (!n.bad && n.v.length !== 1){
+      n.bad = "the nominal code is ONE integer, the code the chip is set to -- the others go in the next box";
+    }
+    var a = String(alsoTxt).trim() ? readInts(alsoTxt, "VSET code") : { v: [] };
+    setBad("in:vset:nom", n.bad); setBad("in:vset:also", a.bad);
+    if (n.bad || a.bad){
+      if (nomTxt !== nomSaved) S.sel["in:vset:nom"] = nomTxt;
+      if (alsoTxt !== alsoSaved) S.sel["in:vset:also"] = alsoTxt;
+      render(); return;
+    }
+    patchConfig("vset_codes", n.v.concat(a.v.filter(function(c){ return c !== n.v[0]; })), "in:vset:");
+  }); };
   var setFmax = regAction(function(v){
     var txt = typeof v === "string" ? v : el("fmaxinp").value;
     var r = readEng(txt, "Hz", "a frequency");
@@ -1848,9 +1867,19 @@ function threeQuestions(cfgd, pins){
     + '<span class="hint">the design variable that selects the output code; rewritten as '
     + '<span class="mono">parameters ' + esc(cfg.vset_param || "VSET") + '=&lt;code&gt;</span></span></div>'
     + '<div class="rowflex"><span class="hint" style="width:66px">codes</span>'
-    + '<input class="inp mono' + badCls("in:vset") + '" id="vsetinp" style="width:92px" data-keep="in:vset"'
-    + ' data-keepfocus="1" data-enter="' + setCodes + '" value="' + esc(typed("in:vset", cfg.vset_codes.join(","))) + '">'
-    + '<button class="btn sm" data-act="' + setCodes + '">Set</button>' + badMsg("in:vset") + "</div></div>"
+    + '<span class="hint">nominal</span>'
+    + '<input class="inp mono' + badCls("in:vset:nom") + '" id="vsetnom" style="width:56px" data-keep="in:vset:nom"'
+    + ' data-keepfocus="1" data-enter="' + setCodes("in:vset:nom") + '" aria-label="nominal code"'
+    + ' value="' + esc(typed("in:vset:nom", nomSaved)) + '">'
+    + '<span class="hint">also output voltage at</span>'
+    + '<input class="inp mono' + badCls("in:vset:also") + '" id="vsetalso" style="width:120px" data-keep="in:vset:also"'
+    + ' data-keepfocus="1" data-enter="' + setCodes("in:vset:also") + '" aria-label="other codes, DC output only"'
+    + ' placeholder="none" value="' + esc(typed("in:vset:also", alsoSaved)) + '">'
+    + '<button class="btn sm" data-act="' + setCodes("") + '">Set</button>'
+    + badMsg("in:vset:nom") + badMsg("in:vset:also") + "</div>"
+    + '<div class="rowflex"><span class="hint" style="width:66px"></span><span class="hint">all measurements at '
+    + "the nominal code; the other codes measure the DC output only, plus a Zout/PSRR check at the "
+    + "lowest and highest</span></div></div>"
     + '<div class="field"><span class="lbl">2 &middot; What your block draws from each rail'
     + '<span class="q" title="On/off currents set the characterization grid (off, 0.2x on, on, 2x on). Switches = your block turns on and off during simulation.">?</span></span>'
     + (railRows ? '<table class="t"><thead><tr><th>Rail</th><th>On</th><th>Off</th>'
@@ -2128,7 +2157,8 @@ function buildPlan(){
   });
   var other = typed.filter(function(k){ return k.indexOf("in:load:") !== 0; });
   if (other.length){
-    var names = { "in:fmax": "highest frequency", "in:vset": "codes",
+    var names = { "in:fmax": "highest frequency", "in:vset:nom": "nominal code",
+                  "in:vset:also": "other codes",
                   "in:vsetparam": "code var", "in:roledc": "role DC value" };
     S.toast = "not saved yet: " + other.map(function(k){ return names[k] || k.slice(3); })
       .join(", ") + " -- press Set (or Enter) first";
