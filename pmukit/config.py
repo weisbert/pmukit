@@ -712,15 +712,11 @@ def derive(cfg: ProjectConfig, pins=None, site=None) -> DerivedConfig:
                     f"netlist declares: {have}",
                     "Or ask for one code only, if this PMU has no output-code variable"],
                    getattr(cfg, "source_path", "") or "project config (CONTRACTS.md 0a)")
-    # The code the bench was exported at is the nominal one: it goes first, because every run
-    # that does not sweep the code, and the delivered model's default `vset`, use codes[0].
+    # The nominal code is the FIRST configured one, as the user set it (the New screen's
+    # "nominal" box; a first read seeds it from the bench's own value). Every run that does not
+    # sweep the code, and the delivered model's default `vset`, use codes[0]. The bench's
+    # exported value never overrides it: a working point is configured, not inferred.
     codes = [int(v) for v in cfg.vset_codes]
-    try:
-        nominal = int(float((declared or {}).get(name)))
-    except (TypeError, ValueError):
-        nominal = None
-    if nominal in codes:
-        codes = [nominal] + [c for c in codes if c != nominal]
     # `declared`: does the bench itself declare the variable? Then the delivered instance line
     # writes `vset=<name>` and the designer's own V corners move the model; None = not known
     # (no netlist read yet), which the emitter treats like False: the nominal code as a number.

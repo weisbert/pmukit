@@ -1850,7 +1850,7 @@ function threeQuestions(cfgd, pins){
     if (!n.bad && n.v.length !== 1){
       n.bad = "the nominal code is ONE integer, the code the chip is set to -- the others go in the next box";
     }
-    var a = String(alsoTxt).trim() ? readInts(alsoTxt, "VSET code") : { v: [] };
+    var a = String(alsoTxt).trim() ? readInts(alsoTxt, (cfg.vset_param || "VSET") + " code") : { v: [] };
     setBad("in:vset:nom", n.bad); setBad("in:vset:also", a.bad);
     if (n.bad || a.bad){
       if (nomTxt !== nomSaved) S.sel["in:vset:nom"] = nomTxt;
@@ -1869,7 +1869,7 @@ function threeQuestions(cfgd, pins){
   });
   var kt = [-40, 0, 25, 85, 125];
   return '<div style="display:flex;flex-direction:column;gap:16px">'
-    + '<div class="field"><span class="lbl">1 &middot; Corners, temperatures and VSET codes'
+    + '<div class="field"><span class="lbl">1 &middot; Corners, temperatures and output codes'
     + '<span class="q" title="pmukit rewrites the PDK include section= per corner and sets options temp= per temperature. Temperature is continuous inside the model.">?</span></span>'
     + cornerRow(corners, pins)
     + '<div class="rowflex"><span class="hint" style="width:66px">temp C</span>'

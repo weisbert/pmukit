@@ -132,8 +132,8 @@ def test_the_check_runs_the_extreme_codes_at_the_extreme_temperatures_nominal_lo
 
 
 def test_the_check_skips_a_code_equal_to_the_nominal_and_is_absent_with_one_code():
-    # bench exported at VSET=3: 3 is nominal and the highest, so only the lowest is checked
-    _cfg, der, plan = _plan([1, 3])
+    # nominal 3 is also the highest, so only the lowest is checked
+    _cfg, der, plan = _plan([3, 1])
     assert der.vset["codes"][0] == 3 and check_codes(der) == [1]
     assert {r.run.vset for r in plan.group(CODE_CHECK).runs} == {1}
     _cfg, der, plan = _plan([3])
