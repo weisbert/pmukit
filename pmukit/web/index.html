@@ -1903,17 +1903,21 @@ function threeQuestions(cfgd, pins){
     var est = ld.off_estimated === true;
     var estMsg = est ? '<span class="hint est-off" style="color:var(--warn)">' + ICON.warn
       + " off " + esc(eng(ld.off_a, "A")) + " is an estimate (on/250) &mdash; type your real off current</span>" : "";
+    /* Two lines per rail: the numbers, then the switch and the row's verbs. One line of five
+       columns does not fit the right-hand column of a 1440-wide screen (it was clipped). */
     return '<tr class="rc"' + rc("rail", "rail " + r, ctx) + ">"
       + '<td class="mono">' + esc(r) + "</td>"
       + "<td>" + loadBox(r, "on_a", ld.on_a) + "</td>"
-      + "<td>" + loadBox(r, "off_a", ld.off_a, est) + "</td>"
-      + '<td><input type="checkbox" data-act="' + sw + '"' + (ld.switches ? " checked" : "")
-      + '> <span class="hint">' + (ld.switches ? "load-EN characterized" : "static load only")
-      + "</span></td>"
-      + "<td>" + verbButtons("rail", CTXS[ctx]) + "</td></tr>"
-      + (bad || got || estMsg ? '<tr><td></td><td colspan="4">' + [bad, estMsg,
+      + "<td>" + loadBox(r, "off_a", ld.off_a, est) + "</td></tr>"
+      + '<tr class="rc"' + rc("rail", "rail " + r, ctx) + '><td colspan="3" style="border-top:0;padding-top:0">'
+      + '<div class="rowflex"><label class="hint" title="your block turns this load on and off during '
+      + 'simulation: the load step is characterized"><input type="checkbox" data-act="' + sw + '"'
+      + (ld.switches ? " checked" : "") + "> "
+      + (ld.switches ? "switches on/off: load-EN characterized" : "static load only") + "</label>"
+      + verbButtons("rail", CTXS[ctx]) + "</div>"
+      + (bad || got || estMsg ? '<div style="margin-top:4px">' + [bad, estMsg,
           got ? '<span class="hint">' + ICON.ok + " " + esc(got) + "</span>" : ""]
-          .filter(Boolean).join(" ") + "</td></tr>" : "");
+          .filter(Boolean).join(" ") + "</div>" : "") + "</td></tr>";
   }).join("");
   var undo = regAction(function(){ doUndo(); });
   /* Set = Enter in either box. The nominal code and the others are saved TOGETHER as
@@ -1981,7 +1985,7 @@ function threeQuestions(cfgd, pins){
     + '<div class="field"><span class="lbl">2 &middot; What your block draws from each rail'
     + '<span class="q" title="On/off currents set the characterization grid (off, 0.2x on, on, 2x on). Switches = your block turns on and off during simulation.">?</span></span>'
     + (railRows ? '<table class="t"><thead><tr><th>Rail</th><th>On</th><th>Off</th>'
-        + "<th>Switches on/off</th><th></th></tr></thead><tbody>" + railRows + "</tbody></table>"
+        + "</tr></thead><tbody>" + railRows + "</tbody></table>"
         + '<div class="rowflex"><button class="btn sm" data-act="' + save + '">Save the load numbers</button>'
         + '<span class="hint">Only ports ticked Model appear here.</span></div>'
       : '<div class="hint">No rail is set to Model yet. Tick one in the pin table.</div>')
