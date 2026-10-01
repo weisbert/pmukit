@@ -140,13 +140,15 @@ HELP: dict[str, dict] = {
         "lines": [
             "The engine decides where Submit sends the runs: the Donau queue on the box, Spectre "
             "over ssh at the desk, a dry run that only writes the netlists, or fake results for a "
-            "smoke test.",
+            "smoke test. Parallel jobs is how many runs are in flight at once (empty: the "
+            "engine's own, Donau 4); on Donau the queue sees CPUs x jobs at once.",
             "The Donau accounts are the list the Plan screen offers for dsub -A; the default is "
             "the one runs are charged to until you pick another.",
             "These are machine settings, not project ones: they live in site.json under "
-            "PMUKIT_DATA, and a PMUKIT_* variable in the environment wins over them.",
+            "PMUKIT_DATA, and a PMUKIT_* variable in the environment wins over them. They open "
+            "as a drawer over your screen; Esc puts you back exactly where you were.",
         ],
-        "keys": (),
+        "keys": (("Esc", "close the drawer"),),
         "cli": "pmukit site",
     },
 }

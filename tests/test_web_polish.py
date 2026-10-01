@@ -104,7 +104,7 @@ const S = sandbox.S;
   // ---- Settings: per engine
   out.settings = {};
   for (const eng of ['fake', 'dry_run', 'donau_alps', 'spectre_ssh']){
-    S.screen = 'settings'; S.errs = {}; S.failed = {};
+    S.screen = 'new'; S.settings = true; S.errs = {}; S.failed = {};
     S.data.site = { engine: eng, simulator:'alps', queue:'short', cpus:8, ssh_host:'ewave-vm',
       remote_workdir:'~/pmukit_work', spectre_cmd:'spectre', accounts:[{name:'ug_a', note:''}],
       stored:{ engine: eng, simulator:'alps', queue:'short', cpus:8, ssh_host:'ewave-vm',
@@ -113,8 +113,9 @@ const S = sandbox.S;
                              {name:'dry_run',note:''},{name:'fake',note:''}],
       simulators:['alps','spectre'], environment:[], path:'/d/site.json' };
     sandbox.render();
-    out.settings[eng] = { html: nodes.main.innerHTML, cli: sandbox.SCREENS.settings.cli() };
+    out.settings[eng] = { html: nodes.overlays.innerHTML, cli: sandbox.SETTINGS.cli() };
   }
+  S.settings = false;
 
   // ---- a failed job: one error, the strip points at it
   S.screen = 'new'; S.errs = {}; S.failed = {}; S.job = null; calls.length = 0;
@@ -250,14 +251,17 @@ def test_settings_shows_no_queue_fields_for_an_engine_that_reads_none(page_run, 
 
 def test_settings_for_donau_shows_simulator_queue_cpus_and_accounts(page_run):
     html = page_run["settings"]["donau_alps"]["html"]
-    for label in ("Simulator", "Queue", "CPUs per job"):
+    for label in ("Simulator", "Queue", "CPUs per job", "Parallel jobs"):
         assert f">{label}<" in html
     assert "Donau accounts" in html and "ug_a" in html
     for label in ("SSH host", "Remote work dir", "Spectre command"):
         assert f">{label}<" not in html
     cli = page_run["settings"]["donau_alps"]["cli"]
     assert cli == {"engine": "donau_alps", "simulator": "alps", "queue": "short", "cpus": 8,
-                   "account": "ug_a"}
+                   "jobs": "", "account": "ug_a"}
+    # an unset jobs (the engine's default) is not echoed as a flag
+    assert server.cli_echo("settings", cli) == ("pmukit site --engine donau_alps --simulator alps "
+                                                 "--queue short --cpus 8 --account ug_a")
 
 
 def test_settings_for_spectre_ssh_shows_host_workdir_and_command(page_run):

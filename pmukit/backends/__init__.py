@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from ..errors import PmuError
 
-__all__ = ["BACKENDS", "make_backend", "probe_all"]
+__all__ = ["BACKENDS", "default_jobs", "make_backend", "probe_all"]
 
 #: engine name -> (module, class) inside this package.
 BACKENDS = {
@@ -40,6 +40,18 @@ def make_backend(name: str, site, **kwargs):
     module_name, class_name = entry
     module = __import__(f"{__name__}.{module_name}", fromlist=[class_name])
     return getattr(module, class_name)(site, **kwargs)
+
+
+def default_jobs(name: str) -> int:
+    """How many runs engine `name` keeps in flight when neither site.json `jobs` nor `--jobs`
+    says: the backend class's own `default_jobs` (Donau 4), else 1.  Read off the class, so the
+    Settings drawer can show it without building a backend."""
+    entry = BACKENDS.get(str(name))
+    if entry is None:
+        return 1
+    module_name, class_name = entry
+    module = __import__(f"{__name__}.{module_name}", fromlist=[class_name])
+    return max(1, int(getattr(getattr(module, class_name), "default_jobs", 1) or 1))
 
 
 def probe_all(site) -> dict:

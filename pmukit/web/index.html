@@ -191,6 +191,22 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--acc);margin:0}
 .pal .list{max-height:44vh;overflow:auto;padding:4px}
 .pal .it{display:flex;justify-content:space-between;gap:12px;padding:7px 10px;border-radius:3px;cursor:pointer;background:none;border:0;width:100%;font:inherit;color:inherit;text-align:left}
 .pal .it.on,.pal .it:hover{background:var(--acc-bg);color:var(--acc)}
+/* Settings: a drawer over whatever screen it was opened on -- the step bar above it stays live */
+.veil.dim{top:48px;background:rgba(20,18,15,.28)}
+.drawer{position:fixed;z-index:41;top:48px;right:0;bottom:0;width:min(540px,100vw);background:var(--bg);border-left:1px solid var(--line3);box-shadow:-8px 0 24px rgba(0,0,0,.18);display:flex;flex-direction:column}
+.drawer:focus{outline:none}
+.drawer.enter{animation:drawer-in .16s ease-out}
+@keyframes drawer-in{from{transform:translateX(32px);opacity:.4}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){.drawer.enter{animation:none}}
+.drawer .dh{display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+.drawer .dh .dt{font-weight:600;font-size:14px}
+.drawer .db{flex:1;min-height:0;overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:14px}
+.drawer .df{flex:none;border-top:1px solid var(--line);background:var(--panel);padding:8px 16px;display:flex;flex-direction:column;gap:6px}
+.drawer .df .cli{padding:5px 8px;border:1px solid var(--line2);border-radius:4px}
+.drawer .df .cli .c{white-space:normal;overflow-wrap:anywhere}
+/* "Runs go -> Donau . ALPS . short . 8 CPU x 4 jobs": the line is the way into Settings */
+.btn.dest{font-family:var(--mono);font-weight:500;border-color:transparent;background:var(--soft)}
+.btn.dest:hover:not(:disabled){border-color:var(--line3)}
 svg.chart{display:block;width:100%;height:auto;font-family:var(--mono);font-size:10px}
 .drop{border:1.5px dashed var(--line3);border-radius:6px;min-height:200px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--ink2);padding:18px;text-align:center}
 .drop.over{border-color:var(--acc);background:var(--acc-bg)}
@@ -234,7 +250,9 @@ var S = {
   progress: {},      /* step -> true when done on disk (GET /api/state)      */
   undoable: "",
   toast: "",
-  prev: "home"       /* the screen Settings goes back to                    */
+  settings: false,   /* the Settings drawer is open over S.screen            */
+  settingsIn: false, /* it was just opened: slide in on this render only     */
+  settingsCli: ""    /* the drawer's own `pmukit site ...` echo              */
 };
 
 var ICON = {
@@ -253,8 +271,8 @@ var STEPS = [["0","Home","home"],["1","New","new"],["2","Plan","plan"],["3","Run
              ["4","Model","model"],["5","Deliver","deliver"]];
 /* The Settings fields each engine actually reads (site.py); an engine not listed reads none. */
 var SITE_FIELDS = {
-  donau_alps: ["simulator", "queue", "cpus", "accounts"],
-  spectre_ssh: ["ssh_host", "remote_workdir", "spectre_cmd"]
+  donau_alps: ["simulator", "queue", "cpus", "jobs", "accounts"],
+  spectre_ssh: ["ssh_host", "remote_workdir", "spectre_cmd", "jobs"]
 };
 
 /* ------------------------------------------------------------- helpers --- */
@@ -786,18 +804,43 @@ function regCtx(obj){ var id = "c" + (++CTXN); CTXS[id] = obj; return id; }
 
 /* ------------------------------------------------------------ navigation - */
 function go(screen){
-  /* Settings is the machine's, not a step of the project: it remembers where it was opened
-     from, and it is never written into the project's state.json. */
-  if (screen === "settings" && S.screen !== "settings") S.prev = S.screen;
+  /* Settings is the machine's, not a step of the project: a drawer over the screen it was
+     opened on, never a screen of its own, never written into the project's state.json. Going
+     anywhere else closes it. */
+  if (screen === "settings") return openSettings();
+  S.settings = false;
   S.screen = screen;
   delete S.errs[screen];
   unfail();                 /* going somewhere is asking again, once */
-  if (S.project && !S.demo && screen !== "settings"){
+  if (S.project && !S.demo){
     api("/api/state/" + P(), { method:"PUT", body:{ screen: screen } }).then(function(){}, function(){});
   }
   syncUrl();
   render();
   refreshCli();
+}
+/* "Plan", "Copy for desk": what a screen is called on its button. */
+function screenName(screen){
+  var s = STEPS.filter(function(x){ return x[2] === screen; })[0];
+  return s ? s[1] : screen === "digest" ? "Copy for desk" : screen === "states" ? "the state sheet"
+       : String(screen || "Home");
+}
+/* The Settings drawer: opened from the nav button, the "Runs go" line, Ctrl K or a "settings"
+   action; Esc, Close or a click beside it shuts it and the screen under it is exactly as it was. */
+function openSettings(){
+  if (!S.settings) S.settingsIn = true;
+  S.settings = true;
+  delete S.errs.settings;
+  unfail("settings"); delete S.failed["site"];      /* opening it is asking again, once */
+  render();
+  refreshCli();
+  var d = el("drawer");
+  if (d && d.focus) d.focus();
+}
+function closeSettings(){
+  if (!S.settings) return;
+  S.settings = false;
+  render();
 }
 /* The address says where the page is, so a reload comes back to this project and screen -- and
    on Model to the grid cell and the block row that were open:
@@ -895,6 +938,7 @@ function render(){
   var ae = document.activeElement;
   var keep = ae && ae.getAttribute && ae.getAttribute("data-keepfocus") ? ae.id : "";
   var caret = keep ? ae.selectionStart : 0, caretEnd = keep ? ae.selectionEnd : 0;
+  var db = el("drawerbody"), dscroll = db ? db.scrollTop : 0;  /* a save must not scroll it */
   ACTS = {}; CTXS = {};
   renderNav();
   var sc = SCREENS[S.screen] || SCREENS.home;
@@ -903,6 +947,8 @@ function render(){
   renderCli();
   renderOverlays();
   wire();
+  db = el("drawerbody");
+  if (db && dscroll) db.scrollTop = dscroll;
   var kn = keep ? el(keep) : null;
   if (kn && kn.focus){ kn.focus(); try { kn.setSelectionRange(caret, caretEnd); } catch(e){ /* not a text field */ } }
 }
@@ -919,7 +965,6 @@ function renderNav(){
   var extra = "";
   if (S.screen === "digest") extra = '<span class="badge b-acc">4b Copy for desk</span>';
   if (S.screen === "states") extra = '<span class="badge b-mute">reference sheet</span>';
-  if (S.screen === "settings") extra = '<span class="badge b-mute">this machine, every project</span>';
   el("nav").innerHTML =
       '<button class="brand" data-go="home" aria-label="pmukit Home" title="Home: every project (key 0)">pmukit</button>'
     + '<span class="proj">' + esc(S.project || "no project") + (S.demo ? " &middot; demo" : "") + "</span>"
@@ -927,8 +972,10 @@ function renderNav(){
     + '<div class="navr">' + extra
     + (S.toast ? '<span class="badge b-ok">' + esc(S.toast) + "</span>" : "")
     + '<span class="hint">' + (S.undoable ? "Ctrl Z undoes: " + esc(S.undoable) : "") + "</span>"
-    + '<button class="btn sm' + (S.screen === "settings" ? " pri" : "") + '" data-go="settings" '
-    + 'title="Where runs go: engine, simulator, queue, CPUs and the Donau accounts of this machine">Settings</button>'
+    + '<button class="btn sm' + (S.settings ? " pri" : "") + '" data-act="'
+    + regAction(function(){ if (S.settings) closeSettings(); else openSettings(); })
+    + '" aria-expanded="' + (S.settings ? "true" : "false") + '" '
+    + 'title="Where runs go: engine, simulator, queue, CPUs, parallel jobs and the Donau accounts of this machine">Settings</button>'
     + '<button class="btn sm" data-help="1" title="Help and keyboard shortcuts (?)">? Help</button>'
     + "</div>";
 }
@@ -939,6 +986,24 @@ function renderCli(){
 }
 function renderOverlays(){
   var out = "";
+  if (S.settings){
+    /* first, so a menu, the help or the palette opened from inside it lands on top */
+    var cid = regAction(function(){ copy(S.settingsCli || "pmukit site"); });
+    out += '<div class="veil dim" data-close="settings"></div>'
+        + '<aside class="drawer' + (S.settingsIn ? " enter" : "") + '" id="drawer" role="dialog" '
+        + 'aria-modal="true" aria-labelledby="drawerttl" tabindex="-1">'
+        + '<div class="dh"><span class="dt" id="drawerttl">Settings</span>'
+        + '<span class="badge b-mute">this machine, every project</span>'
+        + '<button class="btn sm" data-close="settings" style="margin-left:auto" '
+        + 'title="Back to ' + esc(screenName(S.screen)) + ' (Esc)">Close &middot; Esc</button></div>'
+        + '<div class="db" id="drawerbody">' + SETTINGS.body() + "</div>"
+        + '<div class="df"><span class="hint">Shared by every project; saved at once to '
+        + '<span class="mono">site.json</span> under PMUKIT_DATA.</span>'
+        + '<div class="cli"><span class="d">$</span><span class="c">' + esc(S.settingsCli || "pmukit site")
+        + '</span><button class="btn sm" data-act="' + cid + '">' + ICON.copy + " Copy</button></div></div>"
+        + "</aside>";
+    S.settingsIn = false;
+  }
   if (S.menu){
     var mctx = S.menu.ctx, mkind = S.menu.kind;
     var items = verbsFor(mkind, mctx).map(function(v){
@@ -1054,6 +1119,7 @@ function wire(){
       if (w === "help") S.help = null;
       if (w === "note") S.note = null;
       if (w === "palette"){ S.palette = false; S.paletteQ = ""; }
+      if (w === "settings") S.settings = false;
       render();
     };
   });
@@ -1070,7 +1136,7 @@ function wire(){
   document.querySelectorAll("[data-chart]").forEach(hoverChart);
 }
 function openHelp(){
-  api("/api/help/" + encodeURIComponent(S.screen)).then(function(h){ S.help = h; render(); },
+  api("/api/help/" + encodeURIComponent(S.settings ? "settings" : S.screen)).then(function(h){ S.help = h; render(); },
       function(e){ showErr(e); });
 }
 
@@ -1185,6 +1251,13 @@ function refreshCli(){
   api("/api/cli?screen=" + encodeURIComponent(S.screen) + "&project=" + P()
       + "&state=" + encodeURIComponent(JSON.stringify(st)))
     .then(function(d){ if (d.cli !== S.cli){ S.cli = d.cli; renderCli(); } }, function(){});
+  /* the drawer has its own strip: the screen under it keeps its command */
+  if (S.settings){
+    api("/api/cli?screen=settings&project=" + P()
+        + "&state=" + encodeURIComponent(JSON.stringify(SETTINGS.cli())))
+      .then(function(d){ if (d.cli !== S.settingsCli){ S.settingsCli = d.cli; if (S.settings) render(); } },
+            function(){});
+  }
 }
 
 /* ========================================================================= *
@@ -1264,7 +1337,7 @@ SCREENS.home = {
         + esc(md.python) + "</span></div>"
         + '<div class="rowflex" style="margin-top:10px"><button class="btn sm" data-act="' + reid + '">'
         + ICON.retry + " Probe again</button>"
-        + '<button class="btn sm" data-go="settings" title="engine, simulator, queue, CPUs, Donau accounts">'
+        + '<button class="btn sm" data-go="settings" title="engine, simulator, queue, CPUs, parallel jobs, Donau accounts">'
         + "Settings</button></div>", { style: "flex:none", bodyStyle: "overflow-x:hidden" });
     }
     var selp = (pd && pd.projects || []).filter(function(p){ return p.name === S.sel.project; })[0];
@@ -2490,7 +2563,7 @@ SCREENS.plan = {
     if (!block && S.loading["plan"] && S.data["plan"]) block = "the plan is being recomputed";
     return '<span class="hint">Resume: runs already in the ledger are skipped. Nothing is '
          + "submitted until you press this.</span>"
-         + '<div class="rowflex">' + runDestination() + '<button class="btn" title="Save '
+         + '<div class="rowflex">' + runDestination(true) + '<button class="btn" title="Save '
          + esc(S.project) + '_plan.csv: one row per group (copy it instead from Ctrl K)" data-act="'
          + regAction(function(){ download(S.project + "_plan.csv", planCsv(), "text/csv"); })
          + '">Export plan (CSV)</button>'
@@ -2612,23 +2685,42 @@ function setTicksAll(fn){
       render(); refreshCli();
     }, showErr);
 }
-/* Where Submit sends the runs, from the site config: "-> Donau . ALPS . queue short" plus the
-   account list, or "-> fake (synthetic results)". Changed on the Settings screen. */
-function engineLabel(s){
+/* How many runs are in flight at once: site.json `jobs` (or $PMUKIT_JOBS), else the engine's own
+   default -- the same order the runner takes them in (Runner.width). */
+function siteJobs(s){
+  return s.jobs !== null && s.jobs !== undefined ? Number(s.jobs) : Number(s.jobs_default || 1);
+}
+/* Where Submit sends the runs, from the site config, in one line:
+   "Donau . ALPS . short . acct <name> . 8 CPU x 4 jobs", "Spectre over ssh . <host> . 1 job at a
+   time", "fake (synthetic results)". `account` false leaves the account out (the Plan screen
+   shows its picker next to the line instead). */
+function engineLabel(s, account){
   var sim = s.simulator === "spectre" ? "Spectre" : "ALPS";
-  return s.engine === "donau_alps" ? "Donau \u00b7 " + sim + " \u00b7 queue " + (s.queue || "-")
-       : s.engine === "spectre_ssh" ? "Spectre over ssh \u00b7 " + (s.ssh_host || "-")
-       : s.engine === "dry_run" ? "dry run (netlists written, nothing simulated)"
+  var n = siteJobs(s), dot = " \u00b7 ";
+  if (s.engine === "donau_alps"){
+    return "Donau" + dot + sim + dot + (s.queue || "-")
+         + (account === false ? "" : dot + (s.account ? "acct " + s.account : "no account"))
+         + dot + s.cpus + " CPU \u00d7 " + n + " job" + (n > 1 ? "s" : "");
+  }
+  if (s.engine === "spectre_ssh"){
+    return "Spectre over ssh" + dot + (s.ssh_host || "-") + dot
+         + (n > 1 ? n + " jobs at once" : "1 job at a time");
+  }
+  return s.engine === "dry_run" ? "dry run (netlists written, nothing simulated)"
        : s.engine === "fake" ? "fake (synthetic results)" : String(s.engine || "-");
 }
-function runDestination(){
-  var s = need("site", "/api/site", "plan");
+/* "Runs go -> ..." next to the submit actions (Plan, Run). The line itself opens Settings; on
+   Plan the Donau account stays a picker beside it, so the choice is made where Submit is. */
+function runDestination(withPicker){
+  var s = withPicker ? need("site", "/api/site", "plan") : want("site", "/api/site", "settings");
   if (!s) return "";
-  return '<span class="hint">Runs go</span><span class="mono" title="'
-       + esc(((s.engines || []).filter(function(e){ return e.name === s.engine; })[0] || {}).note || "")
-       + '">&rarr; ' + esc(engineLabel(s)) + "</span>" + accountPicker()
-       + '<button class="btn sm" data-go="settings" title="Change the engine, the queue or the Donau accounts">'
-       + "Settings</button>";
+  var note = ((s.engines || []).filter(function(e){ return e.name === s.engine; })[0] || {}).note || "";
+  var foot = s.engine === "donau_alps" ? " (" + Number(s.cpus) * siteJobs(s) + " CPUs at once)" : "";
+  var label = engineLabel(s, withPicker ? false : true);
+  return '<span class="hint">Runs go</span><button class="btn sm dest" data-go="settings" title="'
+       + esc(note + foot + ". Click to change it in Settings.") + '" aria-label="'
+       + esc("Runs go to " + label + ". Open Settings") + '">&rarr; ' + esc(label) + "</button>"
+       + (withPicker ? accountPicker() : "");
 }
 /* Why Submit is disabled, or "" -- the server refuses the same thing, this just says it first. */
 function submitBlocker(s){
@@ -2637,7 +2729,7 @@ function submitBlocker(s){
                                    : "Add a Donau account in Settings to submit";
 }
 /* The Donau account runs are charged to. The list lives in the box's site.json (never in the
-   repo), edited on the Settings screen. The pick is remembered there too. */
+   repo), edited in the Settings drawer. The pick is remembered there too. */
 function accountPicker(){
   var s = need("site", "/api/site", "plan");
   if (!s || s.engine !== "donau_alps") return "";
@@ -2754,7 +2846,7 @@ SCREENS.run = {
     var bid = regAction(function(){ if (one) failureBundle(selRun.run_id); else go("digest"); });
     return '<span class="hint">Runs are written to <span class="mono">runs.sqlite</span>. '
          + "Closing this page does not stop the queue.</span>"
-         + '<div class="rowflex"><button class="btn" title="'
+         + '<div class="rowflex">' + runDestination(false) + '<button class="btn" title="'
          + (one ? "Deck, submit command, log tails, ledger row and version of this run, copied (key c)"
                 : "The failure logs and the netlist diff of every failed run are one block of the digest")
          + '" data-act="' + bid + '">' + ICON.copy
@@ -3784,9 +3876,10 @@ SCREENS.digest = {
 };
 
 /* ------------------------------------------------------------ Settings -- */
-/* The machine's site config (site.json under PMUKIT_DATA), not a step of any project. Every
-   change is saved at once through PUT /api/site, with the same refusals as `pmukit site`. */
-SCREENS.settings = {
+/* The machine's site config (site.json under PMUKIT_DATA), not a step of any project: a drawer
+   over the current screen (openSettings), one column. Every change is saved at once through
+   PUT /api/site, with the same refusals as `pmukit site`. */
+var SETTINGS = {
   cli: function(){
     var st = (S.data["site"] || {}).stored || {};
     var out = { engine: st.engine || "" };
@@ -3796,11 +3889,11 @@ SCREENS.settings = {
     });
     return out;
   },
-  main: function(){
+  body: function(){
     var s = need("site", "/api/site", "settings");
-    if (s === undefined && S.errs.settings) return '<div class="col grow">' + errBlock("settings") + "</div>";
-    if (s === undefined) return '<div class="col grow">' + panel("Where runs go", "",
-      loadingBlock("site", "reading site.json and the environment")) + "</div>";
+    if (s === undefined && S.errs.settings) return errBlock("settings");
+    if (s === undefined) return panel("Where runs go", "",
+      loadingBlock("site", "reading site.json and the environment"), { style: "flex:none" });
     var st = s.stored || {}, ov = s.overrides || {};
     var chosen = st.engine || s.engine;
     var engines = (s.engines || []).map(function(e){
@@ -3822,18 +3915,37 @@ SCREENS.settings = {
       return '<option value="' + esc(x) + '"' + (x === (st.simulator || s.simulator) ? " selected" : "") + ">"
            + esc(x === "alps" ? "ALPS (default)" : x === "spectre" ? "Spectre" : x) + "</option>";
     }).join("");
+    /* one column in a ~540px drawer: the label above its control, the hint under it */
     var field = function(label, ctl, hint){
-      return '<span class="k">' + label + "</span><span>" + ctl
-           + (hint ? ' <span class="hint">' + hint + "</span>" : "") + "</span>";
+      return '<div class="field"><span class="lbl">' + label + "</span><span>" + ctl + "</span>"
+           + (hint ? '<span class="hint">' + hint + "</span>" : "") + "</div>";
     };
     var textField = function(key, id, width, label, hint){
       return field(label, '<input class="inp mono" id="' + id + '" data-keepfocus="1" style="width:' + width
-        + 'px" value="' + esc(st[key] !== undefined ? st[key] : s[key]) + '" data-change="'
+        + 'px;max-width:100%" value="' + esc(st[key] !== undefined ? st[key] : s[key]) + '" data-change="'
         + regAction(function(v){ var b = {}; b[key] = v; saveSite(b); }) + '">', hint);
     };
-    /* Only the fields the chosen engine reads: Donau takes the simulator, queue, CPUs and the
-       accounts; spectre_ssh the host, its work directory and the spectre command; dry_run and
-       fake take none of them. */
+    /* Parallel jobs: empty is the engine's own default (Donau 4, spectre_ssh 1); the hint is the
+       footprint on the queue, which is what a too-big number costs. */
+    var jobsField = function(){
+      var dflt = s.jobs_default || 1;
+      var eff = s.jobs !== null && s.jobs !== undefined ? s.jobs : dflt;
+      var stored = st.jobs !== null && st.jobs !== undefined ? st.jobs : "";
+      var hint = chosen === "donau_alps"
+        ? '<span class="mono">' + esc(s.cpus) + " CPUs &times; " + esc(eff) + " job" + (eff > 1 ? "s" : "")
+          + " = " + esc(Number(s.cpus) * Number(eff)) + " CPUs at once</span> on the "
+          + esc(s.queue || "-") + " queue"
+        : esc(eff) + " deck" + (eff > 1 ? "s" : "") + " at once on " + esc(s.ssh_host || "the host")
+          + "; 1 keeps a shared VM usable";
+      hint += " &middot; empty = the " + esc(chosen) + " default (" + esc(dflt) + ")";
+      return field("Parallel jobs", '<input class="inp mono" id="setjobs" data-keepfocus="1" inputmode="numeric" '
+        + 'style="width:70px" placeholder="' + esc(dflt) + '" value="' + esc(stored) + '" title="runs in flight '
+        + "at once, 1 to " + esc(s.max_jobs || 64) + '" data-change="'
+        + regAction(function(v){ v = String(v).trim(); saveSite({ jobs: v === "" ? null : v }); }) + '">', hint);
+    };
+    /* Only the fields the chosen engine reads: Donau takes the simulator, queue, CPUs, jobs and
+       the accounts; spectre_ssh the host, its work directory, the spectre command and jobs;
+       dry_run and fake take none of them. */
     var fields = SITE_FIELDS[chosen] || [];
     var kv = fields.map(function(k){
       if (k === "simulator") return field("Simulator", '<select class="inp" data-change="'
@@ -3841,21 +3953,23 @@ SCREENS.settings = {
           "what a Donau job runs; Spectre licences are scarce");
       if (k === "queue") return textField("queue", "setqueue", 140, "Queue", "the Donau queue, e.g. short");
       if (k === "cpus") return textField("cpus", "setcpus", 70, "CPUs per job", "the -mt / queue slot count");
-      if (k === "ssh_host") return textField("ssh_host", "setssh", 160, "SSH host", "the alias in your ~/.ssh/config");
-      if (k === "remote_workdir") return textField("remote_workdir", "setrwd", 220, "Remote work dir",
+      if (k === "jobs") return jobsField();
+      if (k === "ssh_host") return textField("ssh_host", "setssh", 200, "SSH host", "the alias in your ~/.ssh/config");
+      if (k === "remote_workdir") return textField("remote_workdir", "setrwd", 300, "Remote work dir",
           "where each run directory is shipped to on that host");
-      if (k === "spectre_cmd") return textField("spectre_cmd", "setspcmd", 160, "Spectre command",
+      if (k === "spectre_cmd") return textField("spectre_cmd", "setspcmd", 200, "Spectre command",
           "run by tcsh on that host after ~/.cshrc");
       return "";
     }).join("");
     var where = panel("Where runs go", "the engine Submit hands the plan to",
       '<table class="t" style="margin:-12px -13px 12px;width:calc(100% + 26px)"><tbody>' + engines + "</tbody></table>"
       + envNote("engine", s.engine)
-      + (kv ? '<div class="kv" style="margin-top:10px;align-items:center">' + kv + "</div>"
+      + (kv ? '<div class="col" style="gap:12px;min-width:0;margin-top:4px">' + kv + "</div>"
             : '<div class="hint" style="margin-top:10px">' + esc(chosen)
               + " needs nothing else from this machine: no simulator, queue, host or account is used.</div>")
       + (fields.indexOf("simulator") >= 0 ? envNote("simulator", s.simulator) : "")
-      + (fields.indexOf("cpus") >= 0 ? envNote("cpus", s.cpus) : ""),
+      + (fields.indexOf("cpus") >= 0 ? envNote("cpus", s.cpus) : "")
+      + (fields.indexOf("jobs") >= 0 ? envNote("jobs", s.jobs) : ""),
       { style: "flex:none" });
     var accRows = (s.accounts || []).map(function(a){
       var isDef = a.name === st.project_account;
@@ -3881,7 +3995,7 @@ SCREENS.settings = {
           + "the first one becomes the default. They stay in site.json on this machine.</div>")
       + '<div class="rowflex">'
       + '<input class="inp mono" id="acctname" data-keepfocus="1" data-input="acctName" data-enter="' + add
-      + '" style="width:190px" placeholder="account name" value="' + esc(S.sel.acctName || "") + '">'
+      + '" style="width:170px" placeholder="account name" value="' + esc(S.sel.acctName || "") + '">'
       + '<input class="inp" id="acctnote" data-keepfocus="1" data-input="acctNote" data-enter="' + add
       + '" style="flex:1;min-width:140px" placeholder="note, e.g. sims up to 1TB" value="' + esc(S.sel.acctNote || "") + '">'
       + '<button class="btn" data-act="' + add + '">Add account</button></div>'
@@ -3893,22 +4007,13 @@ SCREENS.settings = {
            + (f.source ? ' <span class="hint">from ' + esc(f.source) + "</span>" : "") + "</span>";
     }).join("");
     var env = panel("Read from this machine", "read-only &middot; from the environment",
-      '<div class="kv">' + envRows
+      '<div class="kv wrap">' + envRows
       + '<span class="k">site.json</span><span class="mono">' + esc(s.path || "-") + "</span></div>"
       + (s.demo ? '<div class="hint" style="margin-top:8px">Demo mode: nothing is read or saved.</div>'
                 : '<div class="hint" style="margin-top:8px">Set by the login scripts, not here: source the '
                   + "site setup before <span class=\"mono\">pmukit ui</span> to change them.</div>"),
       { style: "flex:none" });
-    return '<div class="col grow">' + errBlock("settings") + where + "</div>"
-         + '<div class="col" style="flex:0 0 480px">'
-         + (fields.indexOf("accounts") >= 0 ? accounts : "") + env + "</div>";
-  },
-  foot: function(){
-    var back = S.prev && S.prev !== "settings" && SCREENS[S.prev] ? S.prev : "home";
-    var name = (STEPS.filter(function(x){ return x[2] === back; })[0] || [0, back])[1];
-    return '<span class="hint">Settings of this machine, shared by every project; they live in '
-         + '<span class="mono">site.json</span> under PMUKIT_DATA.</span>'
-         + '<button class="btn pri" data-go="' + esc(back) + '">Back to ' + esc(name) + " " + ICON.arrow + "</button>";
+    return errBlock("settings") + where + (fields.indexOf("accounts") >= 0 ? accounts : "") + env;
   }
 };
 function saveSite(body, after){
@@ -3918,7 +4023,13 @@ function saveSite(body, after){
     S.toast = d.demo ? "demo: not saved" : "saved";
     render(); refreshCli();
     setTimeout(function(){ S.toast = ""; render(); }, 1400);
-  }, showErr);
+  }, function(e){
+    /* a refusal belongs where the change was made: the drawer, or the Plan's account picker */
+    if (!S.settings) return showErr(e);
+    S.errs.settings = { status: e.status, error: e.error,
+                        retry: function(){ delete S.errs.settings; render(); } };
+    render();
+  });
 }
 
 /* -------------------------------------------------------------- States -- */
@@ -3995,7 +4106,8 @@ function paletteCommands(){
                                     run: function(){ copy(planCsv()); } });
     cmds.push({ label: "Open report", hint: "report.md of the latest deliverable", run: function(){ openReport(); } });
   }
-  cmds.push({ label: "Settings: engine, queue, Donau accounts", hint: "this machine", run: function(){ go("settings"); } });
+  cmds.push({ label: "Settings: engine, queue, CPUs, parallel jobs, Donau accounts", hint: "this machine",
+              run: function(){ go("settings"); } });
   cmds.push({ label: "New project", hint: "Home", run: function(){ newProject(""); } });
   var q = (S.paletteQ || "").trim();
   if (/^[0-9a-f]{6,}$/i.test(q)){
@@ -4014,11 +4126,18 @@ document.addEventListener("keydown", function(e){
     if (S.menu){ S.menu = null; render(); return; }
     if (S.help){ S.help = null; render(); return; }
     if (S.note){ S.note = null; render(); return; }
+    if (S.settings){ closeSettings(); return; }       /* even from a field in it: Esc is "back" */
     if (S.errs[S.screen]){ delete S.errs[S.screen]; render(); return; }
     return;
   }
   if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")){
     e.preventDefault(); S.palette = true; S.paletteQ = ""; render(); return;
+  }
+  /* With the Settings drawer open the screen under it takes no keys: no Submit by Ctrl Enter,
+     no project undo, no step change by a digit -- only the help, which is the drawer's own. */
+  if (S.settings){
+    if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && e.key === "?"){ e.preventDefault(); openHelp(); }
+    return;
   }
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter"){
     e.preventDefault(); primary(); return;
@@ -4091,8 +4210,13 @@ window.addEventListener("focus", function(){
    unless ?screen= says otherwise; with none named, Home selects the first row. */
 function boot(){
   var q = new URLSearchParams(window.location.search);
+  /* ?screen=settings (an address from when Settings was a screen): the drawer, over the screen
+     the project was left on */
+  var drawer = q.get("screen") === "settings";
+  var urlScreen = drawer ? "" : q.get("screen");
   if (q.get("project")) S.project = q.get("project");
-  if (q.get("screen")) S.screen = q.get("screen");
+  if (urlScreen) S.screen = urlScreen;
+  if (drawer) S.settings = S.settingsIn = true;
   if (q.get("cell")) restoreCell(q.get("cell"), q.get("block"));
   render();
   refreshCli();
@@ -4105,7 +4229,10 @@ function boot(){
       /* the project's state: the screen it was left on (unless the URL names one) and the
          steps already done, which fill the nav circles after a reload */
       loadProgress(function(st){
-        if (!q.get("screen") && S.screen === "home" && st.screen && SCREENS[st.screen]) go(st.screen);
+        if (!urlScreen && S.screen === "home" && st.screen && SCREENS[st.screen]){
+          go(st.screen);
+          if (drawer) openSettings();
+        }
       });
     } else if (d.projects && d.projects.length){
       S.sel.project = d.projects[0].name;
