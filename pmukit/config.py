@@ -85,6 +85,11 @@ class MyLoad:
     switches: bool = True
     edge_s: float | None = None
     """Measured switching edge [s]; None -> the 1 ns default (never the carrier period)."""
+    off_estimated: bool = False
+    """True while off_a is pmukit's on/250 placeholder (the netlist seed, or the measure
+    suggestion), not a number the user gave. Saving an off current on the New screen clears it;
+    while it is set the load grid's provenance says "estimate", so no report presents the
+    placeholder as the user's number."""
 
     @classmethod
     def from_dict(cls, d, *, rail: str = "?", where: str = "") -> "MyLoad":
@@ -93,10 +98,11 @@ class MyLoad:
                        "Each rail entry must be a JSON object describing that rail's load.",
                        [f'Write "my_load": {{"{rail}": {{"on_a": 5e-4, "off_a": 2e-6, '
                         f'"switches": true}}}}'], where)
-        unknown = set(d) - {"on_a", "off_a", "switches", "edge_s"}
+        unknown = set(d) - {"on_a", "off_a", "switches", "edge_s", "off_estimated"}
         if unknown:
             raise _err(f"my_load[{rail!r}] has unknown key(s): {sorted(unknown)}.",
-                       "Only on_a, off_a, switches and edge_s describe a consumer load.",
+                       "Only on_a, off_a, switches, edge_s and off_estimated describe a "
+                       "consumer load.",
                        [f'Keep my_load[{rail!r}] to {{"on_a": .., "off_a": .., "switches": true, '
                         f'"edge_s": 1e-9}}'], where)
         for key in ("on_a", "off_a"):
@@ -107,13 +113,18 @@ class MyLoad:
                            where)
         return cls(on_a=d["on_a"], off_a=d["off_a"],
                    switches=d.get("switches", True),
-                   edge_s=d.get("edge_s"))
+                   edge_s=d.get("edge_s"),
+                   off_estimated=d.get("off_estimated", False))
 
     def to_dict(self) -> dict:
         out: dict = {"on_a": float(self.on_a), "off_a": float(self.off_a),
                      "switches": bool(self.switches)}
         if self.edge_s is not None:
             out["edge_s"] = float(self.edge_s)
+        # Written only while true, like edge_s only when measured: a load the user typed in
+        # full keeps exactly the keys it always had (and the same config sha).
+        if self.off_estimated:
+            out["off_estimated"] = True
         return out
 
     def validate(self, rail: str, where: str = "") -> None:
@@ -141,6 +152,12 @@ class MyLoad:
             raise _err(f"my_load[{rail!r}].switches is not a boolean ({self.switches!r}).",
                        "switches decides whether the load-EN events are characterized at all.",
                        [f'Set my_load[{rail!r}].switches to true or false'], where)
+        if not isinstance(self.off_estimated, bool):
+            raise _err(f"my_load[{rail!r}].off_estimated is not a boolean "
+                       f"({self.off_estimated!r}).",
+                       "off_estimated marks off_a as pmukit's on/250 placeholder, not your number.",
+                       [f'Set my_load[{rail!r}].off_estimated to true or false',
+                        f'Or drop it once off_a is your real off current'], where)
 
 
 @dataclass
@@ -870,6 +887,11 @@ def _load_grid(cfg: ProjectConfig, rail: str, rail_info: Mapping) -> dict:
             f"[{ml.off_a:g}, {0.2 * ml.on_a:g}, {ml.on_a:g}, {2 * ml.on_a:g}] A")
     prov += (f", clipped to the PMU current limit {ilimit:g} A" if ilimit is not None
              else " (no PMU current limit known -- nothing clipped)")
+    if ml.off_estimated:
+        # pmukit's placeholder, not the user's number: the grid still runs (Build plan is never
+        # blocked on it), but every place that shows this provenance says what the off point is.
+        prov += (f"; the off point {ml.off_a:g} A is an ESTIMATE (on/250), not set by the user "
+                 "-- type the real off current on the New screen")
     prov += " (0b row: load characterization grid)"
     events: list[dict] = []
     reason = ""
@@ -883,8 +905,11 @@ def _load_grid(cfg: ProjectConfig, rail: str, rail_info: Mapping) -> dict:
         reason = f"my_load[{rail!r}].switches is false"
     sweep = {"start_a": min(points), "stop_a": max(points), "n_points": max(len(points), 9),
              "provenance": "the declared load grid's own span"} if len(points) > 1 else {}
-    return {"points_a": points, "load_en": bool(ml.switches), "reason": reason, "events": events,
-            "sweep": sweep, "provenance": prov}
+    out = {"points_a": points, "load_en": bool(ml.switches), "reason": reason, "events": events,
+           "sweep": sweep, "provenance": prov}
+    if ml.off_estimated:
+        out["off_estimated"] = True       # only when set: a typed load's grid keeps its keys
+    return out
 
 
 def _transient_window(cfg: ProjectConfig, rail: str, load: Mapping) -> dict:

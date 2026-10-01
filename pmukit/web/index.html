@@ -100,6 +100,8 @@ table.t{width:100%;border-collapse:collapse;font-size:12.5px}
 .lbl{font-size:10.5px;font-weight:600;color:var(--ink2);letter-spacing:.05em;text-transform:uppercase}
 .inp{height:28px;border:1px solid var(--line3);border-radius:4px;padding:0 8px;font:inherit;background:var(--panel);color:var(--ink)}
 .hint{color:var(--ink3);font-size:12px}
+/* a number pmukit put there (not the user's): warning-styled until the user saves their own */
+.inp.est{border-color:var(--warn);background:var(--warn-bg)}
 .inp.bad{border-color:var(--bad);background:var(--bad-bg)}
 .fielderr{color:var(--bad);font-size:12px}
 /* the screen's actions stay on screen however long the screen is (Model scrolls) */
@@ -1807,11 +1809,16 @@ function threeQuestions(cfgd, pins){
     }).join(" ");
   };
   var save = regAction(function(){ saveLoadsFromInputs(); });
-  var loadBox = function(r, k, val){
+  /* `est`: the number is pmukit's on/250 placeholder (off_estimated), not the user's -- the box
+     is warning-styled and says so until the user saves an off current of their own. */
+  var loadBox = function(r, k, val, est){
     var key = "in:load:" + r + ":" + k;
-    return '<input class="inp mono' + badCls(key) + '" style="width:92px;height:24px" id="ld-' + esc(r) + "-" + k
+    var cls = badCls(key) || (est ? " est" : "");
+    return '<input class="inp mono' + cls + '" style="width:92px;height:24px" id="ld-' + esc(r) + "-" + k
       + '" data-load="' + esc(r) + '" data-k="' + k + '" data-keep="' + esc(key) + '" data-keepfocus="1"'
-      + ' data-enter="' + save + '" aria-label="' + esc(r) + (k === "on_a" ? " on" : " off") + ' current"'
+      + ' data-enter="' + save + '" aria-label="' + esc(r) + (k === "on_a" ? " on" : " off") + " current"
+      + (est ? " (estimate, on/250)" : "") + '"'
+      + (est ? ' title="an estimate (on/250), not your number: type your real off current and press Enter"' : "")
       + ' value="' + esc(typed(key, eng(val, "A"))) + '">';
   };
   var railRows = Object.keys(cfg.my_load || {}).map(function(r){
@@ -1820,16 +1827,20 @@ function threeQuestions(cfgd, pins){
     var sw = regAction(function(){ toggleSwitch(r); });
     var bad = badMsg("in:load:" + r + ":on_a") + badMsg("in:load:" + r + ":off_a");
     var got = S.sel.measured && S.sel.measured.rail === r ? S.sel.measured.text : "";
+    var est = ld.off_estimated === true;
+    var estMsg = est ? '<span class="hint est-off" style="color:var(--warn)">' + ICON.warn
+      + " off " + esc(eng(ld.off_a, "A")) + " is an estimate (on/250) &mdash; type your real off current</span>" : "";
     return '<tr class="rc"' + rc("rail", "rail " + r, ctx) + ">"
       + '<td class="mono">' + esc(r) + "</td>"
       + "<td>" + loadBox(r, "on_a", ld.on_a) + "</td>"
-      + "<td>" + loadBox(r, "off_a", ld.off_a) + "</td>"
+      + "<td>" + loadBox(r, "off_a", ld.off_a, est) + "</td>"
       + '<td><input type="checkbox" data-act="' + sw + '"' + (ld.switches ? " checked" : "")
       + '> <span class="hint">' + (ld.switches ? "load-EN characterized" : "static load only")
       + "</span></td>"
       + "<td>" + verbButtons("rail", CTXS[ctx]) + "</td></tr>"
-      + (bad || got ? '<tr><td></td><td colspan="4">' + bad
-          + (got ? '<span class="hint">' + ICON.ok + " " + esc(got) + "</span>" : "") + "</td></tr>" : "");
+      + (bad || got || estMsg ? '<tr><td></td><td colspan="4">' + [bad, estMsg,
+          got ? '<span class="hint">' + ICON.ok + " " + esc(got) + "</span>" : ""]
+          .filter(Boolean).join(" ") + "</td></tr>" : "");
   }).join("");
   var undo = regAction(function(){ doUndo(); });
   /* Set = Enter in either box. The nominal code and the others are saved TOGETHER as
@@ -2324,6 +2335,9 @@ function saveLoadsFromInputs(after){
       setBad(key, r.bad);
       if (r.bad){ bad++; return; }
       next.my_load[rail][k] = r.v; changed++;
+      /* an off current the user typed is theirs: the on/250 estimate mark goes. A typed ON
+         alone leaves it -- the off beside it is still the placeholder. */
+      if (k === "off_a") delete next.my_load[rail].off_estimated;
     });
   });
   if (bad){ render(); return; }
@@ -2385,22 +2399,25 @@ function doUndo(){
 }
 /* One rail, the row's own: the other rails' numbers (saved or being typed) are not touched.
    The ON current is the dc of its IL_ source; the OFF current is not in the netlist, so it is
-   only filled in when the saved one cannot stand next to the new ON (off must stay below on). */
+   only filled in when there is none yet or the saved one cannot stand next to the new ON (off
+   must stay below on) -- and then it is marked as the estimate it is (off_estimated). */
 function measureLoad(rail){
   api("/api/p/" + P() + "/measure-load", { method:"POST", body:{ rail: rail } }).then(function(d){
     var cur = (S.data["config"] || {}).config;
     var m = (d.rails || {})[rail];
     if (!cur || !m) return;
     var next = JSON.parse(JSON.stringify(cur));
-    if (!next.my_load[rail]) next.my_load[rail] = { on_a: 0, off_a: 0, switches: true };
+    var none = !next.my_load[rail];
+    if (none) next.my_load[rail] = { on_a: 0, off_a: 0, switches: true };
     var ld = next.my_load[rail], was = ld.on_a, keys = "in:load:" + rail + ":on_a";
     ld.on_a = m.on_a;
     var text = rail + " on " + eng(was, "A") + " → measured " + eng(m.on_a, "A")
              + (m.on_from ? " (" + m.on_from + ")" : "");
-    if (!(Number(ld.off_a) >= 0) || Number(ld.off_a) >= m.on_a){
+    if (none || !(Number(ld.off_a) >= 0) || Number(ld.off_a) >= m.on_a){
       text += "; off " + eng(ld.off_a, "A") + " → " + eng(m.off_a_suggested, "A")
             + " suggested (" + (m.off_note || "not in the netlist") + ")";
       ld.off_a = m.off_a_suggested;
+      ld.off_estimated = true;
       keys = "in:load:" + rail + ":";
     }
     putConfig(next, rail + " load measured from the netlist", keys,

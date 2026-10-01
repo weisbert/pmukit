@@ -188,6 +188,35 @@ const out = {};
   out.measure = { body: mb, a_on: put.VDD0P8_A.on_a, a_off: put.VDD0P8_A.off_a,
                   b_on: put.VDD0P8_B.on_a, html: nodes.main.innerHTML };
 
+  // ---- 5b. an estimated off current is marked until the user saves one; measure marks its own
+  fresh('new', { pins:PINS, netlistsrc:{ source:null, copy:COPY }, config:JSON.parse(JSON.stringify(CONFIG)) });
+  S.data.config.config.my_load.VDD0P8_A.off_estimated = true;
+  ROUTES['PUT /api/p/p/config'] = (b) => { S.data.config.config = b.config; return echoConfig(b); };
+  sandbox.render();
+  const offBox = (h, r) => (h.match(new RegExp('<input class="([^"]*)"[^>]*id="ld-' + r + '-off_a"')) || [])[1];
+  const onBox = (h, r) => (h.match(new RegExp('<input class="([^"]*)"[^>]*id="ld-' + r + '-on_a"')) || [])[1];
+  const e = { a_off_cls: offBox(nodes.main.innerHTML, 'VDD0P8_A'), a_on_cls: onBox(nodes.main.innerHTML, 'VDD0P8_A'),
+              b_off_cls: offBox(nodes.main.innerHTML, 'VDD0P8_B'),
+              hint: nodes.main.innerHTML.includes('off 2 uA is an estimate (on/250)'),
+              hints: (nodes.main.innerHTML.match(/is an estimate \(on\/250\)/g) || []).length };
+  S.sel['in:load:VDD0P8_A:on_a'] = '600u';
+  sandbox.saveLoadsFromInputs(); await flush(); sandbox.render();
+  e.on_only_flag = puts().slice(-1)[0].body.config.my_load.VDD0P8_A.off_estimated;
+  e.on_only_still_marked = nodes.main.innerHTML.includes('is an estimate (on/250)');
+  S.sel['in:load:VDD0P8_A:off_a'] = '1u';
+  sandbox.saveLoadsFromInputs(); await flush(); sandbox.render();
+  const sa = puts().slice(-1)[0].body.config.my_load.VDD0P8_A;
+  e.off_saved = { off: sa.off_a, has_flag: 'off_estimated' in sa };
+  e.after_cls = offBox(nodes.main.innerHTML, 'VDD0P8_A');
+  e.after_hint = nodes.main.innerHTML.includes('is an estimate (on/250)');
+  ROUTES['POST /api/p/p/measure-load'] = (b) => [200, { biases:{}, rails:{ [b.rail]:{ on_a:5e-6,
+      on_from:'IL_' + b.rail + ' dc=5u', off_a_suggested:2e-8, off_note:'not in the netlist' } } }];
+  sandbox.measureLoad('VDD0P8_B'); await flush(); sandbox.render();
+  const mbB = puts().slice(-1)[0].body.config.my_load.VDD0P8_B;
+  e.measured = { off: mbB.off_a, flag: mbB.off_estimated,
+                 marked: offBox(nodes.main.innerHTML, 'VDD0P8_B') };
+  out.estimate = e;
+
   // ---- 6. explanations are in the page
   fresh('plan');
   sandbox.VERBS.planrun.filter(v => v.id === 'why')[0].run({ row:{ run_id:'abcdef1234567',
@@ -333,6 +362,21 @@ def test_measure_acts_on_its_own_rail_and_says_what_it_set(page):
     assert "VDD0P8_A on 500 uA → measured 512 uA" in m["html"]
 
 
+def test_an_estimated_off_box_is_marked_until_the_user_saves_an_off_current(page):
+    """The on/250 seed is not the user's number: its Off box is warning-styled with a hint, a
+    saved ON alone leaves it marked, a saved OFF clears it, and the measure suggestion marks
+    the off it fills in."""
+    e = page["estimate"]
+    assert "est" in e["a_off_cls"].split() and "est" not in e["a_on_cls"].split()
+    assert "est" not in e["b_off_cls"].split(), "a typed off is not marked"
+    assert e["hint"] and e["hints"] == 1
+    assert e["on_only_flag"] is True and e["on_only_still_marked"]
+    assert e["off_saved"] == {"off": pytest.approx(1e-6), "has_flag": False}
+    assert "est" not in e["after_cls"].split() and not e["after_hint"]
+    assert e["measured"]["off"] == pytest.approx(2e-8) and e["measured"]["flag"] is True
+    assert "est" in e["measured"]["marked"].split()
+
+
 def test_measure_load_narrows_to_one_rail(api, bench):  # noqa: F811
     load_ok(api, {"path": str(bench / "input.scs")})
     one = api.measure_load("p", {"rail": "VDD0P8_A"})
@@ -341,6 +385,34 @@ def test_measure_load_narrows_to_one_rail(api, bench):  # noqa: F811
     with pytest.raises(PmuError) as ei:
         api.measure_load("p", {"rail": "NOPE"})
     assert "NOPE" in ei.value.what and "VDD0P8_A" in ei.value.why
+
+
+def test_the_seeded_off_current_is_marked_an_estimate_until_the_user_sets_it(api, bench):  # noqa: F811
+    """The OFF current is not in the netlist: the seed's on/250 keeps the grid buildable, but it
+    is stored as an estimate and the load grid's provenance says so -- until the user saves an
+    off current of their own. A rail ticked back to Model is seeded (and marked) the same way;
+    a re-read keeps the user's number unmarked."""
+    load_ok(api, {"path": str(bench / "input.scs")})
+    ld = api.get_config("p")["config"]["my_load"]["VDD0P8_A"]
+    assert ld["off_a"] == pytest.approx(5e-4 / 250) and ld["off_estimated"] is True
+    prov = api.derived("p")["derived"]["loads"]["VDD0P8_A"]["provenance"]
+    assert "ESTIMATE (on/250), not set by the user" in prov
+
+    cfg = api.get_config("p")["config"]
+    cfg["my_load"]["VDD0P8_A"] = {"on_a": 5e-4, "off_a": 1e-6, "switches": True}
+    api.put_config("p", {"config": cfg, "note": "load numbers edited"})
+    ld = api.get_config("p")["config"]["my_load"]
+    assert "off_estimated" not in ld["VDD0P8_A"] and ld["VDD0P8_B"]["off_estimated"] is True
+    loads = api.derived("p")["derived"]["loads"]
+    assert "ESTIMATE" not in loads["VDD0P8_A"]["provenance"]
+    assert "ESTIMATE" in loads["VDD0P8_B"]["provenance"]
+    load_ok(api, {"reread": True})
+    assert "off_estimated" not in api.get_config("p")["config"]["my_load"]["VDD0P8_A"]
+
+    api.set_pins("p", {"fates": {"VDD0P8_A": "stub"}})
+    assert "VDD0P8_A" not in api.get_config("p")["config"]["my_load"]
+    api.set_pins("p", {"fates": {"VDD0P8_A": "model"}})
+    assert api.get_config("p")["config"]["my_load"]["VDD0P8_A"]["off_estimated"] is True
 
 
 # --------------------------------------------------------------------------- 6-9

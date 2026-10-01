@@ -3718,7 +3718,8 @@ class Api:
 def _set_fates(cfg, fates: dict, table=None) -> None:
     """Write Model answers into `cfg` (validated; not saved). A pin that stops being modeled
     takes its load with it; a rail ticked back to Model gets its load back the way the first
-    read seeded it (the dc of its IL_ source), so its row in question 2 does not go missing."""
+    read seeded it (the dc of its IL_ source; the off marked as an estimate), so its row in
+    question 2 does not go missing."""
     from .config import MyLoad
     ports, loads = dict(cfg.ports), dict(cfg.my_load)
     for pin, fate in fates.items():
@@ -3729,7 +3730,8 @@ def _set_fates(cfg, fates: dict, table=None) -> None:
         p = table.pins.get(pin) if table is not None else None
         if p is not None and p.role == "rail" and p.dc and pin not in loads:
             on = abs(float(p.dc))
-            loads[pin] = MyLoad(on_a=on, off_a=max(on / 250.0, 1e-9), switches=True)
+            loads[pin] = MyLoad(on_a=on, off_a=max(on / 250.0, 1e-9), switches=True,
+                                off_estimated=True)     # the off is not in the netlist
     cfg.ports = ports
     cfg.my_load = loads
     cfg.validate()
@@ -3819,8 +3821,10 @@ def _seed_config(project: str, netlist: pathlib.Path, inst: str, table):
     """A first config straight from the netlist, so the New screen has something to show.
 
     Every value here is read out of the deck, not invented: the corner is the section the
-    include lines already carry, the loads are the dc of the IL_ sources. The three questions
-    are what the user then corrects.
+    include lines already carry, the ON loads are the dc of the IL_ sources. The one exception,
+    the OFF current, is not in the deck: it is seeded as on/250 and marked `off_estimated`, so
+    the New screen and the report say it is an estimate. The three questions are what the user
+    then corrects.
     """
     from .config import ProjectConfig
     ports, loads = {}, {}
@@ -3836,7 +3840,10 @@ def _seed_config(project: str, netlist: pathlib.Path, inst: str, table):
             ports[name] = "model"
         if pin.role == "rail" and pin.dc:
             on = abs(float(pin.dc))
-            loads[name] = {"on_a": on, "off_a": max(on / 250.0, 1e-9), "switches": True}
+            # The OFF current is not in the netlist: on/250 keeps the grid buildable, and
+            # `off_estimated` keeps it from ever being shown or reported as the user's number.
+            loads[name] = {"on_a": on, "off_a": max(on / 250.0, 1e-9), "switches": True,
+                           "off_estimated": True}
     # The corner is the section of the FIRST include line that carries one: ADE writes the
     # process-corner row first and extra model libraries (a noise or pre-sim section) after it,
     # and only that first line is ever rewritten per corner.

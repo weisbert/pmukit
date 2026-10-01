@@ -91,6 +91,19 @@ def test_negative_temperatures_work_without_an_equals_sign(workspace):
     assert cfg["temps_c"] == [-40.0, 25.0, 125.0]
 
 
+def test_a_load_given_on_the_command_line_is_the_users_not_an_estimate(workspace):
+    """--load rail=on,off is typed by the user: no off_estimated mark, no "estimate" in the
+    load grid's provenance (only the GUI's on/250 seed is one)."""
+    tmp, nl = workspace
+    new_project(nl)
+    d = tmp / "data" / "demo_pmu"
+    cfg = json.loads((d / "config.json").read_text(encoding="utf-8"))
+    assert cfg["my_load"]["a"] == {"on_a": 5e-4, "off_a": 2e-6, "switches": True}
+    der = (d / "derived.json")
+    if der.exists():
+        assert "ESTIMATE" not in der.read_text(encoding="utf-8")
+
+
 def test_load_without_both_currents_is_a_four_part_error(workspace, capsys):
     _tmp, nl = workspace
     # the CLI never tracebacks: a PmuError is rendered in four parts and exits 2

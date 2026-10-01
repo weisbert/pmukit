@@ -424,6 +424,42 @@ def test_load_grid_is_off_02on_on_2on():
     assert d.loads["VDD0P8_A"]["load_en"] is True
 
 
+def test_off_estimated_round_trips_and_is_omitted_when_false():
+    """An on/250 off current is pmukit's placeholder: the mark survives a save, and a load the
+    user typed in full keeps exactly the keys (and sha) it always had."""
+    est = {"on_a": 5e-4, "off_a": 2e-6, "switches": True, "off_estimated": True}
+    cfg = ProjectConfig.from_dict(cfg_dict(my_load={"VDD0P8_A": est}))
+    assert cfg.my_load["VDD0P8_A"].off_estimated is True
+    assert cfg.to_dict()["my_load"]["VDD0P8_A"] == est
+    typed = ProjectConfig.from_dict(cfg_dict(my_load={"VDD0P8_A": dict(est, off_estimated=False)}))
+    assert typed.my_load["VDD0P8_A"].off_estimated is False
+    assert "off_estimated" not in typed.to_dict()["my_load"]["VDD0P8_A"]
+    assert typed.sha() == ProjectConfig.from_dict(CONTRACT_0A).sha()
+    assert cfg.sha() != typed.sha()
+
+
+@pytest.mark.parametrize("bad", ["yes", 1, None])
+def test_off_estimated_must_be_a_boolean(bad):
+    d = cfg_dict(my_load={"VDD0P8_A": {"on_a": 5e-4, "off_a": 2e-6, "off_estimated": bad}})
+    with pytest.raises(PmuError) as ei:
+        ProjectConfig.from_dict(d)
+    assert "off_estimated is not a boolean" in ei.value.what
+    assert ei.value.do
+
+
+def test_an_estimated_off_point_says_so_in_the_load_grid_provenance():
+    """The grid still runs on the estimate (Build plan is never blocked), but its provenance --
+    what the report shows -- says the off point is an estimate, not the user's number."""
+    d = wired_cfg().to_dict()
+    d["my_load"]["VDD0P8_A"]["off_estimated"] = True
+    est = derive(ProjectConfig.from_dict(d), PINS).loads["VDD0P8_A"]
+    assert "ESTIMATE (on/250), not set by the user" in est["provenance"]
+    assert est["off_estimated"] is True
+    assert est["points_a"] == sorted({2e-6, 0.2 * 5e-4, 5e-4, 2 * 5e-4})
+    typed = derive(wired_cfg(), PINS).loads["VDD0P8_A"]
+    assert "ESTIMATE" not in typed["provenance"] and "off_estimated" not in typed
+
+
 def test_load_grid_is_clipped_to_the_current_limit():
     pins = copy.deepcopy(PINS)
     pins["VDD0P8_A"]["ilimit"] = 8e-4
