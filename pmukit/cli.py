@@ -288,6 +288,13 @@ def cmd_site(a) -> int:
     if a.cpus is not None:
         site.cpus = int(a.cpus)
         changed.append(f"cpus={a.cpus}")
+    if getattr(a, "jobs", None) is not None:
+        # "default" goes back to the engine's own; anything not a whole number is kept as typed
+        # so validate() refuses it with the same four parts PUT /api/site gives.
+        raw = str(a.jobs).strip()
+        site.jobs = (None if raw.lower() == "default"
+                     else int(raw) if re.fullmatch(r"-?\d+", raw) else raw)
+        changed.append(f"jobs={raw}")
     if changed:
         site.validate()
         path = site.save()
@@ -298,15 +305,19 @@ def cmd_site(a) -> int:
                  if getattr(site, k) != getattr(stored, k)}
     from . import sitenv
     facts = sitenv.facts(site)
+    from .backends import default_jobs
     if a.json:
-        _out({**site.to_dict(),
+        _out({**site.to_dict(), "jobs_default": default_jobs(site.engine),
               "overrides": {k: {"from": var, "stored": getattr(stored, k)}
                             for k, var in overrides.items()},
               "environment": {f.name: {"value": f.value, "source": f.source} for f in facts}}, True)
         return 0
+    shown = {**site.to_dict()}
+    if site.jobs is None:
+        shown["jobs"] = f"{default_jobs(site.engine)}   (the {site.engine} default)"
     rows = [[k, (f"{v}   (from {overrides[k]}; site.json says {getattr(stored, k)})"
                  if k in overrides else v)]
-            for k, v in sorted(site.to_dict().items()) if k not in ("provenance", "accounts")]
+            for k, v in sorted(shown.items()) if k not in ("provenance", "accounts")]
     print(_table(rows, ["setting", "value"]))
     if overrides:
         print(f"  {len(overrides)} setting(s) overridden by this shell's environment for this "
@@ -331,7 +342,8 @@ def cmd_site(a) -> int:
     print(f"\n  Change it:  {PROG} site --account <Donau account>   |   {PROG} site --simulator spectre")
     print(f"  Or per run: {PROG} run <project> --engine dry_run")
     print("  Environment overrides: PMUKIT_ENGINE, PMUKIT_SIMULATOR, PMUKIT_SSH_HOST, PMUKIT_CPUS,")
-    print("                         PMUKIT_ALPS_ROOT, PMUKIT_PDK_ROOT, PMUKIT_DONAU_ACCOUNT")
+    print("                         PMUKIT_JOBS, PMUKIT_ALPS_ROOT, PMUKIT_PDK_ROOT,")
+    print("                         PMUKIT_DONAU_ACCOUNT")
     return 0
 
 
@@ -844,6 +856,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--simulator", help="alps (default) | spectre -- what a Donau job runs")
     p.add_argument("--queue")
     p.add_argument("--cpus", type=int)
+    p.add_argument("--jobs", metavar="N|default",
+                   help="runs in flight at once (1-64); 'default' = the engine's own "
+                        "(Donau 4, spectre_ssh 1).  CPUs at once = cpus x jobs")
     p.add_argument("--ssh-host", dest="ssh_host")
     p.add_argument("--remote-workdir", dest="remote_workdir")
     p.add_argument("--spectre-cmd", dest="spectre_cmd")
@@ -889,7 +904,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--engine", help="spectre_ssh | donau_alps | dry_run | fake")
     p.add_argument("--off", action="append", help="untick a group (repeatable)")
     p.add_argument("--no-resume", action="store_true", help="re-run even the cached ones")
-    p.add_argument("--jobs", type=int, default=1)
+    # None, not 1: an unpassed flag must leave the width to site.json `jobs` / the engine.
+    p.add_argument("--jobs", type=int, default=None,
+                   help="runs in flight at once, this run only (default: site.json jobs, else "
+                        "the engine's own -- Donau 4, spectre_ssh 1)")
     p.set_defaults(fn=cmd_run)
 
     p = sub.add_parser("status", help="the run ledger")

@@ -176,9 +176,10 @@ class Runner:
                    own dataset from the plan's axes; pass `False` to run WITHOUT importing.
         `root`     where run directories live (default `$PMUKIT_DATA/<project>/runs`).
         `backend`  an explicit Backend instance, for tests and for `--engine` overrides.
-        `jobs`     thread-pool width (the `--jobs` knob).  Default 1: `spectre_ssh` runs one deck
-                   at a time so a shared VM is not oversubscribed, and 1 keeps the log order
-                   readable.  The fake and dry-run engines ignore it in practice.
+        `jobs`     thread-pool width (the `--jobs` knob).  None (the default) leaves it to the
+                   site: site.json `jobs`, else the backend's own `default_jobs` (Donau 4), else
+                   1 -- `spectre_ssh` runs one deck at a time so a shared VM is not
+                   oversubscribed, and 1 keeps the log order readable.  See `width()`.
         `aux`      files or directories copied into EVERY run directory before submission.  A
                    testbench whose `include` lines are relative (a PDK checked in next to the
                    deck) does not resolve once the deck is copied somewhere else; listing the
@@ -317,6 +318,14 @@ class Runner:
         return job
 
     # ------------------------------------------------------------------ the main loop
+    def width(self, jobs: int | None = None) -> int:
+        """How many runs are in flight at once.  First given wins: `jobs` (run_all's own), the
+        constructor's `jobs` (`pmukit run --jobs N`), the site's `jobs` (site.json or
+        $PMUKIT_JOBS), the backend's `default_jobs` (Donau 4), else 1."""
+        site_jobs = getattr(self.site, "jobs", None)
+        return max(1, int(jobs or (self.jobs if self._jobs_given else 0) or site_jobs
+                          or getattr(self.backend, "default_jobs", 0) or 1))
+
     def run_all(self, *, resume: bool = True, on_event: EventFn | None = None,
                 timeout_s: float | None = None, jobs: int | None = None) -> dict:
         """Submit every enabled planned run, poll to completion, import, update the ledger.
@@ -334,8 +343,7 @@ class Runner:
         self.timeout_s = timeout_s or getattr(self.backend, "default_job_timeout_s", None)
         if timeout_s is not None and hasattr(self.backend, "timeout_s"):
             self.backend.timeout_s = timeout_s        # an explicit deadline also bounds each call
-        width = max(1, int(jobs or (self.jobs if self._jobs_given else 0)
-                           or getattr(self.backend, "default_jobs", 0) or 1))
+        width = self.width(jobs)
 
         ok, why = self.backend.available()
         if not ok:

@@ -10,6 +10,7 @@ Lives in `$PMUKIT_DATA/site.json`. Environment overrides, applied by `load()` af
     PMUKIT_ENGINE     engine name   (donau_alps | spectre_ssh | dry_run | fake)
     PMUKIT_SSH_HOST   ssh host alias for the spectre_ssh engine
     PMUKIT_CPUS       cpus per job  (positive integer)
+    PMUKIT_JOBS       runs in flight at once  (1..MAX_JOBS)
 
 The defaults are the BOX's: submit to Donau's short queue and run ALPS (the site's Spectre
 licenses are scarce; `simulator` switches a Donau job to Spectre).  The desk, which runs Spectre
@@ -39,12 +40,17 @@ ENGINE_NOTES = {
     "fake": "analytic stand-in, no simulator -- for smoke tests only",
     "dry_run": "write the decks and the recipes, run nothing",
 }
-"""One line per engine: what `pmukit site` prints and the Settings screen shows."""
+"""One line per engine: what `pmukit site` prints and the Settings drawer shows."""
 
-ENV_OVERRIDES = {"engine": "PMUKIT_ENGINE", "ssh_host": "PMUKIT_SSH_HOST", "cpus": "PMUKIT_CPUS"}
+ENV_OVERRIDES = {"engine": "PMUKIT_ENGINE", "ssh_host": "PMUKIT_SSH_HOST", "cpus": "PMUKIT_CPUS",
+                 "jobs": "PMUKIT_JOBS"}
 """Setting -> the environment variable `load()` lets win over site.json."""
 
 SIMULATORS = ("alps", "spectre")
+
+MAX_JOBS = 64
+"""The most runs `jobs` may keep in flight at once.  Each one holds `cpus` queue slots and a
+poller thread; past this the queue is flooded rather than drained sooner."""
 
 SITE_FILE = "site.json"
 
@@ -63,6 +69,10 @@ class SiteConfig:
     engine: str = "donau_alps"
     queue: str = "short"
     cpus: int = 8
+    #: How many runs are in flight at once (the runner's thread pool).  None: the engine's own
+    #: default -- Donau 4 (LDO's GUI ran 4), spectre_ssh 1 (one deck at a time on a shared VM).
+    #: `pmukit run --jobs N` still wins for that one run.
+    jobs: int | None = None
     simulator: str = "alps"
     ssh_host: str = "ewave-vm"
     remote_workdir: str = "~/pmukit_work"
@@ -109,6 +119,22 @@ class SiteConfig:
             raise _err(f"site cpus is not a positive integer ({self.cpus!r}).",
                        "cpus becomes the -mt / queue slot count on every submitted job.",
                        ["Set cpus to a positive integer, e.g. 8"], where)
+        if self.jobs is not None:
+            if isinstance(self.jobs, bool) or not isinstance(self.jobs, int) or self.jobs < 1:
+                raise _err(f"site jobs is not a positive integer ({self.jobs!r}).",
+                           "jobs is how many runs are in flight at once; 0 or less would run "
+                           "nothing.",
+                           [f"Set jobs to a whole number from 1 to {MAX_JOBS}, e.g. 4",
+                            "Or leave it unset (null) for the engine's default: Donau 4, "
+                            "spectre_ssh 1"], where)
+            if self.jobs > MAX_JOBS:
+                raise _err(f"site jobs {self.jobs} is more than {MAX_JOBS}.",
+                           f"Every run in flight holds cpus={self.cpus} queue slots and a poller "
+                           f"thread: {self.jobs} x {self.cpus} = {self.jobs * self.cpus} CPUs at "
+                           "once floods the queue instead of finishing sooner.",
+                           [f"Set jobs to {MAX_JOBS} or fewer; 4-8 is what Donau's short queue "
+                            "drains well",
+                            "Or leave it unset (null) for the engine's default"], where)
         if self.simulator not in SIMULATORS:
             raise _err(f"site simulator {self.simulator!r} is not one of {list(SIMULATORS)}.",
                        "It picks the solver a Donau job runs; ALPS is the default because "
@@ -198,9 +224,9 @@ class SiteConfig:
     @classmethod
     def load(cls, path=None, *, env: bool = True) -> "SiteConfig":
         """Read `$PMUKIT_DATA/site.json` (or `path`); a missing file means the defaults.
-        `PMUKIT_ENGINE` / `PMUKIT_SSH_HOST` / `PMUKIT_CPUS` override whatever was read -- unless
-        `env=False`: what a change is saved on top of, so an override exported for one shell is
-        never written into the file."""
+        `PMUKIT_ENGINE` / `PMUKIT_SSH_HOST` / `PMUKIT_CPUS` / `PMUKIT_JOBS` override whatever was
+        read -- unless `env=False`: what a change is saved on top of, so an override exported for
+        one shell is never written into the file."""
         p = pathlib.Path(path) if path is not None else cls.default_path()
         if p.is_file():
             try:
@@ -244,4 +270,14 @@ class SiteConfig:
                 raise _err(f"PMUKIT_CPUS is not an integer ({cpus!r}).",
                            "The environment override is parsed as the per-job CPU count.",
                            ["Set PMUKIT_CPUS to a positive integer, e.g. 8",
+                            "Or unset it to use the value in site.json"], where) from None
+        jobs = os.environ.get("PMUKIT_JOBS")
+        if jobs:
+            try:
+                self.jobs = int(jobs)
+            except ValueError:
+                raise _err(f"PMUKIT_JOBS is not an integer ({jobs!r}).",
+                           "The environment override is parsed as the number of runs in flight "
+                           "at once.",
+                           [f"Set PMUKIT_JOBS to a whole number from 1 to {MAX_JOBS}, e.g. 4",
                             "Or unset it to use the value in site.json"], where) from None

@@ -367,11 +367,14 @@ vm.createContext(sandbox); vm.runInContext(src, sandbox, {filename:'index.html'}
 const S = sandbox.S; let bad = 0;
 if (!S || !sandbox.SCREENS) { console.log('FAIL the page exposes no state'); process.exit(1); }
 for (const [screen, data] of Object.entries(FIX)) {
-  S.screen = screen; S.project = 'demo_pmu'; S.data = Object.assign({}, data);
+  // Settings is a drawer over a screen, not a screen: it renders into the overlays
+  const drawer = screen === 'settings';
+  S.screen = drawer ? 'states' : screen; S.settings = drawer;
+  S.project = 'demo_pmu'; S.data = Object.assign({}, data);
   S.loading = {}; S.errs = {}; S.sel = {};
   try {
     sandbox.render();
-    const html = nodes.main.innerHTML;
+    const html = drawer ? nodes.overlays.innerHTML : nodes.main.innerHTML;
     if (!html || html.length < 40) throw new Error('main rendered ' + html.length + ' bytes');
     if (/undefined/.test(html)) throw new Error('rendered the word "undefined"');
     for (const tag of html.match(/<[a-zA-Z][^>]*>/g) || []) {
@@ -382,7 +385,7 @@ for (const [screen, data] of Object.entries(FIX)) {
     console.log(screen.padEnd(9), String(html.length).padStart(7), 'OK');
   } catch (e) { bad++; console.log(screen.padEnd(9), 'FAIL', e.message); }
 }
-S.screen = 'plan';
+S.screen = 'plan'; S.settings = false;
 S.errs.plan = { status:400, error:{what:'w', why:'y', do:['Go to New','Retry'], where:'f.scs'},
                 retry(){} };
 sandbox.render();
@@ -446,6 +449,9 @@ def test_page_renders_every_screen_without_throwing(tmp_path, demo):
 def test_page_declares_every_screen_and_every_object_menu():
     text = PAGE.read_text(encoding="utf-8")
     for screen in helptext.SCREENS:
+        if screen == "settings":                     # a drawer over the screen, not a screen
+            assert "var SETTINGS = {" in text and "SCREENS.settings" not in text
+            continue
         assert f"SCREENS.{screen} =" in text, f"the page has no {screen} screen"
     # one verb table, and every object the UX rules name has an entry in it
     for obj in ("project", "pin", "corner", "rail", "group", "planrun", "run", "cell", "block",
@@ -733,8 +739,8 @@ def test_page_reads_the_initial_project():
 # --------------------------------------------------------------------------- Settings (site)
 @pytest.fixture
 def site_live(tmp_path, monkeypatch):
-    for v in ("PMUKIT_ENGINE", "PMUKIT_SSH_HOST", "PMUKIT_CPUS", "PMUKIT_SIMULATOR",
-              "PMUKIT_CLUSTER_ENGINE", "PMUKIT_DONAU_ACCOUNT"):
+    for v in ("PMUKIT_ENGINE", "PMUKIT_SSH_HOST", "PMUKIT_CPUS", "PMUKIT_JOBS",
+              "PMUKIT_SIMULATOR", "PMUKIT_CLUSTER_ENGINE", "PMUKIT_DONAU_ACCOUNT"):
         monkeypatch.delenv(v, raising=False)
     monkeypatch.setenv("PMUKIT_DATA", str(tmp_path))
     c = Client(demo=False)
@@ -778,6 +784,38 @@ def test_settings_change_the_engine_simulator_queue_and_cpus(site_live):
     assert on_disk["engine"] == "fake" and on_disk["cpus"] == 4
 
 
+def test_settings_parallel_jobs_persist_and_fall_back_to_the_engine(site_live):
+    c = site_live
+    status, s = c.call("GET", "/api/site")
+    assert status == 200 and s["jobs"] is None and s["jobs_default"] == 4 and s["max_jobs"] == 64
+    assert {e["name"]: e["default_jobs"] for e in s["engines"]} == {
+        "donau_alps": 4, "spectre_ssh": 1, "dry_run": 1, "fake": 1}
+    status, s = c.call("PUT", "/api/site", {"jobs": "6"})          # a form field sends text
+    assert status == 200 and s["jobs"] == 6 and s["stored"]["jobs"] == 6
+    assert json.loads(c.site_json.read_text(encoding="utf-8"))["jobs"] == 6
+    status, s = c.call("PUT", "/api/site", {"engine": "spectre_ssh"})
+    assert s["jobs"] == 6 and s["jobs_default"] == 1               # kept across engines
+    status, s = c.call("PUT", "/api/site", {"jobs": None})         # back to the engine's own
+    assert s["jobs"] is None and s["stored"]["jobs"] is None
+    status, s = c.call("PUT", "/api/site", {"jobs": ""})
+    assert status == 200 and s["jobs"] is None
+    assert json.loads(c.site_json.read_text(encoding="utf-8"))["jobs"] is None
+
+
+def test_settings_jobs_env_override_wins_and_is_never_written(site_live, monkeypatch):
+    from pmukit.site import SiteConfig
+    c = site_live
+    monkeypatch.setenv("PMUKIT_JOBS", "3")
+    status, s = c.call("PUT", "/api/site", {"cpus": 2})
+    assert status == 200 and s["jobs"] == 3 and s["overrides"]["jobs"] == "$PMUKIT_JOBS"
+    assert s["stored"]["jobs"] is None
+    assert json.loads(c.site_json.read_text(encoding="utf-8"))["jobs"] is None
+    monkeypatch.setenv("PMUKIT_JOBS", "lots")
+    with pytest.raises(PmuError) as exc:
+        SiteConfig.load(c.site_json)
+    assert "PMUKIT_JOBS" in exc.value.what
+
+
 @pytest.mark.parametrize("body", [
     {},
     {"engines": "fake"},                                   # a typo is not silently ignored
@@ -787,6 +825,12 @@ def test_settings_change_the_engine_simulator_queue_and_cpus(site_live):
     {"cpus": 0},
     {"cpus": "eight"},
     {"cpus": True},
+    {"jobs": 0},
+    {"jobs": -2},
+    {"jobs": "four"},
+    {"jobs": True},
+    {"jobs": 2.5},
+    {"jobs": 65},                                          # past MAX_JOBS: floods the queue
     {"engine": "donau_alps", "queue": ""},
     {"account": ""},
     {"add_account": {"note": "no name"}},
@@ -828,6 +872,8 @@ def test_demo_settings_validate_but_save_nothing(demo):
 def test_settings_echo_is_a_pmukit_site_command():
     cmd = server.cli_echo("settings", {"engine": "fake", "cpus": 4, "account": ""}, "p")
     assert cmd == "pmukit site --engine fake --cpus 4"
+    cmd = server.cli_echo("settings", {"engine": "donau_alps", "cpus": 8, "jobs": 6}, "p")
+    assert cmd == "pmukit site --engine donau_alps --cpus 8 --jobs 6"
     assert server.cli_echo("deliver", {"file": "report.md"}, "p") == "pmukit report p"
 
 

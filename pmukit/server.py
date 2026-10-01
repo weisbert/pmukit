@@ -642,7 +642,8 @@ def cli_echo(screen: str, st, project: str = "") -> str:
     if scr == "settings":
         bits = ["pmukit site"]
         for key, flag in (("engine", "--engine"), ("simulator", "--simulator"),
-                          ("queue", "--queue"), ("cpus", "--cpus"), ("account", "--account"),
+                          ("queue", "--queue"), ("cpus", "--cpus"), ("jobs", "--jobs"),
+                          ("account", "--account"),
                           ("ssh_host", "--ssh-host"), ("remote_workdir", "--remote-workdir"),
                           ("spectre_cmd", "--spectre-cmd")):
             if st.get(key) not in (None, ""):
@@ -1827,6 +1828,21 @@ def _site_cpus(val, where: str) -> int:
     return val
 
 
+def _site_jobs(val, where: str):
+    """jobs from a JSON body: an integer, the text of one, or null / "" for the engine's default.
+    The range (1..MAX_JOBS) is the site config's own check."""
+    if val is None or (isinstance(val, str) and not val.strip()):
+        return None
+    if isinstance(val, str) and re.fullmatch(r"\s*-?\d+\s*", val):
+        val = int(val.strip())
+    if isinstance(val, bool) or not isinstance(val, int):
+        raise _err(f"site jobs is not a whole number ({val!r}).",
+                   "jobs is how many runs are in flight at once.",
+                   ['Send {"jobs": 4} -- a whole number, 1 or more',
+                    'Or {"jobs": null} for the engine\'s default (Donau 4, spectre_ssh 1)'], where)
+    return val
+
+
 def _site_names(val, where: str) -> list:
     """One account name or a list of them."""
     if val is None:
@@ -1878,21 +1894,25 @@ class Api:
 
     # ---------------------------------------------------------------- site (install-wide)
     def site_get(self) -> dict:
-        """What the Plan footer and the Settings screen show: the engine in effect, the account
+        """What the Plan footer and the Settings drawer show: the engine in effect, the account
         list and the pick, what the environment overrides, and what the box's environment
         provides (read-only -- `pmukit site` prints the same table)."""
         from . import sitenv
-        from .site import ENGINE_NOTES, ENGINES, SIMULATORS, SiteConfig
-        engines = [{"name": e, "note": ENGINE_NOTES.get(e, "")} for e in ENGINES]
+        from .backends import default_jobs
+        from .site import ENGINE_NOTES, ENGINES, MAX_JOBS, SIMULATORS, SiteConfig
+        engines = [{"name": e, "note": ENGINE_NOTES.get(e, ""), "default_jobs": default_jobs(e)}
+                   for e in ENGINES]
         if self.demo:
             return {"engine": "donau_alps", "simulator": "alps", "simulator_source": "default",
-                    "queue": "short", "cpus": 8, "ssh_host": "ewave-vm",
+                    "queue": "short", "cpus": 8, "jobs": None,
+                    "jobs_default": default_jobs("donau_alps"), "max_jobs": MAX_JOBS,
+                    "ssh_host": "ewave-vm",
                     "remote_workdir": "~/pmukit_work", "spectre_cmd": "spectre",
                     "accounts": [{"name": "ug_demo.smallClass", "note": "sims up to 512GB"},
                                  {"name": "ug_demo.bigClass", "note": "sims up to 2TB"}],
                     "account": "ug_demo.smallClass", "account_source": "site config",
                     "stored": {"engine": "donau_alps", "simulator": "alps", "queue": "short",
-                               "cpus": 8, "project_account": "ug_demo.smallClass"},
+                               "cpus": 8, "jobs": None, "project_account": "ug_demo.smallClass"},
                     "overrides": {}, "engines": engines, "simulators": list(SIMULATORS),
                     "environment": [], "path": "(demo, nothing is written)", "demo": True}
         path = site_path(self.root)
@@ -1907,13 +1927,17 @@ class Api:
             overrides["account"] = acc.source
         env = [{"name": f.name, "value": f.value, "source": f.source}
                for f in sitenv.facts(cfg) if f.name not in ("simulator", "account")]
+        # `jobs` is what site.json (or $PMUKIT_JOBS) says, null for "the engine's own";
+        # `jobs_default` is that engine's own -- the runner uses the first that is set.
         return {"engine": cfg.engine, "simulator": sim.value, "simulator_source": sim.source,
-                "queue": cfg.queue, "cpus": cfg.cpus, "ssh_host": cfg.ssh_host,
+                "queue": cfg.queue, "cpus": cfg.cpus, "jobs": cfg.jobs,
+                "jobs_default": default_jobs(cfg.engine), "max_jobs": MAX_JOBS,
+                "ssh_host": cfg.ssh_host,
                 "remote_workdir": cfg.remote_workdir, "spectre_cmd": cfg.spectre_cmd,
                 "accounts": list(cfg.accounts), "account": acc.value,
                 "account_source": acc.source,
                 "stored": {"engine": stored.engine, "simulator": stored.simulator,
-                           "queue": stored.queue, "cpus": stored.cpus,
+                           "queue": stored.queue, "cpus": stored.cpus, "jobs": stored.jobs,
                            "ssh_host": stored.ssh_host, "remote_workdir": stored.remote_workdir,
                            "spectre_cmd": stored.spectre_cmd,
                            "project_account": stored.project_account},
@@ -1921,13 +1945,14 @@ class Api:
                 "environment": env, "path": str(path or SiteConfig.default_path())}
 
     #: What PUT /api/site accepts -- the `pmukit site` flags, spelled as JSON keys.
-    SITE_KEYS = ("engine", "simulator", "queue", "cpus", "ssh_host", "remote_workdir",
+    SITE_KEYS = ("engine", "simulator", "queue", "cpus", "jobs", "ssh_host", "remote_workdir",
                  "spectre_cmd", "add_account", "remove_account", "account")
 
     def site_put(self, body: dict) -> dict:
         """Change the site config the way `pmukit site` does, and save it to site.json.
 
-        {"engine", "simulator", "queue", "cpus", "ssh_host", ...} set a value;
+        {"engine", "simulator", "queue", "cpus", "jobs", "ssh_host", ...} set a value ("jobs":
+        null goes back to the engine's default);
         {"add_account": {"name", "note"}} (or "name=note", or a list of either) adds or re-notes
         a Donau account; {"remove_account": "name"} (or a list) drops one; {"account": "name"}
         makes it the one runs are charged to (joining the list if new).  Applied in that order,
@@ -1946,7 +1971,7 @@ class Api:
         if not any(k in body for k in self.SITE_KEYS):
             raise _err("nothing to change was given.",
                        "PUT /api/site changes the site config: the engine, the simulator, the "
-                       "queue, the CPU count or the Donau account list.",
+                       "queue, the CPU count, the parallel jobs or the Donau account list.",
                        ['Send e.g. {"account": "<one of the listed accounts>"}',
                         'Or {"engine": "donau_alps"}'], where)
         if "account" in body and not str(body.get("account") or "").strip():
@@ -1965,15 +1990,17 @@ class Api:
                 setattr(cfg, name, val.strip())
         if "cpus" in body:
             cfg.cpus = _site_cpus(body["cpus"], where)
+        if "jobs" in body:
+            cfg.jobs = _site_jobs(body["jobs"], where)
         for name, note in _site_accounts(body.get("add_account"), where):
             cfg.add_account(name, note)
         for name in _site_names(body.get("remove_account"), where):
             cfg.remove_account(name)
         if "account" in body:
             cfg.select_account(str(body["account"]))
+        cfg.validate(where)                          # refused here, before anything is written
         if self.demo:
-            cfg.validate(where)                      # the same refusals, nothing written
-            return self.site_get()
+            return self.site_get()                   # the same refusals, nothing written
         cfg.save(path)
         return self.site_get()
 
@@ -2826,6 +2853,8 @@ class Api:
                 runner = Runner(pr.name, plan, led, site, aux=aux,
                                 root=(pathlib.Path(self.root) / pr.name / "runs"
                                       if self.root is not None else None))
+                width = runner.width()
+                job.say(f"{width} run{'s' if width > 1 else ''} in flight at once", 0.13)
                 result = runner.run_all(on_event=on_event)
             out["runner"] = _clean(result)
             out["engine"] = site.engine

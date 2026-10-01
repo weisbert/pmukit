@@ -315,6 +315,39 @@ def test_parallel_jobs_give_the_same_result(tmp_path, parts):
     assert ds.summary()["totals"]["never_run"] == 0
 
 
+def test_width_is_run_all_then_jobs_then_site_then_engine(tmp_path, parts):
+    """`run_all(jobs=)` > `Runner(jobs=)` (`--jobs`) > site.json `jobs` > the backend's
+    `default_jobs` (Donau 4) > 1."""
+    cfg, plan, _site = parts
+
+    class Donau4:
+        name = "donau4"
+        default_jobs = 4
+
+    def runner(site_jobs=None, jobs=None, backend=None):
+        return Runner(cfg, plan, Ledger(tmp_path / "w.sqlite"),
+                      SiteConfig(engine="fake", jobs=site_jobs), dataset=False,
+                      root=tmp_path / "runs", jobs=jobs, backend=backend or Donau4())
+    assert runner().width() == 4                                   # the engine's own
+    assert runner(backend=object()).width() == 1                   # an engine that says nothing
+    assert runner(site_jobs=6).width() == 6                        # site.json over the engine
+    assert runner(site_jobs=6, jobs=2).width() == 2                # --jobs over site.json
+    assert runner(site_jobs=6, jobs=2).width(3) == 3               # run_all's own over all
+    assert runner(jobs=1).width() == 1                             # an explicit 1 is kept
+
+
+def test_site_jobs_is_validated():
+    assert SiteConfig().jobs is None
+    for bad in (0, -1, True, 2.5, "4", 65):
+        with pytest.raises(PmuError) as exc:
+            SiteConfig(jobs=bad).validate()
+        assert "site jobs" in exc.value.what and exc.value.do
+    for ok in (1, 4, 64, None):
+        SiteConfig(jobs=ok).validate()
+    # the closed file accepts it, and the round trip keeps it
+    assert SiteConfig.from_dict({"jobs": 8}).to_dict()["jobs"] == 8
+
+
 def test_fake_parses_the_pwl_wave_whole():
     """`wave=[0 1e-6 ...]` has spaces: a k=v token split keeps only `wave=[0`."""
     deck = parse_deck("IL_A (A 0) isource type=pwl wave=[0 2e-06 1e-06 2e-06 1.1e-06 5e-04]\n")

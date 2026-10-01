@@ -358,6 +358,64 @@ def test_site_never_writes_an_environment_override_into_site_json(workspace, cap
     assert d["overrides"]["engine"] == {"from": "$PMUKIT_ENGINE", "stored": "spectre_ssh"}
 
 
+def test_site_jobs_persists_and_goes_back_to_the_engine_default(workspace, capsys,
+                                                                  monkeypatch):
+    tmp, _nl = workspace
+    monkeypatch.delenv("PMUKIT_JOBS", raising=False)
+    run(["site", "--jobs", "6"])
+    capsys.readouterr()
+    stored = json.loads((tmp / "data" / "site.json").read_text(encoding="utf-8"))
+    assert stored["jobs"] == 6
+    run(["--json", "site"])
+    d = json.loads(capsys.readouterr().out)
+    assert d["jobs"] == 6 and d["jobs_default"] == 4             # donau_alps, the default engine
+    run(["site", "--jobs", "default"])
+    stored = json.loads((tmp / "data" / "site.json").read_text(encoding="utf-8"))
+    assert stored["jobs"] is None
+    capsys.readouterr()
+    run(["site"])
+    out = capsys.readouterr().out
+    assert re.search(r"jobs\s+4\s+\(the donau_alps default\)", out), out
+    assert "PMUKIT_JOBS" in out
+
+
+@pytest.mark.parametrize("bad", ["0", "-3", "four", "65"])
+def test_site_jobs_refuses_a_silly_value_and_writes_nothing(workspace, capsys, bad):
+    tmp, _nl = workspace
+    run(["site", "--jobs", "4"])
+    before = (tmp / "data" / "site.json").read_bytes()
+    capsys.readouterr()
+    run(["site", "--jobs", bad], expect=2)
+    err = capsys.readouterr().err
+    assert "site jobs" in err
+    assert (tmp / "data" / "site.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("site_jobs, argv, want", [
+    (None, [], 1),                 # nothing set: the engine's own (fake: 1)
+    (6, [], 6),                    # site.json wins over the engine -- an unpassed --jobs is no 1
+    (6, ["--jobs", "2"], 2),       # an explicit --jobs wins over site.json
+    (None, ["--jobs", "3"], 3),
+])
+def test_run_width_is_jobs_flag_then_site_then_engine(workspace, capsys, monkeypatch,
+                                                      site_jobs, argv, want):
+    from pmukit import runner as rmod
+    _tmp, nl = workspace
+    monkeypatch.delenv("PMUKIT_JOBS", raising=False)
+    new_project(nl)
+    if site_jobs is not None:
+        run(["site", "--jobs", str(site_jobs)])
+    seen = {}
+
+    def fake_run_all(self, **kw):
+        seen["width"] = self.width(kw.get("jobs"))
+        return {"engine": self.backend.name, "planned": 0}
+    monkeypatch.setattr(rmod.Runner, "run_all", fake_run_all)
+    capsys.readouterr()
+    run(["--json", "run", "demo_pmu", "--engine", "fake", *argv])
+    assert seen["width"] == want
+
+
 def test_ui_accepts_verbose(monkeypatch):
     """`pmukit ui -v` logs every request; the server has the flag, the CLI refused it."""
     got = {}
