@@ -47,6 +47,7 @@ from typing import Callable, Iterable, Sequence
 from . import spec
 from .config import DerivedConfig, ProjectConfig
 from .errors import PmuError
+from .jsonio import sha_bytes
 from .ledger import Ledger, Recipe, Run, make_run_id
 from .netlist import Netlist, PinTable
 
@@ -453,6 +454,57 @@ def _base_variant(base: Netlist, cfg: ProjectConfig, derived: DerivedConfig, cor
     return nl
 
 
+class _Variants:
+    """The base variant of each cell, built once per plan and copied for every run of the cell.
+
+    A run deck is the cell's variant plus a hot source and the analyses; dozens of runs share a
+    cell, and building the variant again for each re-did the same corner/code/temperature/load
+    rewrites. Also holds, per variant, which convention sources carry a `mag=` (`says_mag`)."""
+
+    def __init__(self, cfg: ProjectConfig, derived: DerivedConfig, base: Netlist, site):
+        self.cfg, self.derived, self.base = cfg, derived, base
+        self.absolute = absolute_includes(site)
+        self._cells: dict[tuple, Netlist] = {}
+        self._texts: dict[tuple, str] = {}
+        self._mags: dict[tuple, dict[str, bool]] = {}
+
+    @staticmethod
+    def key(b: dict) -> tuple:
+        return (b["corner"], b["temp"], b["code"], b["state"].key)
+
+    def deck(self, b: dict) -> Netlist:
+        """A private copy of the cell's variant, for one run to finish."""
+        k = self.key(b)
+        nl = self._cells.get(k)
+        if nl is None:
+            nl = _base_variant(self.base, self.cfg, self.derived, b["corner"], b["temp"],
+                               b["code"], b["state"], absolute=self.absolute)
+            self._cells[k] = nl
+            self._texts[k] = nl.text             # joined once; every copy shares it
+        return nl.copy()
+
+    def says_mag(self, b: dict, src: str) -> bool:
+        """`_says_mag` of the cell's variant -- what a run's deck says before it rewrites any."""
+        got = self._mags.setdefault(self.key(b), {})
+        if src not in got:
+            got[src] = _says_mag(self._texts[self.key(b)], src)
+        return got[src]
+
+
+def _says_mag(text: str, src: str) -> bool:
+    """Does a line of `text` start with the statement `src (...` and say `mag=` on it? Exactly
+    `re.search(rf"^\\s*{src}\\s*\\(.*\\bmag\\s*=", text, re.MULTILINE)`, without running that
+    regex over a multi-MB deck: only where `src` is the first thing on a line can it match."""
+    rx = re.compile(rf"{re.escape(src)}\s*\(.*\bmag\s*=")
+    i = text.find(src)
+    while i >= 0:
+        start = text.rfind("\n", 0, i) + 1
+        if (start == i or text[start:i].isspace()) and rx.match(text, i):
+            return True
+        i = text.find(src, i + 1)
+    return False
+
+
 def _sweep_clause(start: float, stop: float, n: int) -> str:
     """A DC sweep statement. Spectre refuses start == stop (SPECTRE-16108), and rightly: a sweep
     over one point is not a sweep. The caller must skip the run instead of emitting one."""
@@ -629,6 +681,7 @@ def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
     #    A cell no member is designated for is not run at all -- it would measure nothing the
     #    dataset can hold.
     groups: dict[str, Group] = {}
+    variants = _Variants(cfg, derived, netlist, site)
     code0 = (list((derived.vset or {}).get("codes", [])) or [0])[0]
     temp0 = (list((derived.temps_c or {}).get("points", [])) or [25.0])[0]
     for key in family_order:
@@ -644,7 +697,7 @@ def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
                 continue
             b = dict(f, corner=corner, temp=temp, code=code, state=state,
                      load_axis=("load_a" in f["axes"]), own_reads=own)
-            pr = _build_run(cfg, derived, netlist, b, site=site, pins=pins)
+            pr = _build_run(cfg, derived, netlist, b, site=site, pins=pins, variants=variants)
             pr.cost_s = cost(pr.run, derived)
             feeds = tuple(dict.fromkeys(fd for v in own for fd in f["var_feeds"].get(v, [])))
             object.__setattr__(pr, "feeds", feeds)
@@ -662,7 +715,7 @@ def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
 
     # 4) the output-code check: report-only, never fitted.
     _code_check(plan, cfg, derived, netlist, families, family_order, nominal,
-                site=site, pins=pins, cost=cost)
+                site=site, pins=pins, cost=cost, variants=variants)
     return plan
 
 
@@ -683,7 +736,7 @@ def check_temps(derived: DerivedConfig) -> list[float]:
 
 def _code_check(plan: Plan, cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
                 families: dict, family_order: list, nominal: LoadState, *, site, pins,
-                cost: CostFn) -> None:
+                cost: CostFn, variants: _Variants | None = None) -> None:
     """The output-code check: each rail's Zout injection and the supply injection, again, at the
     lowest and the highest code -- per corner, at the coldest and the hottest temperature, at the
     nominal load state.
@@ -699,6 +752,7 @@ def _code_check(plan: Plan, cfg: ProjectConfig, derived: DerivedConfig, netlist:
     codes = check_codes(derived)
     if not codes:
         return
+    variants = variants or _Variants(cfg, derived, netlist, site)
     rails = set(derived.rails or {})
     corners = list((derived.process or {}).get("corners", [])) or ["tt"]
     group = None
@@ -715,7 +769,8 @@ def _code_check(plan: Plan, cfg: ProjectConfig, derived: DerivedConfig, netlist:
                 for code in codes:
                     b = dict(f, reads=reads, own_reads=reads, feeds=[], corner=corner, temp=temp,
                              code=code, state=nominal, load_axis=("load_a" in f["axes"]))
-                    pr = _build_run(cfg, derived, netlist, b, site=site, pins=pins)
+                    pr = _build_run(cfg, derived, netlist, b, site=site, pins=pins,
+                                    variants=variants)
                     pr.cost_s = cost(pr.run, derived)
                     pr.check = pr.group_id = CODE_CHECK
                     if group is None:
@@ -820,11 +875,13 @@ def _stimulus_for(obs: str, port: str, derived: DerivedConfig, supplies: list[st
 
 
 def _build_run(cfg: ProjectConfig, derived: DerivedConfig, base: Netlist, b: dict, *,
-               site=None, pins: PinTable | None = None) -> PlannedRun:
+               site=None, pins: PinTable | None = None,
+               variants: _Variants | None = None) -> PlannedRun:
     """Write the netlist variant for one bucket and wrap it in a ledger Run."""
     analysis, stim, state = b["analysis"], b["stimulus"], b["state"]
-    nl = _base_variant(base, cfg, derived, b["corner"], b["temp"], b["code"], state,
-                       absolute=absolute_includes(site))
+    if variants is None:
+        variants = _Variants(cfg, derived, base, site)
+    nl = variants.deck(b)
     saves: list[str] = []
     analyses: list[str] = []
 
@@ -832,13 +889,16 @@ def _build_run(cfg: ProjectConfig, derived: DerivedConfig, base: Netlist, b: dic
         # Superposition: exactly ONE source is hot.  An ADE testbench may already carry `mag=` on
         # another convention source (a supply left at mag=1); LDO_modeling zeroed every role
         # source but the driven one, so every other one that says mag= is set to 0 here.
+        # Until this run rewrites one, its deck reads as the cell's variant does.
+        zeroed = False
         for group in (derived.rails, derived.biases, derived.en,
                       (derived.supply or {}).get("pins", {})):
             for e in (group or {}).values():
                 other = (e or {}).get("src")
-                if other and other != stim and re.search(
-                        rf"^\s*{re.escape(other)}\s*\(.*\bmag\s*=", nl.text, re.MULTILINE):
+                if other and other != stim and (_says_mag(nl.text, other) if zeroed
+                                                 else variants.says_mag(b, other)):
                     nl.set_mag(other, 0)
+                    zeroed = True
         nl.set_mag(stim, 1)
         analyses.append(f"{AC_NAME} ac {_ac_clause(derived)}")
         for var in b["reads"]:
@@ -950,8 +1010,9 @@ def _build_run(cfg: ProjectConfig, derived: DerivedConfig, base: Netlist, b: dic
         nl.append(save_line)
 
     netlist_text = nl.render()
+    netlist_sha = sha_bytes(netlist_text.encode("utf-8"), 12)      # nl.sha(), rendered once
     load_key = state.key if b.get("load_axis") else ""
-    run_id = make_run_id(netlist_sha=nl.sha(), process=b["corner"],
+    run_id = make_run_id(netlist_sha=netlist_sha, process=b["corner"],
                          temp_c=(b["temp"] if b["temp"] is not None else float("nan")),
                          vset=int(b["code"]), load_key=load_key,
                          analysis=analysis, stimulus=stim)
@@ -961,7 +1022,7 @@ def _build_run(cfg: ProjectConfig, derived: DerivedConfig, base: Netlist, b: dic
     run = Run(run_id=run_id, process=b["corner"],
               temp_c=(float(b["temp"]) if b["temp"] is not None else float("nan")),
               vset=int(b["code"]), load_key=load_key, analysis=analysis, stimulus=stim,
-              reads=list(b.get("own_reads") or b["reads"]), netlist_sha=nl.sha(),
+              reads=list(b.get("own_reads") or b["reads"]), netlist_sha=netlist_sha,
               recipe=recipe.text(),
               engine=getattr(site, "engine", "") if site is not None else "")
     feeds = tuple(dict.fromkeys(b["feeds"]))

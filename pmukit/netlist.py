@@ -39,7 +39,10 @@ New here:
 """
 from __future__ import annotations
 
+import bisect
 import collections
+import itertools
+import operator
 import os
 import pathlib
 import re
@@ -137,10 +140,11 @@ def _continues(raw: str) -> bool:
     return raw.split("//", 1)[0].rstrip().endswith("\\")
 
 
-def _logical_lines(text: str):
-    """[(logical_text, [physical lines])] -- an untouched statement re-emits byte-identical."""
+def _logical_units(lines):
+    """[(logical_text, [physical lines])] of a deck's physical lines -- an untouched statement
+    re-emits byte-identical."""
     units, phys, parts = [], [], []
-    for raw in text.splitlines():
+    for raw in lines:
         phys.append(raw)
         if _continues(raw):
             parts.append(raw.split("//", 1)[0].rstrip()[:-1].rstrip())
@@ -153,32 +157,79 @@ def _logical_lines(text: str):
     return units
 
 
-def _subckt_delta(logical: str) -> int:
-    s = logical.strip()
-    if not s:
+def _logical_lines(text: str):
+    """[(logical_text, [physical lines])] -- an untouched statement re-emits byte-identical."""
+    return _logical_units(text.splitlines())
+
+
+def _delta_of(toks: list[str]) -> int:
+    """+1 a subckt header, -1 its `ends`, 0 anything else -- from the statement's first tokens."""
+    if not toks:
         return 0
-    toks = s.lower().split()
-    first = toks[0]
+    first = toks[0].lower()
     if first in ("subckt", ".subckt"):
         return +1
-    if first == "inline" and len(toks) >= 2 and toks[1] == "subckt":
+    if first == "inline" and len(toks) >= 2 and toks[1].lower() == "subckt":
         return +1
     if first in ("ends", ".ends"):
         return -1
     return 0
 
 
-def _scoped_logical_lines(text: str):
-    """(logical, physical, depth) -- depth 0 is top level; a header is reported at its OUTER depth."""
-    depth = 0
-    for logical, phys in _logical_lines(text):
-        delta = _subckt_delta(logical)
+def _subckt_delta(logical: str) -> int:
+    return _delta_of(logical.split(None, 2))
+
+
+def _scoped_units(lines, depth: int = 0) -> list[tuple]:
+    """[(logical, physical lines, depth, depth after it, first token, the physical lines
+    joined)] of a deck's physical lines, the subckt depth starting at `depth`. Depth 0 is top
+    level; a header is reported at its OUTER depth (an `ends` at the depth it returns to)."""
+    out = []
+    for logical, phys in _logical_units(lines):
+        toks = logical.split(None, 2)
+        delta = _delta_of(toks)
+        head = toks[0] if toks else ""
+        text = phys[0] if len(phys) == 1 else "\n".join(phys)
         if delta < 0:
             depth = max(0, depth + delta)
-            yield logical, phys, depth
+            out.append((logical, phys, depth, depth, head, text))
         else:
-            yield logical, phys, depth
+            out.append((logical, phys, depth, depth + delta, head, text))
             depth += delta
+    return out
+
+
+_TEXT = operator.itemgetter(5)          # a statement's physical lines, joined
+
+
+def _scoped_logical_lines(text: str):
+    """(logical, physical, depth) -- depth 0 is top level; a header is reported at its OUTER depth."""
+    for logical, phys, depth, *_ in _scoped_units(text.splitlines()):
+        yield logical, phys, depth
+
+
+#: What `str.splitlines` breaks a line at: a deck line holding one of these is not one line.
+_LINE_BREAK = re.compile(r"[\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
+#: A `simulator lang=<x>` statement, read on its line (`append` switches back to spectre).
+_LANG_LINE = re.compile(r"\s*simulator\s+lang\s*=\s*(\w+)")
+_SPECTRE_LINE = re.compile(r"\s*simulator\s+lang\s*=\s*spectre\b")
+#: The unread-statement count past which a deck's first-token index is rebuilt.
+_INDEX_SLACK = 256
+_UNKNOWN = object()
+_RISKY = object()
+_INCLUDE_HEADS = frozenset({"include", "ahdl_include"})
+
+
+def _lang_of(line: str, last):
+    """The deck's last `simulator lang=` language once `line` is read after `last`. A line
+    starting `simulator` but not saying `lang=<x>` on itself is _RISKY: the regex `append` reads
+    the joined text with could find the rest on the lines below."""
+    if last is _RISKY or "simulator" not in line:
+        return last
+    m = _LANG_LINE.match(line)
+    if m:
+        return m.group(1)
+    return _RISKY if line.lstrip().startswith("simulator") else last
 
 
 def _parse_instance(logical: str):
@@ -506,6 +557,17 @@ class Netlist:
     """A parsed, rewritable Spectre testbench. Every mutation records a recipe line."""
 
     def __init__(self, text: str, path: str | pathlib.Path | None = None):
+        # The deck is read ONCE into its statements (`_units`), and every rewrite edits that
+        # list in place: a run deck is the exported netlist with a handful of statements changed,
+        # and re-reading a multi-MB bench per change made a plan O(runs x edits x netlist).
+        # `text` is the list joined back -- byte for byte what the rewrites made it before.
+        self._text: str | None = None   # the text, or None until it is asked for again
+        self._u: list[tuple] | None = None   # _scoped_units of the text, None until read
+        self._tail = ""                 # text = the joined lines + this ("" or "\n")
+        self._joined: bool | None = None    # whether text is exactly that (None: not checked)
+        self._idx: tuple | None = None  # (first token -> positions, top-level only, top-level)
+        self._n = 0                     # the index holds positions [0, _n); later ones are read
+        self._lang = _UNKNOWN           # the last `simulator lang=`, see `append`
         self.text = text.replace("\r\n", "\n").replace("\r", "\n")
         self.path = str(path or "")
         #: Where the user's file really lives, when `path` is a copy of it (the web shell copies
@@ -534,12 +596,178 @@ class Netlist:
         return cls(p.read_text(encoding="utf-8", errors="replace"), p)
 
     def copy(self) -> "Netlist":
-        n = Netlist(self.text, self.path)
+        """An independent deck with the same text and recipe. The statements read from the text
+        (and their index) are shared, not read again: a plan copies its bench once per run."""
+        n = Netlist("", self.path)
+        if self._text is not None and "\r" in self._text:
+            n.text = self._text.replace("\r\n", "\n").replace("\r", "\n")
+        else:
+            u = self._units()
+            self._index()
+            self._last_lang()
+            n._text, n._tail, n._joined, n._lang = self._text, self._tail, self._joined, self._lang
+            n._u, n._idx, n._n = list(u), self._idx, self._n
         n.origin = self.origin
         n.label = self.label
         n.edits = list(self.edits)
         n.corner_choice = dict(self.corner_choice)
         return n
+
+    # ---- the deck as its statements
+    @property
+    def text(self) -> str:
+        if self._text is None:
+            self._text = "\n".join(map(_TEXT, self._u)) + self._tail
+        return self._text
+
+    @text.setter
+    def text(self, value: str) -> None:
+        if value is self._text:
+            return                               # the same text: what was read of it holds
+        self._text, self._u, self._idx, self._n = value, None, None, 0
+        self._tail, self._joined, self._lang = "", None, _UNKNOWN
+
+    def _units(self) -> list[tuple]:
+        """The statements of the text, read once (`_scoped_units`)."""
+        if self._u is None:
+            self._u = _scoped_units(self._text.splitlines())
+            self._idx, self._n = None, 0
+        return self._u
+
+    def _of(self, text: str | None = None) -> list[tuple]:
+        """The statements of `text`: this deck's own (read once) when None or its text."""
+        if text is None or text is self._text:
+            return self._units()
+        return _scoped_units(text.splitlines())
+
+    def _index(self) -> tuple:
+        """({first token: positions}, {first token: top-level positions}, top-level positions),
+        for the statements before `_n`. A copy shares it; a rewrite never changes it in place."""
+        u = self._units()
+        if self._idx is None or len(u) - self._n > _INDEX_SLACK:
+            every: dict[str, list[int]] = {}
+            top: dict[str, list[int]] = {}
+            tops: list[int] = []
+            for i, x in enumerate(u):
+                every.setdefault(x[4], []).append(i)
+                if x[2] == 0:
+                    top.setdefault(x[4], []).append(i)
+                    tops.append(i)
+            self._idx, self._n = (every, top, tops), len(u)
+        return self._idx
+
+    def _find(self, heads=None, *, top: bool = True) -> list[int]:
+        """Positions, in file order, of the statements whose first token is in `heads` (a set,
+        or for top-level ones a test of it; None: every top-level statement) -- top-level ones
+        only unless `top` is False. A superset of what a caller matches, never less."""
+        every, topidx, tops = self._index()
+        u, n = self._u, min(self._n, len(self._u))
+        if heads is None:
+            if not top:
+                raise ValueError("_find(None) reads the top level only")
+            pos = tops[:bisect.bisect_left(tops, n)]
+        else:
+            table = topidx if top else every
+            keys = [h for h in table if heads(h)] if callable(heads) else heads
+            pos = sorted(p for k in keys for p in table.get(k, ()) if p < n)
+        for p in range(n, len(u)):                   # statements changed since the index
+            x = u[p]
+            if top and x[2] != 0:
+                continue
+            if heads is None or (heads(x[4]) if callable(heads) else x[4] in heads):
+                pos.append(p)
+        return pos
+
+    def _is_joined(self) -> bool:
+        """Is the text exactly the statements' physical lines joined by "\\n" (+ `_tail`)? Always
+        after a rewrite; for a text as read, unless it holds a line break `str.splitlines` splits
+        at and "\\n" does not (a form feed)."""
+        if self._joined is None:
+            u = self._units()
+            joined = "\n".join(map(_TEXT, u))
+            if u and self._text == joined:
+                self._tail, self._joined = "", True
+            elif u and self._text == joined + "\n":
+                self._tail, self._joined = "\n", True
+            else:
+                self._joined = False
+        return self._joined
+
+    def _rejoin(self) -> None:
+        """The text becomes its physical lines joined by "\\n" -- what every rewrite did to it."""
+        self._units()
+        if self._joined and self._tail == "":
+            return
+        self._text, self._tail, self._joined = None, "", True
+        self._trim_tail()
+
+    def _trim_tail(self) -> None:
+        """A joined text ending in an empty line ends in "\\n": `splitlines` never reads that
+        empty line back, so it is the tail, not a statement."""
+        u = self._u
+        if self._tail or not u or u[-1][1][-1] != "":
+            return
+        if len(u[-1][1]) > 1:                     # a wrapped statement ending in it: re-read
+            self.text = "\n".join(map(_TEXT, u))
+            self._is_joined()
+            return
+        u.pop()
+        if u:
+            self._tail = "\n"
+        self._n = min(self._n, len(u))
+
+    def _splice(self, a: int, b: int, lines: list[str], tail: str, *, trim: bool = True) -> None:
+        """Statements a..b-1 become the ones on the physical `lines`, and the text after the last
+        line becomes `tail`; the text is then exactly the lines joined, as the rewrites always
+        made it. Read locally when the edit cannot reach past its own lines -- no line break in
+        a line, no continuation into the next statement, the subckt depth after it unchanged --
+        else the whole text is re-read."""
+        u = self._units()
+        depth_in = u[a - 1][3] if a else 0
+        new = None
+        if (not any(_LINE_BREAK.search(ln) for ln in lines)
+                and not (a and _continues(u[a - 1][1][-1]))
+                and not (lines and b < len(u) and _continues(lines[-1]))):
+            new = _scoped_units(lines, depth_in)
+            after = new[-1][3] if new else depth_in
+            if b < len(u) and after != (u[b - 1][3] if b > a else depth_in):
+                new = None
+        if new is None:
+            self.text = "\n".join([*map(_TEXT, u[:a]), *lines, *map(_TEXT, u[b:])]) + tail
+            self._is_joined()
+            return
+        old = u[a:b]
+        if len(new) != len(old) or any(x[4] != y[4] or x[2] != y[2] for x, y in zip(new, old)):
+            self._n = min(self._n, a)             # positions from `a` on are read, not indexed
+        if self._lang is not _UNKNOWN and any("simulator" in ln for x in old for ln in x[1]):
+            self._lang = _UNKNOWN
+        elif self._lang is not _UNKNOWN and any("simulator" in ln for ln in lines):
+            if b == len(u) and self._lang is not _RISKY:   # appended: the last is the last now
+                for ln in lines:
+                    self._lang = _lang_of(ln, self._lang)
+            else:
+                self._lang = _UNKNOWN
+        u[a:b] = new
+        self._text, self._tail, self._joined = None, tail, True
+        if trim:
+            self._trim_tail()
+
+    def _last_lang(self):
+        """The language of the deck's last `simulator lang=` line, None without one -- what
+        `append`'s regex over the joined text finds -- or _RISKY when a line starts a
+        `simulator` statement that regex could read across lines."""
+        if self._lang is _UNKNOWN:
+            last = None
+            for x in self._units():
+                for ln in x[1]:
+                    if "simulator" in ln:
+                        last = _lang_of(ln, last)
+                        if last is _RISKY:
+                            break
+                if last is _RISKY:
+                    break
+            self._lang = last
+        return self._lang
 
     def sha(self, n: int = 12) -> str:
         return sha_bytes(self.render().encode("utf-8"), n)
@@ -554,7 +782,7 @@ class Netlist:
     def line_of(self, name: str) -> int | None:
         """1-based line of the top-level instance statement `name` (its first physical line)."""
         n = 1
-        for logical, phys, depth in _scoped_logical_lines(self.text):
+        for logical, phys, depth, *_ in self._units():
             if depth == 0:
                 inst = _parse_instance(logical)
                 if inst and inst[0] == name:
@@ -564,10 +792,11 @@ class Netlist:
 
     # ---- reading
     def instances(self, depth: int | None = 0):
-        for logical, _phys, d in _scoped_logical_lines(self.text):
-            if depth is not None and d != depth:
+        u = self._units()
+        for x in ([u[p] for p in self._find()] if depth == 0 else u[:]):
+            if depth is not None and x[2] != depth:
                 continue
-            inst = _parse_instance(logical)
+            inst = _parse_instance(x[0])
             if inst:
                 yield inst
 
@@ -586,8 +815,10 @@ class Netlist:
     def parameters(self) -> dict[str, str]:
         """Top-level `parameters a=1 b=2` declarations, merged in file order."""
         out: dict[str, str] = {}
-        for logical, _phys, d in _scoped_logical_lines(self.text):
-            if d != 0 or not logical.strip().startswith("parameters"):
+        u = self._units()
+        for p in self._find(lambda h: h.startswith("parameters")):
+            logical = u[p][0]
+            if not logical.strip().startswith("parameters"):
                 continue
             for t in logical.split()[1:]:
                 if "=" in t:
@@ -595,10 +826,15 @@ class Netlist:
                     out[k] = v
         return out
 
+    def _include_statements(self) -> list[str]:
+        """The logical text of every statement (at any depth) that may be an include line."""
+        u = self._units()
+        return [u[p][0] for p in self._find(_INCLUDE_HEADS, top=False)]
+
     def includes(self) -> list[tuple[str, str | None]]:
         """[(file, section or None)] for every `include`/`ahdl_include` line, in file order."""
         out = []
-        for logical, _phys, _d in _scoped_logical_lines(self.text):
+        for logical in self._include_statements():
             s = logical.strip()
             if not (s.startswith("include ") or s.startswith("ahdl_include ")):
                 continue
@@ -653,7 +889,7 @@ class Netlist:
         "sure" (see `corner_lines`)}. A sectioned line that is not the corner is a constant."""
         corners = self.corner_lines()
         out, count = [], collections.Counter()
-        for logical, _phys, _d in _scoped_logical_lines(self.text):
+        for logical in self._include_statements():
             s = logical.strip()
             if not (s.startswith("include ") or s.startswith("ahdl_include ")):
                 continue
@@ -674,8 +910,8 @@ class Netlist:
         return out
 
     def analyses(self) -> list[str]:
-        return [lg for lg, _p, d in _scoped_logical_lines(self.text)
-                if d == 0 and _is_analysis_statement(lg)]
+        u = self._units()
+        return [u[p][0] for p in self._find() if _is_analysis_statement(u[p][0])]
 
     # ---- role scanning (the convention)
     def scan(self, pmu_inst: str, *, ports: dict[str, str] | None = None) -> PinTable:
@@ -967,7 +1203,7 @@ class Netlist:
         idx: dict = {}
         for text, _where in self._definition_texts():
             stack: list[str | None] = []
-            for logical, _phys, _d in _scoped_logical_lines(text):
+            for logical, _phys, _d, *_ in self._of(text):
                 delta = _subckt_delta(logical)
                 if delta > 0:
                     head = _subckt_header(logical)
@@ -1145,9 +1381,9 @@ class Netlist:
         hold the PMU's subckt. A section= include is a PDK model library (large, and never the
         DUT); an ahdl_include is Verilog-A."""
         out = []
-        for logical, _phys, d in _scoped_logical_lines(self.text):
+        for logical in [self._u[p][0] for p in self._find(_INCLUDE_HEADS)]:
             s = logical.strip()
-            if d != 0 or not s.startswith("include ") or re.search(r"\bsection\s*=", s):
+            if not s.startswith("include ") or re.search(r"\bsection\s*=", s):
                 continue
             m = re.search(r'["\']([^"\']+)["\']', s)
             if m:
@@ -1182,7 +1418,9 @@ class Netlist:
 
     def _subckt_ports(self, master: str, text: str | None = None) -> list[str] | None:
         """Port list of `subckt <master> (a b c)` / `subckt <master> a b c`, or None if absent."""
-        for logical, _phys, _d in _scoped_logical_lines(self.text if text is None else text):
+        for logical, _phys, _d, _after, head, _text in self._of(text):
+            if head.lower() not in ("subckt", ".subckt", "inline"):
+                continue
             s = logical.strip()
             toks = s.split()
             if len(toks) < 2:
@@ -1209,7 +1447,7 @@ class Netlist:
     def _subckt_body(self, master: str, text: str | None = None) -> list[str]:
         """Logical statements inside `subckt <master> ... ends`."""
         body, inside, depth = [], False, 0
-        for logical, _phys, _d in _scoped_logical_lines(self.text if text is None else text):
+        for logical, _phys, _d, *_ in self._of(text):
             toks = logical.strip().split()
             if not toks:
                 continue
@@ -1324,33 +1562,34 @@ class Netlist:
                 p.gnd_from = "not reachable from any ground pin in the subcircuit graph"
 
     # ---------------------------------------------------------------------- rewriting
-    def _rewrite_statement(self, match, transform, *, kind: str = "~") -> bool:
+    def _rewrite_statement(self, match, transform, *, kind: str = "~", heads=None) -> bool:
         """Replace the first top-level logical statement for which `match(logical)` is true.
 
         True when a statement matched, whether or not the transform changed it: a statement that
         already says what is asked (`section=tt` asked of `section=tt`) is left byte-identical and
         records no recipe line -- the recipe is exactly the diff between the exported netlist and
         the run deck, never a list of no-ops.
+
+        `heads` narrows the statements `match` is asked about to those whose first token is in
+        it (a set, or a test of it) -- it must admit every statement `match` could accept.
         """
-        out, done = [], False
-        for logical, phys, depth in _scoped_logical_lines(self.text):
-            if not done and depth == 0 and match(logical):
-                done = True
-                # A single-line statement is rewritten on the RAW line, so its indent and the exact
-                # spacing before a trailing comment survive. A continued statement has no single raw
-                # line to keep, so it collapses to one clean line (never a live dangling backslash).
-                old = phys[0] if len(phys) == 1 else logical
-                new = transform(old)
-                if new == old or (len(phys) > 1 and new.strip() == logical.strip()):
-                    out.extend(phys)
-                    continue
-                out.append(new)
-                self._record_edit(kind, new.strip(), logical.strip())
+        u = self._units()
+        for i in self._find(heads):
+            logical, phys = u[i][0], u[i][1]
+            if not match(logical):
+                continue
+            # A single-line statement is rewritten on the RAW line, so its indent and the exact
+            # spacing before a trailing comment survive. A continued statement has no single raw
+            # line to keep, so it collapses to one clean line (never a live dangling backslash).
+            old = phys[0] if len(phys) == 1 else logical
+            new = transform(old)
+            if new == old or (len(phys) > 1 and new.strip() == logical.strip()):
+                self._rejoin()
             else:
-                out.extend(phys)
-        if done:
-            self.text = "\n".join(out)
-        return done
+                self._record_edit(kind, new.strip(), logical.strip())
+                self._splice(i, i + 1, [new], "")
+            return True
+        return False
 
     _WAS = "        // was: "
 
@@ -1398,20 +1637,23 @@ class Netlist:
     def set_mag(self, src_name: str, mag: str | float) -> "Netlist":
         """AC superposition: exactly one source is hot (mag=1), the rest stay 0."""
         ok = self._rewrite_statement(self._named_source(src_name),
-                                     lambda lg: _set_kv_on_line(lg, "mag", f"{mag}"))
+                                     lambda lg: _set_kv_on_line(lg, "mag", f"{mag}"),
+                                     heads={src_name})
         self._require(ok, src_name, f"set mag on '{src_name}'")
         return self
 
     def set_dc(self, src_name: str, value: float) -> "Netlist":
         ok = self._rewrite_statement(self._named_source(src_name),
-                                     lambda lg: _set_kv_on_line(lg, "dc", f"{float(value):g}"))
+                                     lambda lg: _set_kv_on_line(lg, "dc", f"{float(value):g}"),
+                                     heads={src_name})
         self._require(ok, src_name, f"set dc on '{src_name}'")
         return self
 
     def set_pwl(self, src_name: str, wave_tokens: str) -> "Netlist":
         """Drive a source with a piecewise-linear wave (the load-EN and enable transients)."""
         ok = self._rewrite_statement(self._named_source(src_name),
-                                     lambda lg: _set_pwl_on_line(lg, wave_tokens))
+                                     lambda lg: _set_pwl_on_line(lg, wave_tokens),
+                                     heads={src_name})
         self._require(ok, src_name, f"make '{src_name}' a pwl source")
         return self
 
@@ -1422,7 +1664,8 @@ class Netlist:
         def match(logical):
             return logical.strip().startswith("parameters") and bool(pat.search(logical))
 
-        ok = self._rewrite_statement(match, lambda lg: pat.sub(f"{name}={value}", lg, count=1))
+        ok = self._rewrite_statement(match, lambda lg: pat.sub(f"{name}={value}", lg, count=1),
+                                     heads=lambda h: h.startswith("parameters"))
         if not ok:                           # not declared yet -- declare it rather than fail
             self._insert_near_top(f"parameters {name}={value}")
         return self
@@ -1436,6 +1679,9 @@ class Netlist:
         what ran on ALPS.  So: after the first top-level `simulator lang=spectre`; failing that,
         after the leading comment block; failing that, at the top.
         """
+        if self._insert_line(line):
+            self.edits.append(f"+ {line}")
+            return
         lines = self.text.split("\n")
         at = None
         for i, raw in enumerate(lines):
@@ -1450,6 +1696,44 @@ class Netlist:
         lines.insert(at, line)
         self.text = "\n".join(lines)
         self.edits.append(f"+ {line}")
+
+    def _insert_line(self, line: str) -> bool:
+        """`_insert_near_top` on the statements, without re-reading the deck: the same place
+        (counted over `text.split("\\n")`), as one more statement. False -- nothing done -- when
+        that place is not between two statements or the line would not stand alone."""
+        if not self._is_joined() or _LINE_BREAK.search(line) or _continues(line):
+            return False
+        u = self._units()
+        at = None
+        i = 0
+        for x in u:
+            for raw in x[1]:
+                i += 1
+                if "simulator" in raw and _SPECTRE_LINE.match(raw):
+                    at = i
+                    break
+            if at is not None:
+                break
+        if at is None:
+            at, found = 0, False
+            for x in u:
+                for raw in x[1]:
+                    if not (raw.lstrip().startswith(("//", "*")) or not raw.strip()):
+                        found = True
+                        break
+                    at += 1
+                if found:
+                    break
+            if not found:
+                return False                     # comments to the end: the old way
+        k = n = 0
+        while k < len(u) and n < at:             # the statement the line goes in front of
+            n += len(u[k][1])
+            k += 1
+        if n != at:
+            return False
+        self._splice(k, k, [line], self._tail)
+        return True
 
     def set_section(self, file_pattern: str, section: str) -> "Netlist":
         """Rewrite `include "<file>" section=<x>` -- this is how process corners are produced.
@@ -1481,7 +1765,8 @@ class Netlist:
             seen[0] += 1
             return seen[0] - 1 == want
 
-        ok = self._rewrite_statement(match, lambda lg: sec_re.sub(rf"\g<1>{section}", lg, count=1))
+        ok = self._rewrite_statement(match, lambda lg: sec_re.sub(rf"\g<1>{section}", lg, count=1),
+                                     heads=_INCLUDE_HEADS)
         if not ok:
             have = [f"{f} section={s}" for f, s in self.includes() if s]
             raise PmuError(
@@ -1568,9 +1853,9 @@ class Netlist:
     def _top_includes(self) -> list[str]:
         """Every top-level `include`/`ahdl_include` path, in file order, each once."""
         out: list[str] = []
-        for logical, _phys, d in _scoped_logical_lines(self.text):
+        for logical in [self._u[p][0] for p in self._find(_INCLUDE_HEADS)]:
             s = logical.strip()
-            if d != 0 or not s.startswith(("include ", "ahdl_include ")):
+            if not s.startswith(("include ", "ahdl_include ")):
                 continue
             m = re.search(r'["\']([^"\']+)["\']', s)
             if m and m.group(1) not in out:
@@ -1605,7 +1890,7 @@ class Netlist:
                 return quoted.sub(lambda m: f"{m.group(1)}{target}{m.group(1)}", line, count=1)
 
             n = 0
-            while self._rewrite_statement(match, swap):
+            while self._rewrite_statement(match, swap, heads=_INCLUDE_HEADS):
                 n += 1
             if n:
                 notes.append(f"include {f} -> {target}")
@@ -1754,18 +2039,27 @@ class Netlist:
 
     def strip_analyses(self) -> "Netlist":
         """Comment out every top-level analysis. pmukit always writes its own."""
-        out = []
-        for logical, phys, depth in _scoped_logical_lines(self.text):
-            if depth == 0 and _is_analysis_statement(logical):
-                for raw in phys:
-                    body = raw.rstrip()
-                    if body.endswith("\\"):
-                        body = body[:-1].rstrip()      # neutralise the continuation
-                    out.append(STRIP_MARKER + body)
-                self.edits.append(f"- {logical.strip()}")
-            else:
-                out.extend(phys)
-        self.text = "\n".join(out)
+        u = self._units()
+        hits = [p for p in self._find() if _is_analysis_statement(u[p][0])]
+        stripped = []
+        for p in hits:
+            out = []
+            for raw in u[p][1]:
+                body = raw.rstrip()
+                if body.endswith("\\"):
+                    body = body[:-1].rstrip()      # neutralise the continuation
+                out.append(STRIP_MARKER + body)
+            stripped.append(out)
+            self.edits.append(f"- {u[p][0].strip()}")
+        if not hits:
+            self._rejoin()
+        elif any(u[p][2] != u[p][3] for p in hits):     # one opens a subckt: re-read it all
+            done = dict(zip(hits, stripped))
+            self.text = "\n".join(ln for p, x in enumerate(u) for ln in done.get(p, x[1]))
+        else:
+            for p, out in reversed(list(zip(hits, stripped))):   # back to front: positions hold
+                self._splice(p, p + 1, out, "", trim=False)
+            self._trim_tail()                     # once, as the one join before did
         return self
 
     def append(self, line: str) -> "Netlist":
@@ -1773,6 +2067,8 @@ class Netlist:
 
         If the netlist ends in another language (a `simulator lang=spice` section), switch back
         first -- the same guard LDO_modeling's appended block carried on the box."""
+        if self._append_line(line):
+            return self
         langs = re.findall(r"^\s*simulator\s+lang\s*=\s*(\w+)", self.text, re.MULTILINE)
         if langs and langs[-1].lower() != "spectre":
             self.text = self.text.rstrip("\n") + "\nsimulator lang=spectre"
@@ -1780,6 +2076,31 @@ class Netlist:
         self.text = self.text.rstrip("\n") + "\n" + line + "\n"
         self.edits.append(f"+ {line}")
         return self
+
+    def _append_line(self, line: str) -> bool:
+        """`append` on the statements, without re-reading the deck: the text loses its trailing
+        newlines and gains the line(s) and one newline, exactly as before. False -- nothing done
+        -- for a text that is not its joined lines, or a `simulator` line read differently
+        across lines than on one."""
+        if not self._is_joined() or _LINE_BREAK.search(line):
+            return False
+        lang = self._last_lang()
+        if lang is _RISKY:
+            return False
+        u = self._units()
+        k = len(u)
+        while k and u[k - 1][1] == [""]:         # `rstrip("\n")`: the trailing empty lines go
+            k -= 1
+        if k and u[k - 1][1][-1] == "":
+            return False
+        new = [] if k else [""]
+        if lang is not None and lang.lower() != "spectre":
+            new.append("simulator lang=spectre")
+            self.edits.append("+ simulator lang=spectre")
+        new.append(line)
+        self._splice(k, len(u), new, "\n")
+        self.edits.append(f"+ {line}")
+        return True
 
     def insert_role_source(self, pin: Pin, role: str, *, dc: float, ground: str = "0") -> str:
         """Give a role-less pin the convention source it is missing; return the source name.
@@ -1802,6 +2123,14 @@ class Netlist:
     # ---- output
     def render(self) -> str:
         """The netlist text, LF, exactly one trailing newline."""
+        if self._text is None:                   # the joined statements: one join, no copies
+            u = self._u
+            k = len(u)
+            while k and u[k - 1][1] == [""]:
+                k -= 1
+            if k and u[k - 1][1][-1] != "":
+                return "\n".join(itertools.chain(map(_TEXT, u[:k]) if k < len(u)
+                                                 else map(_TEXT, u), ("",)))
         return self.text.rstrip("\n") + "\n"
 
     def write(self, path) -> pathlib.Path:
