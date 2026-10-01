@@ -242,6 +242,21 @@ const out = {};
   const idle = nodes.foot.innerHTML.match(/<button class="btn pri"[^>]*>Fit model/)[0];
   out.fit = { busy, idle };
 
+  // ---- 9. a part of the page that throws leaves the rest drawn and wired, and says so
+  fresh('plan', { plan:{ cells:1, cached:0, cost:{ runs:3, cpu_hours:1.5 }, groups:[{ id:'g1',
+      title:'t', enabled:true, analysis:'ac', runs:3, cached:0, cpu_hours:1.5, ports:['A'],
+      observables:['zout'], why:'w' }] }, consequences:{ consequences:[] },
+      site:{ engine:'fake', engines:[] } });
+  const footWas = sandbox.SCREENS.plan.foot, bars = [];
+  sandbox.SCREENS.plan.foot = () => { throw new Error('boom in the foot'); };
+  document.body.appendChild = (n) => bars.push(n);
+  S.menu = { kind:'group', title:'g1', ctx:{ row:{ id:'g1' } }, x:1, y:1 };
+  let threw = '';
+  try { sandbox.render(); } catch(e){ threw = String(e); }
+  out.partial = { threw, main: nodes.main.innerHTML.includes('What will run'),
+    overlays: nodes.overlays.innerHTML.length > 0, bar: bars.map(b => b.innerHTML).join('') };
+  sandbox.SCREENS.plan.foot = footWas; S.menu = null;
+
   console.log(JSON.stringify(out));
 })().catch(e => { console.error(e && e.stack || e); process.exit(1); });
 """
@@ -447,3 +462,12 @@ def test_the_footer_sticks_to_the_bottom_of_the_viewport():
     css = PAGE.read_text(encoding="utf-8")
     foot = re.search(r"^\.foot\{[^}]*\}", css, re.M).group(0)
     assert "position:sticky" in foot and "bottom:0" in foot
+
+
+def test_a_throwing_part_leaves_the_page_drawn_wired_and_says_why(page):
+    """A stuck highlight and dead clicks with no word of why (seen on the red zone, 2026-10-01):
+    one part of render() throwing used to skip the wiring of everything drawn before it."""
+    p = page["partial"]
+    assert p["threw"] == ""
+    assert p["main"] and p["overlays"]
+    assert "boom in the foot" in p["bar"] and "foot" in p["bar"]

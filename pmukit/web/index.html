@@ -940,13 +940,35 @@ function render(){
   var caret = keep ? ae.selectionStart : 0, caretEnd = keep ? ae.selectionEnd : 0;
   var db = el("drawerbody"), dscroll = db ? db.scrollTop : 0;  /* a save must not scroll it */
   ACTS = {}; CTXS = {};
-  renderNav();
+  /* Each part on its own: one that throws must not leave the page half-drawn with nothing
+     wired -- a stuck highlight and dead clicks, with no word of why. The error is shown in a
+     bar over the screen (and in the console) instead, and everything else stays clickable. */
+  var errs = [];
+  var part = function(name, fn){
+    try { fn(); }
+    catch(e){ errs.push(name + ": " + (e && e.message || e)); if (window.console) console.error("pmukit render " + name, e); }
+  };
   var sc = SCREENS[S.screen] || SCREENS.home;
-  el("main").innerHTML = sc.main();
-  el("foot").innerHTML = sc.foot ? sc.foot() : "";
-  renderCli();
-  renderOverlays();
-  wire();
+  part("nav", renderNav);
+  part("screen", function(){ el("main").innerHTML = sc.main(); });
+  part("foot", function(){ el("foot").innerHTML = sc.foot ? sc.foot() : ""; });
+  part("command line", renderCli);
+  part("overlays", renderOverlays);
+  part("wiring", wire);
+  /* a bar of its own, outside every part that can fail */
+  var bar = el("rendererr");
+  if (errs.length && !bar){
+    bar = document.createElement("div");
+    bar.id = "rendererr"; bar.className = "callout bad"; bar.setAttribute("role", "alert");
+    bar.style.cssText = "position:fixed;z-index:90;left:16px;right:16px;bottom:64px";
+    document.body.appendChild(bar);
+  }
+  if (bar){
+    bar.style.display = errs.length ? "" : "none";
+    if (errs.length) bar.innerHTML = ICON.warn + " This page hit an error while drawing ("
+      + esc(S.screen) + '): <span class="mono">' + esc(errs.join(" | ")) + "</span>. Copy this "
+      + "line to the desk; the rest of the page still works, and a reload usually gets past it.";
+  }
   db = el("drawerbody");
   if (db && dscroll) db.scrollTop = dscroll;
   var kn = keep ? el(keep) : null;
