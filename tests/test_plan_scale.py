@@ -157,7 +157,10 @@ def digest(name: str) -> dict:
         for r in g.runs:
             run = r.run
             assert run.netlist_sha == sha_bytes(r.netlist_text.encode("utf-8"), 12)
-            rest = json.dumps([_norm(run.recipe), run.process,
+            # the recipe ends in the submit line, which names the run_id: masked where the
+            # run_id itself is not portable
+            recipe = _norm(run.recipe.replace(run.run_id, "<RUN_ID>") if absolute else run.recipe)
+            rest = json.dumps([recipe, run.process,
                                None if run.temp_c != run.temp_c else run.temp_c, run.vset,
                                run.load_key, run.analysis, run.stimulus, list(run.reads),
                                [list(f) for f in r.feeds], g.id, r.check, r.cost_s])
