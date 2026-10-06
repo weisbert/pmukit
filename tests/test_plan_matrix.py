@@ -215,3 +215,42 @@ def test_the_screens_command_is_one_run_takes():
             [sub, "demo", "--only", "g1", "--off", "g2", "--temps", "25", "--corners", "tt,ss"])
         assert args.only == ["g1"] and args.off == ["g2"]
         assert args.temps == "25" and args.corners == "tt,ss"
+
+
+# ------------------------------------------------------------------------- the ledger's queue
+def test_a_narrower_commit_drops_what_an_earlier_one_only_planned(api):
+    """Dry run with every group on, then with one: the ledger holds that one group, not all of
+    them still `planned` -- the Run screen showed everything queued after one was ticked."""
+    groups = [g["id"] for g in api.plan("p")["groups"]]
+    one = next(g for g in groups if g.startswith("dc_load:"))
+
+    def dry():
+        job = wait(api.submit("p", {"commit_only": True}))
+        assert job.status == "done", job.error
+        return job.result["committed"]
+    every = dry()
+    assert api.ledger("p")["total"] == every["new"]
+    api.set_plan_groups("p", {"ticks": {g: g == one for g in groups}})
+    want = api.plan("p")["cost"]["runs"]
+    got = dry()
+    assert got["dropped"] == every["new"] - want
+    assert api.ledger("p")["total"] == want
+
+
+def test_history_is_never_dropped(tmp_path):
+    from pmukit.ledger import Ledger, Run
+    led = Ledger(tmp_path / "runs.sqlite")
+
+    def run(rid, **kw):
+        return Run(run_id=rid, process="tt", temp_c=25.0, vset=3, load_key="",
+                   analysis="dc_load", stimulus="IL_A", reads=["dc_load.A"], **kw)
+    led.plan_many([run("aaaaaaaaaaa1"), run("aaaaaaaaaaa2"), run("aaaaaaaaaaa3"),
+                   run("aaaaaaaaaaa4"), run("aaaaaaaaaaa5")])
+    led.add_consumes("aaaaaaaaaaa1", [("A", "dc", "v0")])
+    led.upsert(run("aaaaaaaaaaa2", status="done"))
+    led.upsert(run("aaaaaaaaaaa3", status="planned", error="skipped: not now"))
+    led.upsert(run("aaaaaaaaaaa4", status="submitted", job_id="123"))
+    assert led.drop_unsubmitted(["aaaaaaaaaaa5"]) == 1          # only the bare planned one
+    assert led.get("aaaaaaaaaaa1") is None and not led.consumers("aaaaaaaaaaa1")
+    for rid in ("aaaaaaaaaaa2", "aaaaaaaaaaa3", "aaaaaaaaaaa4", "aaaaaaaaaaa5"):
+        assert led.get(rid) is not None

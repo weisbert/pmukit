@@ -499,6 +499,25 @@ class Ledger:
         return [r.to_dict() for r in runs]
 
     # -- consumes: which parameter ate which run ------------------------------
+    def drop_unsubmitted(self, keep: Iterable[str]) -> int:
+        """Forget the `planned` rows outside `keep` that never went anywhere: no job, no error.
+
+        A commit writes the CURRENT selection; a row an earlier, wider selection planned (a Dry
+        run with every group on) and nothing ever submitted is not part of this one -- left in,
+        the Run screen showed every group queued after one was ticked. A row that was submitted,
+        ran, failed, was skipped with a reason or imported stays: that is history, and a later
+        commit of its cell finds it."""
+        keep = set(keep)
+        rows = self._db.execute(
+            "SELECT run_id FROM runs WHERE status = 'planned' AND COALESCE(job_id, '') = '' "
+            "AND COALESCE(error, '') = ''").fetchall()
+        gone = [r[0] for r in rows if r[0] not in keep]
+        if gone:
+            with self._db:
+                self._db.executemany("DELETE FROM consumes WHERE run_id = ?", [(g,) for g in gone])
+                self._db.executemany("DELETE FROM runs WHERE run_id = ?", [(g,) for g in gone])
+        return len(gone)
+
     def add_consumes(self, run_id: str, entries: Iterable[tuple[str, str, str]]) -> None:
         """Record (port, block, param) triples that this run feeds.  Idempotent."""
         rows = [(run_id, str(p), str(b), str(prm)) for p, b, prm in entries]

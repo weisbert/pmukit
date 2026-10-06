@@ -414,16 +414,19 @@ class Plan:
         return out
 
     def commit(self, ledger: Ledger) -> dict:
-        """Write the enabled runs into the ledger, with their `consumes` rows.
+        """Write the enabled runs into the ledger, with their `consumes` rows, and drop the
+        planned-but-never-submitted rows an earlier selection left that this one does not hold
+        (`Ledger.drop_unsubmitted`): the ledger's queue is this selection, not every one before.
 
         Already-finished runs keep their status (that is the cache); the return value is the
-        new / cached / updated split the Plan screen shows before it submits anything.
+        new / cached / updated / dropped split the Plan screen shows before it submits anything.
         """
         planned = [r for r in self.runs(enabled_only=True)]
         counts = ledger.plan_many([r.run for r in planned])
         for r in planned:
             if r.feeds:
                 ledger.add_consumes(r.run_id, r.feeds)
+        counts["dropped"] = ledger.drop_unsubmitted(r.run_id for r in planned)
         counts["groups"] = sum(1 for g in self.groups if g.enabled)
         return counts
 

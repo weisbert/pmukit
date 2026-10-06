@@ -2938,7 +2938,13 @@ class Api:
                 counts = plan.commit(led)
             st = pr.state()
             st.go("run").note(f"submitted {counts.get('new', 0)} new runs "
-                              f"({counts.get('cached', 0)} already had results)", "plan")
+                              f"({counts.get('cached', 0)} already had results"
+                              + (f"; {counts['dropped']} never-submitted runs of an earlier "
+                                 "selection dropped" if counts.get("dropped") else "") + ")",
+                              "plan")
+            job.say(f"{len(plan.runs())} runs in this selection"
+                    + (f"; {counts['dropped']} planned runs of an earlier selection dropped "
+                       "from the ledger" if counts.get("dropped") else ""), 0.08)
             st.save()
             out = {"committed": counts}
             if commit_only:
