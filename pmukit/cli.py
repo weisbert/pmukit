@@ -464,12 +464,46 @@ def cmd_config(a) -> int:
     return 0
 
 
+def _select(plan, cfg, a) -> None:
+    """The Plan screen's selection, from the command line: `--only` / `--off` groups (repeatable)
+    and the batch, `--temps 25,125` / `--corners tt,ss` -- a subset of the project's own, run
+    now; the rest is reported NOT RUN until a later run includes it."""
+    only = list(getattr(a, "only", None) or [])
+    if only:
+        for gid in only:
+            plan.group(gid)                       # an unknown id is refused, by name
+        for g in plan.groups:
+            g.enabled = g.id in only
+    for gid in (a.off or []):
+        plan.set_enabled(gid, False)
+    every = {"temps": [float(t) for t in cfg.temps_c], "corners": list(cfg.corner_names())}
+    for key in ("temps", "corners"):
+        raw = getattr(a, key, None)
+        if not raw:
+            continue
+        vals = [v.strip() for v in str(raw).split(",") if v.strip()]
+        try:
+            want = [float(v) for v in vals] if key == "temps" else vals
+        except ValueError:
+            raise PmuError(what=f"--temps takes numbers, not '{raw}'.",
+                           why="A batch temperature is one of the project's temperatures in C.",
+                           do=[f"e.g. --temps {every['temps'][0]:g}"], where="--temps") from None
+        unknown = [v for v in want if v not in every[key]]
+        if unknown:
+            said = ", ".join(f"{u:g}" if key == "temps" else u for u in unknown)
+            raise PmuError(what=f"--{key} {said} is not one of this project's {key}.",
+                           why=f"The batch picks among the project's own "
+                               f"({', '.join(f'{v:g}' if key == 'temps' else v for v in every[key])}"
+                               "); the model's range is changed in the configuration.",
+                           do=[f"`{PROG} config {a.project}` to add it first"], where=f"--{key}")
+        plan.batch[key] = [v for v in every[key] if v in want]
+
+
 def cmd_plan(a) -> int:
     cfg, der, d = _load(a.project)
     lmod = _need("ledger", "plan")
     plan, _nl, _pins = _plan_of(cfg, der, d, site=_site())
-    for gid in (a.off or []):
-        plan.set_enabled(gid, False)
+    _select(plan, cfg, a)
     if a.recipe:
         for r in plan.runs(enabled_only=False):
             if r.run_id.startswith(a.recipe):
@@ -486,8 +520,9 @@ def cmd_plan(a) -> int:
         _out([dict(zip(["run_id", "process", "cell", "stimulus", "reads"], r)) for r in rows],
              a.json, _table(rows, ["run_id", "process", "cell", "stimulus", "reads"]))
         return 0
-    rows = [[g.id, g.n_runs, f"{g.cost_s:.0f}", "on" if g.enabled else "OFF", g.title]
-            for g in plan.groups]
+    rows = [[g.id, row["in_batch"], f"{row['batch_cpu_seconds']:.0f}",
+             "on" if g.enabled else "OFF", g.title]
+            for g, row in zip(plan.groups, plan.to_rows())]       # what this batch runs of each
     summary = plan.cost_summary()
     if a.json:
         _out({"groups": plan.to_rows(), "cost": summary,
@@ -538,8 +573,7 @@ def cmd_run(a) -> int:
     if a.engine:
         site.engine = a.engine
     plan, _nl, _pins = _plan_of(cfg, der, d, site=site)
-    for gid in (a.off or []):
-        plan.set_enabled(gid, False)
+    _select(plan, cfg, a)
     led = lmod.Ledger.for_project(a.project)
     plan.commit(led)
     dpath = d / "dataset"
@@ -895,6 +929,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("plan", help="what will run, and why")
     p.add_argument("project")
     p.add_argument("--off", action="append", help="untick a group (repeatable)")
+    p.add_argument("--only", action="append", help="tick only this group (repeatable)")
+    p.add_argument("--temps", help="this batch's temperatures, e.g. 25 or -40,125 (default all)")
+    p.add_argument("--corners", help="this batch's corners, comma-separated (default all)")
     p.add_argument("--runs", help="list the runs of one group")
     p.add_argument("--recipe", help="print one run's recipe (run id prefix)")
     p.add_argument("--submit", action="store_true", help="write the plan into the ledger")
@@ -904,6 +941,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("project")
     p.add_argument("--engine", help="spectre_ssh | donau_alps | dry_run | fake")
     p.add_argument("--off", action="append", help="untick a group (repeatable)")
+    p.add_argument("--only", action="append", help="tick only this group (repeatable)")
+    p.add_argument("--temps", help="this batch's temperatures, e.g. 25 or -40,125 (default all)")
+    p.add_argument("--corners", help="this batch's corners, comma-separated (default all)")
     p.add_argument("--no-resume", action="store_true", help="re-run even the cached ones")
     # None, not 1: an unpassed flag must leave the width to site.json `jobs` / the engine.
     p.add_argument("--jobs", type=int, default=None,

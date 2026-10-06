@@ -491,9 +491,7 @@ def test_cli_echo_exists_for_every_screen(demo, screen):
 
 def test_cli_echo_mirrors_what_the_user_did():
     cmd = server.cli_echo("plan", {"ticks": {"g1": False, "g2": True}}, "demo_pmu")
-    assert "pmukit plan demo_pmu" in cmd
-    assert "--skip g1" in cmd
-    assert "g2" not in cmd.split("--skip")[1]
+    assert cmd == "pmukit run demo_pmu --off g1"     # a real command: `run` takes --off
     cmd = server.cli_echo("new", {"netlist": "tb/input.scs", "pmu_inst": "PMU_TOP",
                                   "corners": ["tt", "ss"], "temps": [-40, 125], "vset": [3],
                                   "loads": {"VDD0P8_A": {"on_a": 5e-4, "off_a": 2e-6,

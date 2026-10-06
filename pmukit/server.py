@@ -604,11 +604,21 @@ def cli_echo(screen: str, st, project: str = "") -> str:
             bits.append(f"--stub {pin}={float(val):g}")
         return " ".join(bits)
     if scr == "plan":
-        off = [g for g, on in sorted((st.get("ticks") or {}).items()) if not on]
-        cmd = f"pmukit plan {p}"
-        if off:
-            cmd += " --skip " + join(off)
-        return cmd + f" && pmukit run {p}" + (f" --engine {st['engine']}" if st.get("engine") else "")
+        # What Submit sends, as `pmukit run` flags: the shorter of --only (the ticked groups)
+        # and --off (the unticked ones), then the batch. An older page sends only `ticks`.
+        off = list(st.get("off") or [g for g, on in sorted((st.get("ticks") or {}).items())
+                                     if not on])
+        on = list(st.get("on") or [])
+        cmd = f"pmukit run {p}"
+        if on and len(on) < len(off):
+            cmd += "".join(f" --only {g}" for g in on)
+        else:
+            cmd += "".join(f" --off {g}" for g in off)
+        if st.get("temps") is not None:
+            cmd += " --temps " + join(f"{float(t):g}" for t in st["temps"])
+        if st.get("corners") is not None:
+            cmd += " --corners " + join(st["corners"])
+        return cmd + (f" --engine {st['engine']}" if st.get("engine") else "")
     if scr == "run":
         if st.get("run") and st.get("action"):
             return f"pmukit run {p} --{st['action']} {st['run']}"
@@ -1158,9 +1168,12 @@ class Project:
             with _CACHE_LOCK:
                 _PLAN_CACHE[self.name] = (key, plan)
         if apply_ticks:
-            ticks = self.state().plan_ticks
+            st = self.state()
             for g in plan.groups:
-                g.enabled = bool(ticks.get(g.id, True))
+                g.enabled = bool(st.plan_ticks.get(g.id, True))
+            plan.batch = dict(st.plan_batch)
+        else:
+            plan.batch = {}
         return plan
 
     # ---- ledger + dataset
@@ -1399,6 +1412,31 @@ def _demo_netlist_info() -> dict:
                             "defined": True, "guess": False}]}
 
 
+def _group_what(g, labels: dict) -> dict:
+    """What one Plan group simulates, for the panel a click on its matrix cell opens: the
+    analysis statement(s) and save line its runs add (the first run's recipe -- every run of a
+    group adds the same ones, only the cell differs), the source it drives, what it reads, and
+    the cells it runs at."""
+    from .ledger import Recipe
+    first = g.runs[0].run if g.runs else None
+    rec = Recipe.parse(first.recipe) if first is not None and first.recipe else Recipe()
+
+    def distinct(vals):
+        out = []
+        for v in vals:
+            if v not in out:
+                out.append(v)
+        return out
+    runs = [r.run for r in g.runs]
+    return {"analyses": list(rec.analyses), "saves": list(rec.saves),
+            "stimulus": first.stimulus if first is not None else "",
+            "reads": distinct(v for r in runs for v in r.reads),
+            "corners": distinct(r.process for r in runs),
+            "temps": distinct("swept" if r.temp_c != r.temp_c else r.temp_c for r in runs),
+            "codes": distinct(r.vset for r in runs),
+            "loads": distinct(labels.get(r.load_key, r.load_key) for r in runs if r.load_key)}
+
+
 def _demo_groups() -> list[dict]:
     raw = [
         ("dc_load:IL_VDD0P8_A", "DC load sweep -- VDD0P8_A", "dc_load", 18, 3.1,
@@ -1432,19 +1470,32 @@ def _demo_groups() -> list[dict]:
          ["IB_PTAT"], ["noise_i"]),
         ("noise:IB_POLY", "Noise -- IB_POLY", "noise", 9, 5.1,
          "same for the flat bias", ["IB_POLY"], ["noise_i"]),
-        ("tran_load:IL_VDD0P8_A", "Load-EN transient -- VDD0P8_A", "tran_load", 18, 30.4,
-         "your block switching on: how deep the rail dips and how it overshoots",
-         ["VDD0P8_A"], ["tran_load"]),
-        ("tran_load:IL_VDD0P8_B", "Load-EN transient -- VDD0P8_B", "tran_load", 18, 30.4,
-         "same for rail B", ["VDD0P8_B"], ["tran_load"]),
+        ("tran_load_on:IL_VDD0P8_A", "Load turn-on transient -- VDD0P8_A", "tran_load_on", 9,
+         15.2, "your block switching on: how deep the rail dips", ["VDD0P8_A"],
+         ["tran_load_on"]),
+        ("tran_load_off:IL_VDD0P8_A", "Load turn-off transient -- VDD0P8_A", "tran_load_off", 9,
+         15.2, "your block switching off: how far the rail overshoots", ["VDD0P8_A"],
+         ["tran_load_off"]),
+        ("tran_load_on:IL_VDD0P8_B", "Load turn-on transient -- VDD0P8_B", "tran_load_on", 9,
+         15.2, "same for rail B", ["VDD0P8_B"], ["tran_load_on"]),
+        ("tran_load_off:IL_VDD0P8_B", "Load turn-off transient -- VDD0P8_B", "tran_load_off", 9,
+         15.2, "same for rail B", ["VDD0P8_B"], ["tran_load_off"]),
         ("tran_en:VEN_EN", "EN power-up transient", "tran_en", 9, 8.1,
          "rails and biases come up with the measured rise time",
          DEMO_PORTS, ["tran_en"]),
     ]
-    return [{"id": i, "title": t, "analysis": a, "runs": n, "cpu_seconds": h * 3600,
-             "cpu_hours": h, "why": w, "ports": p, "observables": o, "enabled": True,
-             "cached": 1 if a == "dc_load" else 0}
-            for i, t, a, n, h, w, p, o in raw]
+    from .plan import CELL_COLUMN
+    out = []
+    for i, t, a, n, h, w, p, o in raw:
+        cols = {CELL_COLUMN.get(x) for x in o}
+        cell = len(p) == 1 and len(cols) == 1 and None not in cols
+        kind = ("rail" if p[0].startswith("VDD") else "bias") if cell else "shared"
+        out.append({"id": i, "title": t, "analysis": a, "runs": n, "in_batch": n,
+                    "cpu_seconds": h * 3600, "batch_cpu_seconds": h * 3600, "cpu_hours": h,
+                    "why": w, "ports": p, "observables": o, "enabled": True,
+                    "cached": 1 if a == "dc_load" else 0, "kind": kind,
+                    "port": p[0] if cell else "", "column": cols.pop() if cell else i})
+    return out
 
 
 def _demo_ledger_rows() -> list[dict]:
@@ -2682,6 +2733,8 @@ class Api:
             runs = sum(g["runs"] for g in groups if g["enabled"])
             return {"project": project, "config_sha": "5d8ca1", "derived_sha": "b7e2",
                     "groups": groups, "ticks": {},
+                    "batch": {"temps": [float(t) for t in DEMO_TEMPS], "corners": DEMO_CORNERS,
+                              "chosen": {}, "out": 0},
                     "cost": {"runs": runs, "cpu_hours": round(
                         sum(g["cpu_hours"] for g in groups if g["enabled"]), 1),
                         "by_analysis": {}},
@@ -2700,11 +2753,13 @@ class Api:
                                                                    "skipped_cached")}
             for row, g in zip(rows, plan.groups):
                 row["cached"] = sum(1 for r in g.runs if r.run_id in have)
+                row["batch_cached"] = sum(1 for r in g.runs
+                                          if r.run_id in have and plan.in_batch(r))
                 cached += row["cached"]
                 row["cpu_hours"] = round(row.get("cpu_seconds", 0.0) / 3600.0, 2)
         except PmuError:                                               # pragma: no cover - no db
             for row in rows:
-                row["cached"] = 0
+                row["cached"] = row["batch_cached"] = 0
                 row["cpu_hours"] = round(row.get("cpu_seconds", 0.0) / 3600.0, 2)
         cfg = pr.config()
         cells = len(cfg.corner_names()) * len(cfg.temps_c) * len(cfg.vset_codes)
@@ -2712,8 +2767,14 @@ class Api:
         by_corner: dict[str, int] = {}
         for r in plan.runs(enabled_only=True):
             by_corner[r.run.process] = by_corner.get(r.run.process, 0) + 1
+        # The batch row: the model's corners and temperatures (New), the ones this submission
+        # runs, and how many ticked runs wait for a later batch.
+        out_of_batch = sum(1 for g in plan.groups if g.enabled
+                           for r in g.runs if not plan.in_batch(r))
+        batch = {"temps": [float(t) for t in cfg.temps_c], "corners": list(cfg.corner_names()),
+                 "chosen": dict(plan.batch), "out": out_of_batch}
         return {"project": project, "config_sha": plan.config_sha,
-                "derived_sha": plan.derived_sha, "groups": rows,
+                "derived_sha": plan.derived_sha, "groups": rows, "batch": batch,
                 "ticks": pr.state().plan_ticks, "cost": plan.cost_summary(),
                 "cells": cells, "cached": cached, "by_corner": by_corner,
                 "states": [{"key": s.key, "label": s.label, "currents": s.currents}
@@ -2743,6 +2804,57 @@ class Api:
         out["undoable"] = st.undoable()
         return out
 
+    @_locked
+    def set_plan_batch(self, project: str, body: dict) -> dict:
+        """The Plan screen's batch row: which of the model's temperatures and corners THIS
+        submission runs. A list that names every one of them is stored as "all" (absent), so a
+        corner or temperature added on New later is in the next batch without asking."""
+        pr = Project(project, self.root)
+        cfg = pr.config()
+        every = {"temps": [float(t) for t in cfg.temps_c], "corners": list(cfg.corner_names())}
+        st = pr.state()
+        batch = dict(st.plan_batch)
+        for key in ("temps", "corners"):
+            if key not in (body or {}):
+                continue
+            val = body[key]
+            if val is None:
+                batch.pop(key, None)
+                continue
+            if not isinstance(val, list):
+                raise _err(f"the batch's {key} is not a list.",
+                           'PUT /plan/batch takes {"temps": [25], "corners": ["tt"]}; null means '
+                           "all of them.",
+                           [f'Send {{"{key}": [...]}} or {{"{key}": null}}'],
+                           f"PUT /api/p/{project}/plan/batch")
+            try:
+                want = [float(v) for v in val] if key == "temps" else [str(v) for v in val]
+            except (TypeError, ValueError):
+                raise _err(f"the batch's temps must be numbers, not {val!r}.",
+                           "A temperature in the batch is one of the project's temperatures "
+                           "in degrees C.", ['Send e.g. {"temps": [25]}'],
+                           f"PUT /api/p/{project}/plan/batch") from None
+            unknown = [v for v in want if v not in every[key]]
+            if unknown:
+                raise _err(f"{', '.join(str(u) for u in unknown)} is not one of this project's "
+                           f"{key}.",
+                           f"The batch picks among the {key} chosen on New "
+                           f"({', '.join(str(v) for v in every[key])}); the model's range is "
+                           "changed there, not here.",
+                           [f"Add it on New first, or pick one of {every[key]}"],
+                           f"PUT /api/p/{project}/plan/batch")
+            if set(want) == set(every[key]):
+                batch.pop(key, None)
+            else:
+                batch[key] = [v for v in every[key] if v in want]    # New's order
+        st.set_ticks(st.plan_ticks, "plan batch", batch=batch)
+        st.note("plan batch changed", "plan")
+        st.save()
+        out = self.plan(project)
+        out["consequences"] = self.consequences(project)["consequences"]
+        out["undoable"] = st.undoable()
+        return out
+
     def consequences(self, project: str) -> dict:
         if self.demo:
             return {"consequences": []}
@@ -2761,9 +2873,15 @@ class Api:
                                  "reads": [], "why": "demo", "cost_s": 300.0})
             return {"group": group, "runs": rows}
         pr = Project(project, self.root)
-        plan = pr.plan(apply_ticks=False)
+        plan = pr.plan()
         g = plan.group(group)
         labels = {s.key: s.label for s in plan.states}
+        try:
+            with pr.ledger() as led:
+                have = {r.run_id for r in led.all() if r.status in ("done", "imported",
+                                                                   "skipped_cached")}
+        except PmuError:                                               # pragma: no cover - no db
+            have = set()
         rows = []
         for r in g.runs:
             run = r.run
@@ -2772,8 +2890,10 @@ class Api:
                          "load_label": labels.get(run.load_key, run.load_key),
                          "analysis": run.analysis, "stimulus": run.stimulus,
                          "reads": run.reads, "why": r.why(), "cost_s": r.cost_s,
-                         "cell_text": run.cell_text()})
-        return {"group": group, "title": g.title, "why": g.why, "runs": rows}
+                         "cell_text": run.cell_text(), "in_batch": plan.in_batch(r),
+                         "cached": run.run_id in have})
+        return {"group": group, "title": g.title, "why": g.why, "runs": rows,
+                "what": _group_what(g, labels)}
 
     def recipe(self, project: str, run_id: str) -> dict:
         if self.demo:
@@ -5007,6 +5127,11 @@ def _r_plan(api, h, a, q, b):
 @route("PUT", r"/api/p/<project>/plan/groups")
 def _r_plan_groups(api, h, a, q, b):
     return api.set_plan_groups(a["project"], b)
+
+
+@route("PUT", r"/api/p/<project>/plan/batch")
+def _r_plan_batch(api, h, a, q, b):
+    return api.set_plan_batch(a["project"], b)
 
 
 @route("GET", r"/api/p/<project>/plan/consequences")

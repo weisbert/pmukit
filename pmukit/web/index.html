@@ -129,6 +129,17 @@ table.t{width:100%;border-collapse:collapse;font-size:12.5px}
 .grid{display:grid;gap:4px;min-width:0}
 .cell{height:28px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid transparent;font-family:var(--mono)}
 .cell.sel{outline:2px solid var(--ink);outline-offset:1px}
+/* Plan matrix: rows = the signals you model, columns = what is simulated for each */
+.mx td,.mx th{padding:5px 8px}
+.mx tr.msec>td{background:var(--line2);font-weight:600;border-bottom:1px solid var(--line)}
+.mx tr.msec .clab{font-weight:600;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink2)}
+.mx .mc{white-space:nowrap;cursor:pointer}
+.mx .mc.sel{background:var(--acc-bg);outline:1px solid var(--ink3);outline-offset:-1px}
+.mx .mc .n{font-family:var(--mono);margin-left:4px}
+.mx .mc.off .n{text-decoration:line-through;color:var(--ink3)}
+.mx .mc .dn{font-size:10.5px;color:var(--ok);margin-left:4px}
+.mx .none{color:var(--ink3)}
+.mx .fold{border:0;background:none;color:inherit;font:inherit;cursor:pointer;padding:0 4px 0 0}
 /* grid markers: "h" = the grade is held for a reason, "off" = a default-off block is graded worse */
 .cell{position:relative;gap:4px}
 .cell .gm{font-size:9px;font-weight:600;line-height:1;padding:1px 3px;border-radius:2px;border:1px solid currentColor;opacity:.85;font-style:normal}
@@ -1102,6 +1113,7 @@ function renderOverlays(){
   }
 }
 function wire(){
+  document.querySelectorAll("input[data-mixed]").forEach(function(n){ n.indeterminate = true; });
   document.querySelectorAll("[data-act]").forEach(function(n){
     n.onclick = function(e){ e.stopPropagation(); var f = ACTS[n.getAttribute("data-act")]; if (f) f(); };
   });
@@ -2526,9 +2538,14 @@ function measureLoad(rail){
 
 /* ---------------------------------------------------------------- Plan -- */
 SCREENS.plan = {
+  /* what Submit sends: the ticked / unticked groups and the batch, as `pmukit run` flags */
   cli: function(){
-    var p = S.data["plan"] || {};
-    return { ticks: p.ticks || {}, engine: "" };
+    var p = S.data["plan"] || {}, ch = (p.batch || {}).chosen || {};
+    var gs = p.groups || [];
+    return { on: gs.filter(function(g){ return g.enabled; }).map(function(g){ return g.id; }),
+             off: gs.filter(function(g){ return !g.enabled; }).map(function(g){ return g.id; }),
+             temps: ch.temps === undefined ? null : ch.temps,
+             corners: ch.corners === undefined ? null : ch.corners, engine: "" };
   },
   main: function(){
     if (!S.project) return noProject();
@@ -2548,30 +2565,21 @@ SCREENS.plan = {
       + stat(pl.cells, "cells") + stat(cost.runs, "runs")
       + stat(num(cost.cpu_hours, 1), "CPU-h est.") + stat(pl.cached, "cached")
       + stat((pl.groups || []).filter(function(g){ return g.enabled; }).length + "/" + (pl.groups || []).length, "groups on")
+      + ((pl.batch || {}).out ? stat(pl.batch.out, "later batch") : "")
       + '<div style="margin-left:auto;align-self:center" class="hint">Groups merge runs by AC '
-      + "superposition; nothing here is simulated twice. Runs already in the ledger are skipped.</div></div>";
-    var rows = (pl.groups || []).map(function(g){
-      var ctx = regCtx({ row: g });
-      var sel = S.sel.group === g.id;
-      var pick = regAction(function(){ S.sel.group = g.id; render(); });
-      var tick = regAction(function(){ setTick(g.id, !g.enabled); });
-      return "<tr" + rc("group", g.id, ctx) + ' class="click rc' + (sel ? " sel" : "") + '">'
-        + '<td><input type="checkbox" data-act="' + tick + '"' + (g.enabled ? " checked" : "") + "></td>"
-        + '<td class="mono" data-act="' + pick + '" style="' + (g.enabled ? "" : "text-decoration:line-through;color:var(--ink3)")
-        + '">' + esc(g.id) + "</td>"
-        + '<td data-act="' + pick + '">' + esc(g.title) + "</td>"
-        + '<td class="mono" style="color:var(--ink2)">' + esc((g.ports || []).join(", ")) + "</td>"
-        + '<td class="num">' + g.runs + "</td>"
-        + '<td class="num">' + (g.cached || 0) + "</td>"
-        + '<td class="mono" style="font-size:11.5px">' + esc((g.observables || []).join(" ")) + "</td>"
-        + '<td class="num">' + num(g.cpu_hours, 1) + "</td></tr>";
-    }).join("");
+      + "superposition; nothing here is simulated twice. Runs already in the ledger are skipped.</div></div>"
+      + planBatchBar(pl);
     var pupd = updating("plan", "recomputing");
-    var table = panel("What will run, and why", "click a row for the reason &middot; untick to see what you lose"
-      + (pupd ? " &middot; " + pupd : ""),
-      '<table class="t"><thead><tr><th style="width:26px"></th><th>Group</th><th>Analysis</th>'
-      + '<th>Ports</th><th class="num">Runs</th><th class="num">Cached</th><th>Feeds</th>'
-      + '<th class="num">CPU-h</th></tr></thead><tbody>' + rows + "</tbody></table>", { flush: true });
+    /* the block the right-hand panel shows is the one lit in the matrix */
+    if (!(pl.groups || []).some(function(x){ return x.id === S.sel.group; }))
+      S.sel.group = ((pl.groups || [])[0] || {}).id;
+    var allOn =regAction(function(){ setTicksAll(function(){ return true; }); });
+    var allOff = regAction(function(){ setTicksAll(function(){ return false; }); });
+    var table = panel("What will run", "", planMatrix(pl), { flush: true,
+      right: '<span class="rowflex" style="gap:8px"><span class="hint">click a block to see what it '
+        + "simulates &middot; untick to see what you lose" + (pupd ? " &middot; " + pupd : "")
+        + '</span><button class="btn sm" data-act="' + allOn + '">All on</button>'
+        + '<button class="btn sm" data-act="' + allOff + '">All off</button></span>' });
     var g = (pl.groups || []).filter(function(x){ return x.id === S.sel.group; })[0] || (pl.groups || [])[0];
     var detail = g ? planDetail(g) : panel("Select a group", "", '<div class="hint">Click a row.</div>');
     var cons = planConsequences(pl);
@@ -2613,12 +2621,170 @@ function stat(v, l){
   return '<div class="stat"><span class="v">' + esc(v === undefined || v === null ? "-" : v)
        + '</span><span class="l">' + esc(l) + "</span></div>";
 }
+/* ---- the Plan matrix: rows = the signals modeled on New (rails, bias currents), columns = what
+   is simulated for each; the groups one simulation shares across every port get a section of
+   their own -- unticking one of those costs every port, so it cannot sit under one of them. */
+var MX_COLS = { rail: [["dc", "DC load"], ["ac", "Zout"], ["noise", "Noise"],
+                       ["load_on", "Load on"], ["load_off", "Load off"]],
+                bias: [["dc", "I-V"], ["ac", "Yout"], ["noise", "Noise"]] };
+var MX_KIND = { rail: "Rails (voltage)", bias: "Bias currents" };
+function mxTick(groups){
+  /* one checkbox for several groups: on, off or partly on; a click turns them all on, or all
+     off when every one already is */
+  if (!groups.length) return "";
+  var on = groups.filter(function(g){ return g.enabled; }).length;
+  var ids = groups.map(function(g){ return g.id; });
+  var act = regAction(function(){ setTicksSome(ids, on !== groups.length); });
+  return '<input type="checkbox" data-act="' + act + '"' + (on === groups.length ? " checked" : "")
+       + (on && on < groups.length ? ' data-mixed="1"' : "")
+       + ' title="' + (on === groups.length ? "untick" : "tick") + " " + groups.length + ' group(s)">';
+}
+function mxCount(gs){
+  return gs.reduce(function(a, g){ return a + (g.enabled ? (g.in_batch === undefined ? g.runs : g.in_batch) : 0); }, 0);
+}
+function mxCell(g){
+  if (!g) return '<td class="none">&ndash;</td>';
+  var ctx = regCtx({ row: g });
+  var pick = regAction(function(){ S.sel.group = g.id; S.sel.planTab = "runs"; S.sel.planRun = null; render(); });
+  var tick = regAction(function(){ setTick(g.id, !g.enabled); });
+  var n = g.in_batch === undefined ? g.runs : g.in_batch;
+  var tip = g.title + ": " + g.runs + " runs in all" + (n !== g.runs ? ", " + n + " in this batch" : "")
+          + ((g.batch_cached || g.cached) ? ", " + (g.batch_cached || g.cached) + " already done" : "");
+  return "<td" + rc("group", g.id, ctx) + ' class="mc rc' + (S.sel.group === g.id ? " sel" : "")
+       + (g.enabled ? "" : " off") + '" data-act="' + pick + '" title="' + esc(tip) + '">'
+       + '<input type="checkbox" data-act="' + tick + '"' + (g.enabled ? " checked" : "") + ">"
+       + '<span class="n">' + n + "</span>"
+       + ((g.batch_cached || 0) ? '<span class="dn">&#10003;' + g.batch_cached + "</span>" : "")
+       + "</td>";
+}
+function planMatrix(pl){
+  var gs = pl.groups || [], fold = S.sel.planFold || {}, ncol = MX_COLS.rail.length;
+  var out = "";
+  ["rail", "bias"].forEach(function(kind){
+    var mine = gs.filter(function(g){ return g.kind === kind; });
+    if (!mine.length) return;
+    var ports = [];
+    mine.forEach(function(g){ if (ports.indexOf(g.port) < 0) ports.push(g.port); });
+    var cols = MX_COLS[kind];
+    var folded = !!fold[kind];
+    var tg = regAction(function(){ var f = S.sel.planFold || {}; f[kind] = !f[kind]; S.sel.planFold = f; render(); });
+    out += '<tr class="msec"><td>' + mxTick(mine) + "</td><td>"
+         + '<button class="fold" data-act="' + tg + '" aria-expanded="' + !folded + '">'
+         + (folded ? "&#9656;" : "&#9662;") + "</button>" + esc(MX_KIND[kind]) + ' <span class="hint">('
+         + ports.length + ")</span></td>";
+    for (var c = 0; c < ncol; c++){
+      var col = cols[c];
+      if (!col){ out += "<td></td>"; continue; }
+      var inCol = mine.filter(function(g){ return g.column === col[0]; });
+      out += "<td>" + mxTick(inCol) + ' <span class="clab">' + esc(col[1]) + "</span></td>";
+    }
+    out += '<td class="num">' + mxCount(mine) + "</td></tr>";
+    if (folded) return;
+    ports.forEach(function(port){
+      var row = mine.filter(function(g){ return g.port === port; });
+      out += "<tr><td>" + mxTick(row) + '</td><td class="mono">' + esc(port) + "</td>";
+      for (var c = 0; c < ncol; c++){
+        var col = cols[c];
+        if (!col){ out += "<td></td>"; continue; }
+        out += mxCell(row.filter(function(g){ return g.column === col[0]; })[0]);
+      }
+      out += '<td class="num">' + mxCount(row) + "</td></tr>";
+    });
+  });
+  var shared = gs.filter(function(g){ return g.kind !== "rail" && g.kind !== "bias"; });
+  if (shared.length){
+    out += '<tr class="msec"><td>' + mxTick(shared) + '</td><td colspan="' + (ncol + 1) + '">'
+         + 'Shared <span class="hint" style="font-weight:400">one simulation reads every port: '
+         + "unticking one costs all of them</span></td>"
+         + '<td class="num">' + mxCount(shared) + "</td></tr>";
+    shared.forEach(function(g){
+      var pick = regAction(function(){ S.sel.group = g.id; S.sel.planTab = "runs"; S.sel.planRun = null; render(); });
+      out += '<tr class="click' + (S.sel.group === g.id ? " sel" : "") + '"' + rc("group", g.id, regCtx({ row: g }))
+           + ' data-act="' + pick + '"><td>' + mxTick([g]) + "</td>"
+           + '<td colspan="' + (ncol + 1) + '"' + (g.enabled ? "" : ' style="text-decoration:line-through;color:var(--ink3)"')
+           + ">" + esc(g.title) + ' <span class="hint">'
+           + esc((g.ports || []).length + ((g.ports || []).length === 1 ? " port" : " ports"))
+           + "</span></td>" + '<td class="num">' + mxCount([g])
+           + ((g.batch_cached || 0) ? ' <span class="hint">&#10003;' + g.batch_cached + "</span>" : "")
+           + "</td></tr>";
+    });
+  }
+  var head = '<tr><th style="width:26px"></th><th>Signal</th>';
+  for (var c = 0; c < ncol; c++) head += "<th></th>";
+  head += '<th class="num">Runs</th></tr>';
+  return '<table class="t mx"><thead>' + head + "</thead><tbody>" + out + "</tbody></table>";
+}
+/* The batch: which of the model's temperatures and corners (New) THIS submission runs. Never
+   the model's range -- a cell left out is reported NOT RUN until a later batch runs it. */
+function planBatchBar(pl){
+  var b = pl.batch;
+  if (!b || ((b.temps || []).length < 2 && (b.corners || []).length < 2)) return "";
+  var ch = b.chosen || {};
+  var chips = function(key, all, fmt){
+    var pick = ch[key] === undefined ? all : ch[key];
+    return all.map(function(v){
+      var on = pick.indexOf(v) >= 0;
+      var act = regAction(function(){
+        var next = on ? pick.filter(function(x){ return x !== v; }) : pick.concat([v]);
+        if (!next.length){ S.toast = "a batch keeps at least one"; render();
+                           setTimeout(function(){ S.toast = ""; render(); }, 1400); return; }
+        setBatch(key, next);
+      });
+      return '<button class="chip' + (on ? " on" : "") + '" data-act="' + act + '" aria-pressed="'
+           + on + '">' + esc(fmt(v)) + "</button>";
+    }).join(" ");
+  };
+  var reset = (ch.temps !== undefined || ch.corners !== undefined)
+    ? ' <button class="btn sm" data-act="' + regAction(function(){ setBatch(null); }) + '">All of them</button>' : "";
+  return '<div class="pb rowflex" style="padding:8px 16px;border-top:1px solid var(--line2);flex-wrap:wrap;gap:8px">'
+       + '<span class="lbl" title="Which of the temperatures and corners chosen on New this submission runs. '
+       + 'The model still covers all of them: what is left out is reported NOT RUN until a later batch runs it.">'
+       + "This batch</span>"
+       + ((b.temps || []).length > 1 ? '<span class="hint">temps</span> '
+          + chips("temps", b.temps, function(t){ return num(t, 0) + " C"; }) : "")
+       + ((b.corners || []).length > 1 ? '<span class="hint" style="margin-left:8px">corners</span> '
+          + chips("corners", b.corners, function(c){ return c; }) : "")
+       + reset
+       + (b.out ? '<span class="hint" style="margin-left:auto">' + b.out + " ticked runs wait for a later batch "
+          + "(reported NOT RUN until then)</span>" : "")
+       + "</div>";
+}
+function setBatch(key, vals){
+  var body = key === null ? { temps: null, corners: null } : {};
+  if (key !== null) body[key] = vals;
+  api("/api/p/" + P() + "/plan/batch", { method:"PUT", body: body })
+    .then(function(d){
+      S.data["plan"] = d;
+      S.data["consequences"] = { consequences: d.consequences || [] };
+      S.undoable = d.undoable || "";
+      forget("planruns:");
+      render(); refreshCli();
+    }, showErr);
+}
+function planWhat(w, runs){
+  if (!w) return "";
+  var n = runs.length, inb = runs.filter(function(r){ return r.in_batch !== false; }).length;
+  var done = runs.filter(function(r){ return r.cached; }).length;
+  var temps = (w.temps || []).map(function(t){ return t === "swept" ? "swept inside each run" : num(t, 0) + " C"; });
+  var kv = function(k, v){ return v ? '<span class="k">' + k + '</span><span class="mono">'
+                                     + esc(v).replace(/\n/g, "<br>") + "</span>" : ""; };
+  return '<div class="lbl" style="margin-bottom:6px">What every run of this block adds to your netlist</div>'
+    + '<div class="code" style="max-height:120px;margin-bottom:10px">'
+    + esc((w.analyses || []).concat(w.saves || []).join("\n") || "(no analysis line)") + "</div>"
+    + '<div class="kv" style="margin-bottom:12px">'
+    + kv("Drives", w.stimulus) + kv("Reads", (w.reads || []).join(", "))
+    + kv("Corners", (w.corners || []).join(", ")) + kv("Temps", temps.join(", "))
+    + kv("Codes", (w.codes || []).join(", ")) + kv("Loads", (w.loads || []).join("\n"))
+    + kv("Runs", n + " in all" + (inb !== n ? ", " + inb + " in this batch" : "")
+         + (done ? ", " + done + " already done" : ""))
+    + "</div>";
+}
 function planDetail(g){
-  var tab = S.sel.planTab || "why";
-  var right = '<div class="rowflex"><button class="chip' + (tab === "why" ? " on" : "")
-    + '" data-act="' + regAction(function(){ S.sel.planTab = "why"; render(); }) + '">Why</button>'
-    + '<button class="chip' + (tab === "runs" ? " on" : "") + '" data-act="'
-    + regAction(function(){ S.sel.planTab = "runs"; render(); }) + '">Runs &middot; ' + g.runs + "</button></div>";
+  var tab = S.sel.planTab || "runs";
+  var right = '<div class="rowflex"><button class="chip' + (tab === "runs" ? " on" : "") + '" data-act="'
+    + regAction(function(){ S.sel.planTab = "runs"; render(); }) + '">What it runs &middot; ' + g.runs + "</button>"
+    + '<button class="chip' + (tab === "why" ? " on" : "")
+    + '" data-act="' + regAction(function(){ S.sel.planTab = "why"; render(); }) + '">Why</button></div>';
   if (tab === "why"){
     return panel('<span class="mono">' + esc(g.id) + "</span>", "", '<div style="line-height:1.55;margin-bottom:12px">'
       + esc(g.why) + "</div>"
@@ -2635,26 +2801,36 @@ function planDetail(g){
   var runs = need("planruns:" + g.id, "/api/p/" + P() + "/plan/runs?group=" + encodeURIComponent(g.id), "plan");
   if (runs === undefined) return panel('<span class="mono">' + esc(g.id) + "</span>", "",
     loadingBlock("planruns:" + g.id, "expanding the group into its runs"), { right: right });
-  var sel = S.sel.planRun || (runs.runs[0] || {}).run_id;
-  var rows = runs.runs.map(function(r){
+  /* the runs this batch sends first, then the ones waiting for a later batch */
+  var list = runs.runs.filter(function(r){ return r.in_batch !== false; })
+    .concat(runs.runs.filter(function(r){ return r.in_batch === false; }));
+  var sel = S.sel.planRun || (list[0] || {}).run_id;
+  var rows = list.map(function(r){
     var ctx = regCtx({ row: r });
     var id = regAction(function(){ S.sel.planRun = r.run_id; forget("recipe:"); render(); });
+    var state = r.cached ? '<span style="color:var(--ok)">done</span>'
+              : r.in_batch === false ? '<span class="hint">later batch</span>' : "";
     return "<tr" + rc("planrun", "run " + r.run_id, ctx) + ' class="click rc'
-      + (r.run_id === sel ? " sel" : "") + '" data-act="' + id + '">'
+      + (r.run_id === sel ? " sel" : "") + '" data-act="' + id + '"'
+      + (r.in_batch === false && !r.cached ? ' style="color:var(--ink3)"' : "") + ">"
       + '<td class="id">' + esc(r.run_id.slice(0, 10)) + "</td>"
       + '<td class="mono">' + esc(r.process) + "</td>"
       + '<td class="num">' + (r.temp_c === null ? "T swept" : num(r.temp_c, 0)) + "</td>"
       + '<td class="num">' + esc(r.vset) + "</td>"
-      + '<td class="mono">' + esc(r.load_label || r.load_key || "-") + "</td></tr>";
+      + '<td class="mono">' + esc(r.load_label || r.load_key || "-") + "</td>"
+      + "<td>" + state + "</td></tr>";
   }).join("");
   var rec = sel ? need("recipe:" + sel, "/api/p/" + P() + "/runs/" + encodeURIComponent(sel) + "/recipe", "plan") : undefined;
   return panel('<span class="mono">' + esc(g.id) + "</span>", "",
-    '<div style="max-height:230px;overflow:auto;border-bottom:1px solid var(--line2);margin:-12px -13px 10px;padding:0">'
+    '<div style="margin-bottom:8px;line-height:1.5">' + esc(g.title) + "</div>"
+    + planWhat(runs.what, runs.runs)
+    + '<div style="max-height:230px;overflow:auto;border:1px solid var(--line2);margin:0 0 10px;padding:0">'
     + '<table class="t"><thead><tr><th>Run</th><th>Corner</th><th class="num">T C</th>'
-    + '<th class="num">VSET</th><th>Load</th></tr></thead><tbody>' + rows + "</tbody></table></div>"
+    + '<th class="num">VSET</th><th>Load</th><th></th></tr></thead><tbody>' + rows + "</tbody></table></div>"
     + '<div class="lbl" style="margin-bottom:6px">How run <span class="mono" style="text-transform:none">'
     + esc((sel || "").slice(0, 10)) + "</span> is built and submitted</div>"
-    + (rec === undefined ? skeleton(5, "reading the recipe") : recipeCode(rec))
+    + (!sel ? '<div class="hint">This block has no run.</div>'
+       : rec === undefined ? skeleton(5, "reading the recipe") : recipeCode(rec))
     + '<div class="hint" style="margin-top:6px">Lines marked <span class="mono">+</span> are added '
     + 'by pmukit, <span class="mono">~</span> edited in place (the original is in the comment), '
     + '<span class="mono">-</span> stripped. Everything else is your netlist, untouched.</div>',
@@ -2697,6 +2873,9 @@ function setTick(id, on){
       S.undoable = d.undoable || "";
       render(); refreshCli();
     }, showErr);
+}
+function setTicksSome(ids, on){
+  setTicksAll(function(g){ return ids.indexOf(g.id) >= 0 ? on : g.enabled; });
 }
 function setTicksAll(fn){
   var pl = S.data["plan"];
@@ -4179,6 +4358,17 @@ document.addEventListener("keydown", function(e){
   if (e.key === "c" && S.screen === "run" && S.sel.run){
     var rd = (S.data["run:" + S.sel.run] || {}).run;
     if (rd && rd.status === "failed"){ e.preventDefault(); failureBundle(rd.run_id); }
+    return;
+  }
+  /* Plan: space ticks / unticks the block the right-hand panel shows, r opens what it runs (a
+     focused button keeps its own space) */
+  if (S.screen === "plan" && (e.key === " " || e.key === "r") && tag !== "BUTTON"){
+    var pg = ((S.data["plan"] || {}).groups || []).filter(function(g){ return g.id === S.sel.group; })[0];
+    if (pg){
+      e.preventDefault();
+      if (e.key === " ") setTick(pg.id, !pg.enabled);
+      else { S.sel.planTab = "runs"; render(); }
+    }
     return;
   }
   if (e.key >= "0" && e.key <= "5"){

@@ -264,21 +264,23 @@ const out = {};
   {
     const R = baseRoutes();
     const plan = { cells:4, cached:0, cost:{ runs:12, cpu_hours:1 }, ticks:{}, groups:[
-      { id:'g1', title:'AC', enabled:true, ports:['VRAIL_A'], runs:12, observables:['zout'], cpu_hours:1 }] };
+      { id:'g1', title:'AC', enabled:true, ports:['VRAIL_A'], runs:12, observables:['zout'], cpu_hours:1,
+        kind:'rail', port:'VRAIL_A', column:'ac', in_batch:12 }] };
     R['GET /api/p/p/plan'] = [200, plan];
     R['GET /api/p/p/plan/consequences'] = [200, { consequences:[] }];
+    R['GET /api/p/p/plan/runs'] = [200, { group:'g1', title:'AC', runs:[], what:{ analyses:[], saves:[] } }];
     R['GET /api/site'] = [200, { engine:'fake' }];
     R['POST /api/p/p/config/undo'] = [200, { kind:'plan_ticks', plan_ticks:{}, undoable:'' }];
     const pg = makePage(R);
     await settle();
     pg.S.screen = 'plan'; pg.sandbox.render(); await settle(); pg.sandbox.render();
-    const t = { before: /<td class="mono"[^>]*>g1<\/td>/.test(pg.nodes.main.innerHTML) };
+    const t = { before: /<td class="mono"[^>]*>VRAIL_A<\/td>/.test(pg.nodes.main.innerHTML) };
     R['GET /api/p/p/plan'] = 'hold';
     pg.sandbox.doUndo();
     await settle();
     const html = pg.nodes.main.innerHTML;
     t.skeleton = skel(html);
-    t.kept = /<td class="mono"[^>]*>g1<\/td>/.test(html);
+    t.kept = /<td class="mono"[^>]*>VRAIL_A<\/td>/.test(html);
     t.mark = /recomputing&hellip;/.test(html);
     t.submit_blocked = /the plan is being recomputed/.test(pg.nodes.foot.innerHTML);
     release(pg, 'GET /api/p/p/plan', 200, plan);

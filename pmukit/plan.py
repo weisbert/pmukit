@@ -87,6 +87,14 @@ GROUP_TITLE = {
                                "not signed off"),
 }
 
+#: The Plan screen's matrix: a group that reads ONE modeled port and whose observables all land in
+#: one of these columns is that port's cell (rail: DC load / Zout / noise / load on / load off;
+#: bias: I-V / Yout / noise). Anything else -- one simulation reading every port, like the supply
+#: injection or the temperature sweep -- is a shared group: unticking it costs every port.
+CELL_COLUMN = {"dc_load": "dc", "dc_iv": "dc", "ac_zout": "ac", "ac_yout": "ac",
+               "noise_v": "noise", "noise_i": "noise",
+               "tran_load_on": "load_on", "tran_load_off": "load_off"}
+
 #: The Plan group of the output-code check, and the `PlannedRun.check` tag of its runs.
 CODE_CHECK = "code_check"
 CODE_CHECK_TITLE = ("Output-code check (Zout, PSRR)",
@@ -261,6 +269,9 @@ class Group:
     analysis: str
     runs: list[PlannedRun] = field(default_factory=list)
     enabled: bool = True
+    kind: str = "shared"           # "rail" | "bias": one port's cell; "shared": reads every port
+    port: str = ""                 # the port of a rail/bias cell
+    column: str = ""               # CELL_COLUMN value of a cell; the group id of a shared group
 
     @property
     def n_runs(self) -> int:
@@ -291,7 +302,8 @@ class Group:
     def to_row(self) -> dict:
         return {"id": self.id, "title": self.title, "why": self.why, "analysis": self.analysis,
                 "runs": self.n_runs, "cpu_seconds": round(self.cost_s, 1),
-                "ports": self.ports(), "observables": self.observables(), "enabled": self.enabled}
+                "ports": self.ports(), "observables": self.observables(), "enabled": self.enabled,
+                "kind": self.kind, "port": self.port, "column": self.column}
 
 
 @dataclass
@@ -304,6 +316,11 @@ class Plan:
     groups: list[Group] = field(default_factory=list)
     states: list[LoadState] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    batch: dict = field(default_factory=dict)
+    """What THIS submission runs of the declared cells: {"temps": [...], "corners": [...]}, a
+    key absent = all of them. It narrows a submission, never the model: a cell left out is
+    reported NOT RUN until a later batch runs it (the New screen's corners and temperatures are
+    the model's range; this is only the order they are run in)."""
 
     # ---- access
     def group(self, gid: str) -> Group:
@@ -316,7 +333,22 @@ class Plan:
                        where="plan")
 
     def runs(self, *, enabled_only: bool = True) -> list[PlannedRun]:
-        return [r for g in self.groups if g.enabled or not enabled_only for r in g.runs]
+        """Every run, or (`enabled_only`) what a submission sends: ticked groups, this batch."""
+        if not enabled_only:
+            return [r for g in self.groups for r in g.runs]
+        return [r for g in self.groups if g.enabled for r in g.runs if self.in_batch(r)]
+
+    def in_batch(self, pr: PlannedRun) -> bool:
+        """Is this run's cell in the batch? A run that sweeps temperature inside itself (its
+        temp_c is NaN) is in every temperature batch: it is the whole range at once."""
+        run = pr.run
+        corners = self.batch.get("corners")
+        if corners is not None and run.process not in corners:
+            return False
+        temps = self.batch.get("temps")
+        if temps is not None and run.temp_c == run.temp_c:
+            return any(abs(run.temp_c - float(t)) < 1e-9 for t in temps)
+        return True
 
     def set_enabled(self, gid: str, on: bool) -> None:
         self.group(gid).enabled = bool(on)
@@ -327,9 +359,12 @@ class Plan:
         for g in self.groups:
             if not g.enabled:
                 continue
-            e = by.setdefault(g.analysis, {"runs": 0, "cpu_seconds": 0.0})
-            e["runs"] += g.n_runs
-            e["cpu_seconds"] = round(e["cpu_seconds"] + g.cost_s, 1)
+            for r in g.runs:
+                if not self.in_batch(r):
+                    continue
+                e = by.setdefault(g.analysis, {"runs": 0, "cpu_seconds": 0.0})
+                e["runs"] += 1
+                e["cpu_seconds"] = round(e["cpu_seconds"] + r.cost_s, 1)
         total = round(sum(e["cpu_seconds"] for e in by.values()), 1)
         return {"by_analysis": by, "runs": sum(e["runs"] for e in by.values()),
                 "cpu_seconds": total, "cpu_hours": round(total / 3600.0, 3)}
@@ -368,7 +403,15 @@ class Plan:
 
     # ---- output
     def to_rows(self) -> list[dict]:
-        return [g.to_row() for g in self.groups]
+        """One row per group; `in_batch` / `batch_cpu_seconds` count what this batch runs of it."""
+        out = []
+        for g in self.groups:
+            row = g.to_row()
+            mine = [r for r in g.runs if self.in_batch(r)]
+            row["in_batch"] = len(mine)
+            row["batch_cpu_seconds"] = round(sum(r.cost_s for r in mine), 1)
+            out.append(row)
+        return out
 
     def commit(self, ledger: Ledger) -> dict:
         """Write the enabled runs into the ledger, with their `consumes` rows.
@@ -803,7 +846,22 @@ def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
     _code_check(plan, cfg, derived, netlist, families, family_order, nominal,
                 site=site, pins=pins, cost=cost, variants=variants)
     variants.prune()
+    _classify(plan, derived)
     return plan
+
+
+def _classify(plan: Plan, derived: DerivedConfig) -> None:
+    """Place every group on the Plan screen's matrix: one port's cell, or shared (CELL_COLUMN)."""
+    rails, biases = set(derived.rails or {}), set(derived.biases or {})
+    for g in plan.groups:
+        ports = g.ports()
+        cols = {CELL_COLUMN.get(o) for o in g.observables()}
+        if g.id != CODE_CHECK and len(ports) == 1 and len(cols) == 1 and None not in cols:
+            kind = "rail" if ports[0] in rails else "bias" if ports[0] in biases else ""
+            if kind:
+                g.kind, g.port, g.column = kind, ports[0], cols.pop()
+                continue
+        g.kind, g.port, g.column = "shared", "", g.id
 
 
 def check_codes(derived: DerivedConfig) -> list[int]:

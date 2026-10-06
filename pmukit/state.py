@@ -81,6 +81,9 @@ class UiState:
     survives a reload. Keys: cells (corners/temps/vset), loads (per rail), fmax."""
     plan_ticks: dict = field(default_factory=dict)
     """group id -> bool. Absent id means 'enabled', which is the compiler's default."""
+    plan_batch: dict = field(default_factory=dict)
+    """The Plan screen's batch: {"temps": [...], "corners": [...]}, a key absent = all of them
+    (plan.Plan.batch). Undone with the ticks: one Plan selection, one Ctrl-Z stack."""
     last_job: str = ""
     recent: list = field(default_factory=list)
     """Newest first: [{"at", "text", "screen"}] -- Home's activity list."""
@@ -90,8 +93,8 @@ class UiState:
     """Newest last: which kind of configuration change happened, so one Ctrl-Z picks the right
     stack. Entries: {"kind", "at", "note"}."""
     tick_history: list = field(default_factory=list)
-    """Newest last: the plan_ticks *before* each change, paired with the 'plan_ticks' entries
-    of undo_log."""
+    """Newest last: the Plan selection *before* each change, {"ticks", "batch"}, paired with
+    the 'plan_ticks' entries of undo_log."""
     exists: bool = False
     """False when state.json was never written: a brand-new project, not an error."""
     updated_at: str = ""
@@ -150,7 +153,8 @@ class UiState:
                  recent=list(d.get("recent") or []),
                  netlist=str(d.get("netlist") or ""),
                  undo_log=list(d.get("undo_log") or []),
-                 tick_history=list(d.get("tick_history") or []),
+                 plan_batch=_batch(d.get("plan_batch")),
+                 tick_history=[_selection(e) for e in (d.get("tick_history") or [])],
                  exists=True,
                  updated_at=str(d.get("updated_at") or ""))
         st._root = root
@@ -159,6 +163,7 @@ class UiState:
     def to_dict(self) -> dict:
         return {"kind": KIND, "project": self.project, "screen": self.screen,
                 "answers": self.answers, "plan_ticks": self.plan_ticks,
+                "plan_batch": self.plan_batch,
                 "last_job": self.last_job, "recent": self.recent[:RECENT_CAP],
                 "netlist": self.netlist, "undo_log": self.undo_log[-TICK_CAP:],
                 "tick_history": self.tick_history[-TICK_CAP:],
@@ -197,13 +202,16 @@ class UiState:
         del self.undo_log[:-TICK_CAP]
         return self
 
-    def set_ticks(self, ticks: dict, note: str = "") -> "UiState":
-        """Replace the plan tick state, remembering the previous one for Ctrl-Z."""
-        self.tick_history.append(dict(self.plan_ticks))
+    def set_ticks(self, ticks: dict, note: str = "", *, batch: dict | None = None) -> "UiState":
+        """Replace the plan tick state (and, given, the batch), remembering the previous
+        selection for Ctrl-Z."""
+        self.tick_history.append({"ticks": dict(self.plan_ticks), "batch": dict(self.plan_batch)})
         self.undo_log.append({"kind": "plan_ticks", "at": _now(), "note": str(note)})
         del self.tick_history[:-TICK_CAP]
         del self.undo_log[:-TICK_CAP]
         self.plan_ticks = {str(k): bool(v) for k, v in (ticks or {}).items()}
+        if batch is not None:
+            self.plan_batch = _batch(batch)
         return self
 
     def undoable(self) -> str:
@@ -236,10 +244,32 @@ class UiState:
         if self.undo_log:
             self.undo_log.pop()
         if kind == "plan_ticks":
-            self.plan_ticks = dict(self.tick_history.pop())
+            was = self.tick_history.pop()
+            self.plan_ticks, self.plan_batch = dict(was["ticks"]), dict(was["batch"])
             return "plan_ticks", dict(self.plan_ticks)
         cfg = self.history().undo()
         return "config", cfg
+
+
+def _batch(d) -> dict:
+    """A stored batch, cleaned: only `temps` (numbers) and `corners` (names), each a list."""
+    d = d if isinstance(d, dict) else {}
+    out = {}
+    if isinstance(d.get("temps"), list):
+        out["temps"] = [float(t) for t in d["temps"]]
+    if isinstance(d.get("corners"), list):
+        out["corners"] = [str(c) for c in d["corners"]]
+    return out
+
+
+def _selection(e) -> dict:
+    """A tick_history entry: {"ticks", "batch"}; one written before the batch existed is the
+    bare tick map."""
+    if isinstance(e, dict) and isinstance(e.get("ticks"), dict) and "batch" in e:
+        return {"ticks": {str(k): bool(v) for k, v in e["ticks"].items()},
+                "batch": _batch(e.get("batch"))}
+    return {"ticks": {str(k): bool(v) for k, v in (e if isinstance(e, dict) else {}).items()},
+            "batch": {}}
 
 
 def state_dir_projects(root=None) -> list:

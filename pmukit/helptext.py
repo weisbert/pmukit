@@ -53,16 +53,21 @@ HELP: dict[str, dict] = {
     "plan": {
         "title": "Plan -- what will run, and why",
         "lines": [
-            "Each row is a group of simulations that share a purpose; the Why panel names the "
-            "parameters that would go unmeasured without it.",
-            "Runs that one simulation can produce together are already merged -- one supply "
-            "injection reads every port -- so this is close to the smallest set that answers the "
-            "model spec.",
-            "Untick a group and the consequences panel lists, in red, exactly what will be "
-            "reported NOT RUN in the final report.",
+            "Rows are the signals you model (rails, bias currents), columns what is simulated "
+            "for each; a row, a column or a section ticks at once, All on / All off everything. "
+            "Shared blocks are one simulation that reads every port -- the supply injection, "
+            "the temperature sweep -- so unticking one costs all of them.",
+            "Click a block to see what it simulates: the analysis and save lines it adds to your "
+            "netlist, the source it drives, and every run with its corner, temperature, code, "
+            "load and recipe.",
+            "This batch picks which of the temperatures and corners chosen on New this "
+            "submission runs. The model still covers all of them: what is left out, and every "
+            "unticked block, is reported NOT RUN until a later submission runs it, and runs "
+            "already in the ledger are skipped, so a second batch pays only for what is new. To "
+            "leave a signal out of the model for good, set it to stub on New.",
         ],
-        "keys": (("space", "tick or untick the selected group"),
-                 ("r", "show that group's runs and recipes"),
+        "keys": (("space", "tick or untick the block the right-hand panel shows"),
+                 ("r", "show what that block runs"),
                  ("Ctrl Enter", "submit")),
         "cli": "pmukit plan <project>",
     },
