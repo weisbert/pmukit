@@ -506,11 +506,13 @@ class Ledger:
         run with every group on) and nothing ever submitted is not part of this one -- left in,
         the Run screen showed every group queued after one was ticked. A row that was submitted,
         ran, failed, was skipped with a reason or imported stays: that is history, and a later
-        commit of its cell finds it."""
+        commit of its cell finds it. A dry-run engine's note ("dry run: ...", "DEGRADED from
+        ...": the deck was written, nothing submitted) is not history either."""
         keep = set(keep)
         rows = self._db.execute(
             "SELECT run_id FROM runs WHERE status = 'planned' AND COALESCE(job_id, '') = '' "
-            "AND COALESCE(error, '') = ''").fetchall()
+            "AND (COALESCE(error, '') = '' OR error LIKE 'dry run:%' "
+            "OR error LIKE 'DEGRADED from %')").fetchall()
         gone = [r[0] for r in rows if r[0] not in keep]
         if gone:
             with self._db:

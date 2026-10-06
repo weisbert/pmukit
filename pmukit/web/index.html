@@ -695,6 +695,9 @@ var VERBS = {
                     .filter(function(x){ return x !== ""; }).join(" · ")]); } }
   ],
   run: [
+    { id:"live", label:"Live output log (new window)", common:true,
+      when:function(c){ return c.row.status === "running" || c.row.status === "submitted"; },
+      run:function(c){ openLiveLog(c.row.run_id); } },
     { id:"detail", label:"Show details", common:true,
       run:function(c){ S.sel.run = c.row.run_id; forget("run:"); render(); } },
     { id:"retry", label:"Retry", common:true, when:function(c){ return c.row.status === "failed"; },
@@ -706,6 +709,9 @@ var VERBS = {
       run:function(c){ runAction(c.row.run_id, "kill"); } },
     { sep:true },
     { id:"log", label:"Open the log", run:function(c){ S.sel.run = c.row.run_id; S.sel.runTab = "log"; forget("run:"); render(); } },
+    { id:"livelog", label:"Live output log (new window)",
+      when:function(c){ return c.row.status !== "running" && c.row.status !== "submitted"; },
+      run:function(c){ openLiveLog(c.row.run_id); } },
     { id:"reci", label:"Copy the recipe", run:function(c){ copy(c.row.recipe || ""); } },
     { id:"cid", label:"Copy run id", key:"id", run:function(c){ copy(c.row.run_id); } },
     { sep:true },
@@ -3197,10 +3203,17 @@ SCREENS.model = {
           return '<div><span class="badge b-warn">' + ICON.warn + " " + esc(u.item || u)
                + '</span><div class="hint">' + esc(u.note || "") + "</div></div>"; }).join("")
         : '<span class="badge b-ok">' + ICON.ok + " nothing held back</span>") + "</div>"
-      + '<div class="box"><div class="h">Not run</div>'
-      + ((sum.not_run || []).length ? sum.not_run.map(function(u){
-          return '<div><span class="badge b-bad">' + ICON.x + " " + esc(u.item || u)
-               + '</span><div class="hint">' + esc(u.note || "") + "</div></div>"; }).join("")
+      + '<div class="box"><div class="h">Not run' + ((sum.not_run || []).length
+          ? ' <span class="hint" style="text-transform:none;letter-spacing:0">' + sum.not_run.length
+            + " blocks &middot; hover one for its cells</span>" : "") + "</div>"
+      + ((sum.not_run || []).length ? '<div style="max-height:260px;overflow:auto">'
+        + sum.not_run.map(function(u){
+          /* one line per port.block: the reason in short, the cells in the tooltip */
+          var note = String(u.note || ""), why = note.split(" -- ")[0];
+          why = /never run/.test(why) ? "never run" : why;
+          return '<div title="' + esc(note) + '"><span class="badge b-bad">' + ICON.x + " " + esc(u.item || u)
+               + '</span> <span class="hint">' + esc(why) + (u.cells ? " &middot; " + u.cells
+               + (u.cells === 1 ? " cell" : " cells") : "") + "</span></div>"; }).join("") + "</div>"
         : '<span class="badge b-ok">' + ICON.ok + " everything was run</span>") + "</div>"
       + '<div class="box"><div class="h">HB health check</div>'
       + (sum.hb && sum.hb.ran === false
@@ -3272,7 +3285,9 @@ function gradesGrid(gr){
     + '<span><span class="badge b-warn">MARG</span> one block near its limit</span>'
     + '<span><span class="badge b-bad">FAIL</span> block outside tolerance</span>'
     + '<span><span class="badge b-acc">FIT</span> fitted, not yet judged</span>'
-    + '<span><span class="badge b-mute">N/R</span> the data behind it was never run</span>'
+    + '<span><span class="badge b-mute">N/R</span> the data behind a block in it was never run</span>'
+    + '<span><i class="gm" style="font-style:normal;font-size:9px;border:1px solid;padding:0 3px;border-radius:2px">2/5</i>'
+    + " 2 of the cell's 5 blocks are fitted, the rest never run (hover for which)</span>"
     + '<span><i class="gm" style="font-style:normal;font-size:9px;border:1px solid;padding:0 3px;border-radius:2px">h</i>'
     + " held at MARG: the fit is inside the limit but the data does not pin a parameter</span>"
     + '<span><i class="gm" style="font-style:normal;font-size:9px;border:1px solid;padding:0 3px;border-radius:2px;color:var(--ink3)">off</i>'
@@ -3293,6 +3308,9 @@ function offWorse(c){
 }
 function gridMarks(c){
   var out = "";
+  /* part of the cell is there: "1/5" -- an N/R cell with its DC fitted is not an empty one */
+  var nh = (c.have || []).length, nl = (c.lack || []).length;
+  if (nh && nl) out += '<i class="gm">' + nh + "/" + (nh + nl) + "</i>";
   if (c.held) out += '<i class="gm">h</i>';
   if (offWorse(c).length) out += '<i class="gm off">off</i>';
   return out;
@@ -3300,6 +3318,8 @@ function gridMarks(c){
 function gridCellTitle(c){
   var t = [];
   if (c.block) t.push("worst block: " + c.block);
+  if ((c.have || []).length && (c.lack || []).length)
+    t.push("fitted: " + c.have.join(", ") + " · never run: " + c.lack.join(", "));
   if (c.held) t.push("held at MARG: the data does not pin a parameter of "
                      + (c.held_by || []).join(", "));
   offWorse(c).forEach(function(o){ t.push(o.note || ("off by default: " + o.block)); });
@@ -4424,8 +4444,65 @@ window.addEventListener("focus", function(){
 /* The project to open on: ?project= in the URL, else the one `pmukit open <project>` handed the
    server (so a bare URL still lands there). A named project opens at the screen it was left on,
    unless ?screen= says otherwise; with none named, Home selects the first row. */
+/* ---- the live output log: a window of its own per run, like the simulator's output log in
+   ADE -- it follows what the engine is writing (every 2 s while the run is going, then once more
+   when it ends), keeps following the bottom until you scroll up, and several can be open. */
+function openLiveLog(runId){
+  var url = "?project=" + encodeURIComponent(S.project || "") + "&livelog=" + encodeURIComponent(runId);
+  var w = window.open(url, "pmukit_log_" + runId, "width=980,height=660");
+  if (!w){ S.toast = "the browser blocked the log window -- allow pop-ups for this page"; render();
+           setTimeout(function(){ S.toast = ""; render(); }, 3000); }
+  else if (w.focus) w.focus();
+}
+function liveLogWindow(project, runId){
+  var LIVE_KEEP = 2000000;                 /* characters kept on screen: the head is dropped */
+  document.title = "log " + runId.slice(0, 10);
+  document.body.innerHTML =
+      '<div style="display:flex;flex-direction:column;height:100vh;background:var(--bg)">'
+    + '<div class="ph" style="background:var(--panel)"><span class="mono" id="lltitle">' + esc(runId) + "</span>"
+    + '<span class="rowflex" style="gap:8px"><span class="hint" id="llstat">connecting</span>'
+    + '<label class="hint"><input type="checkbox" id="llfollow" checked> follow</label>'
+    + '<button class="btn sm" id="llcopy">Copy</button></span></div>'
+    + '<div class="hint mono" id="llsrc" style="padding:4px 13px;background:var(--panel);border-bottom:1px solid var(--line2)"></div>'
+    + '<pre id="ll" class="code" style="flex:1;margin:0;border-radius:0;max-height:none;overflow:auto;white-space:pre-wrap"></pre></div>';
+  var pre = document.getElementById("ll"), fol = document.getElementById("llfollow");
+  var st = { offset: 0, src: "" };
+  pre.onscroll = function(){
+    var bottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24;
+    if (fol.checked !== bottom) fol.checked = bottom;      /* scroll up to read = stop following */
+  };
+  fol.onchange = function(){ if (fol.checked) pre.scrollTop = pre.scrollHeight; };
+  document.getElementById("llcopy").onclick = function(){
+    try { navigator.clipboard.writeText(pre.textContent); } catch(e){ /* no clipboard here */ }
+  };
+  function poll(){
+    fetch("/api/p/" + encodeURIComponent(project) + "/runs/" + encodeURIComponent(runId)
+          + "/live?offset=" + st.offset + "&src=" + encodeURIComponent(st.src))
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d.error){ document.getElementById("llstat").textContent = d.error.what || "error"; setTimeout(poll, 5000); return; }
+        if (d.reset || d.replace) pre.textContent = "";
+        pre.textContent += d.text || "";
+        if (pre.textContent.length > LIVE_KEEP)
+          pre.textContent = "[... earlier output dropped ...]\n" + pre.textContent.slice(-LIVE_KEEP);
+        st.offset = d.offset || 0; st.src = d.src || "";
+        document.getElementById("lltitle").textContent = runId.slice(0, 12) + "  " + (d.cell || "") + "  " + (d.analysis || "");
+        document.getElementById("llsrc").textContent = d.src ? "reading " + d.src : "";
+        document.getElementById("llstat").textContent = d.done ? "finished: " + d.status
+          : (d.status || "") + (d.job_id ? " · job " + d.job_id : "") + " · refreshing every 2 s";
+        if (fol.checked) pre.scrollTop = pre.scrollHeight;
+        if (d.more) poll();                      /* a long log arrives in pieces: keep reading */
+        else if (!d.done) setTimeout(poll, 2000);
+      }, function(){
+        document.getElementById("llstat").textContent = "the server does not answer -- retrying";
+        setTimeout(poll, 5000);
+      });
+  }
+  poll();
+}
 function boot(){
   var q = new URLSearchParams(window.location.search);
+  if (q.get("livelog")){ liveLogWindow(q.get("project") || "", q.get("livelog")); return; }
   /* ?screen=settings (an address from when Settings was a screen): the drawer, over the screen
      the project was left on */
   var drawer = q.get("screen") === "settings";

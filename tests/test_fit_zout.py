@@ -190,4 +190,4 @@ def test_undeclared_variable_is_missing(tmp_path):
     ds = make(tmp_path)
     bf = zout.fit(ds, RAIL, CELL)
     assert bf.missing is True
-    assert "never declared" in bf.notes[0]
+    assert "never run" in bf.notes[0]

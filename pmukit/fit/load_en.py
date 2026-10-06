@@ -375,7 +375,7 @@ def _gather(dataset, port: str, var: str, cell: dict):
     variable carries one, otherwise the single cell."""
     layout = var_layout(dataset, var)
     if layout is None:
-        raise NoData(f"{var} was never declared in this dataset")
+        raise NoData(f"{var}: never run -- no result of it in the dataset yet")
     cells, _ = layout
     out = {}
     if "load_a" in cells:

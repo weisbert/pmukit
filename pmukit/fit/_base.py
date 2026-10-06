@@ -205,7 +205,7 @@ def var_layout(ds, var: str):
 def _cell_for_var(ds, var: str, cell: dict) -> dict:
     rec = _var_record(ds, var)
     if rec is None:
-        raise NoData(f"{var} was never declared in this dataset")
+        raise NoData(f"{var}: never run -- no result of it in the dataset yet")
     cells, _ = _split(list(rec["dims"]))
     out = {}
     for dim in cells:
@@ -310,7 +310,7 @@ def read_over_axis(ds, var: str, cell: dict, dim: str, port: str):
     load-regulation curve has to be assembled from the cells."""
     rec = _var_record(ds, var)
     if rec is None:
-        raise NoData(f"{var} was never declared in this dataset")
+        raise NoData(f"{var}: never run -- no result of it in the dataset yet")
     cells, coord_dim = _split(list(rec["dims"]))
     if dim not in cells:
         raise NoData(f"{var} is not stored over {dim}")

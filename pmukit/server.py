@@ -3061,6 +3061,69 @@ class Api:
         return {"run_id": run_id, "lines": lines, "next_offset": nxt, "done": done,
                 "status": run.status}
 
+    def live_log(self, project: str, run_id: str, offset: int = 0, src: str = "") -> dict:
+        """The live output log of one run, for the window a right-click opens: what the engine
+        has written SINCE `offset` (bytes) of the log it is writing now.
+
+        The file is the one the engine is growing -- the run directory's simulator log, else the
+        freshest `*.log` / `logFile` there or in the result directory (ALPS names its own) -- so
+        a run in progress shows its output, not "copied back later". With no file yet and a
+        Donau job id, `dpeek` (the job's stdout as the scheduler holds it) is shown instead,
+        whole each time (`replace`). When the file changes (`src` differs from what the window
+        read) the window starts that file from the top (`reset`).
+        """
+        if self.demo:
+            return {"run_id": run_id, "status": "running", "src": "demo", "text":
+                    "demo: no engine runs in --demo\n", "offset": 0, "reset": offset == 0,
+                    "replace": False, "done": True}
+        pr = Project(project, self.root)
+        with pr.ledger() as led:
+            run = led.get(run_id)
+        if run is None:
+            raise _err(f"no run {run_id!r} in the ledger.",
+                       "The live log follows a run the ledger knows about.",
+                       ["Pick a row from the ledger table"], str(pr.dir / "runs.sqlite"))
+        done = run.status in ("done", "failed", "imported", "skipped_cached")
+        out = {"run_id": run_id, "status": run.status, "job_id": run.job_id or "",
+               "cell": run.cell_text(), "analysis": run.analysis, "done": done,
+               "reset": False, "replace": False}
+        path = _live_source(pr, run)
+        if path is not None:
+            name = str(path)
+            if name != src:
+                offset, out["reset"] = 0, True
+            try:
+                size = path.stat().st_size
+                if size < offset:                       # rewritten from the top: start over
+                    offset, out["reset"] = 0, True
+                with open(path, "rb") as fh:
+                    fh.seek(offset)
+                    data = fh.read(LIVE_CHUNK)
+                out.update(src=name, text=data.decode("utf-8", errors="replace"),
+                           offset=offset + len(data), more=offset + len(data) < size)
+                return out
+            except OSError as exc:                                     # pragma: no cover - fs
+                out.update(src=name, text=f"(could not read {name}: {exc})\n", offset=offset)
+                return out
+        if run.job_id and not done and shutil.which("dpeek"):
+            try:
+                res = subprocess.run(["dpeek", str(run.job_id)], capture_output=True, text=True,
+                                     timeout=15)
+                text = (res.stdout or "") + (res.stderr or "")
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                text = f"(dpeek {run.job_id} did not answer: {exc})"
+            out.update(src=f"dpeek {run.job_id}", text=_tail(text, LIVE_PEEK_LINES) + "\n",
+                       offset=0, replace=True)
+            return out
+        msg = {"planned": "not submitted yet -- nothing has written a log",
+               "submitted": "waiting for a slot -- the engine has not started writing",
+               "running": "running -- no log file in the run directory yet"}
+        text = msg.get(run.status, f"no log file found for {run_id}")
+        if run.error:
+            text += f"\n{run.error}"
+        out.update(src="", text=text + "\n", offset=0, replace=True)
+        return out
+
     def run_bundle(self, project: str, run_id: str) -> dict:
         """The Run screen's "Copy failure bundle": one bounded, plain-text blob for the desk.
 
@@ -3247,13 +3310,23 @@ class Api:
                     "valid": {}, "usable_not_signoff": [], "hb": None}
 
         blocks = _fit_blocks(fit)
-        usable, missing = [], []
+        usable, missing, gaps = [], [], {}
         for bf in blocks:
             tier = _tier_of(fit, bf)
             if bf.get("missing"):
-                missing.append({"item": "%s.%s at %s" % (bf["port"], bf["block"],
-                                                         _cell_label(bf.get("cell"))),
-                                "note": (bf.get("notes") or [""])[0]})
+                # one line per port.block, not per cell: 274 cell lines sorted by name showed
+                # only the first ports' blocks and hid that the rest were never run either
+                key = (bf["port"], bf["block"])
+                g = gaps.get(key)
+                if g is None:
+                    g = gaps[key] = {"item": "%s.%s" % key, "cells": [], "notes": []}
+                    missing.append(g)
+                label = _cell_label(bf.get("cell"))
+                if label and label not in g["cells"]:
+                    g["cells"].append(label)
+                note = (bf.get("notes") or [""])[0]
+                if note and note not in g["notes"]:
+                    g["notes"].append(note)
             elif tier == "en":
                 usable.append({"item": "%s.%s" % (bf["port"], bf["block"]),
                                "note": "usable, not sign-off: it rises with the measured time; "
@@ -3298,7 +3371,7 @@ class Api:
         grid = _grade_grid(fit, ver, stale)
         return {"fitted": True, "valid": valid,
                 "graded_by": grid["graded_by"], "verify_stale": bool(stale),
-                "usable_not_signoff": uniq, "not_run": missing[:30],
+                "usable_not_signoff": uniq, "not_run": [_gap_line(g) for g in missing],
                 # verify_project writes the HB report under `hb_check`; reading "hb" returned
                 # None forever, so the tile said "not checked" after every check.
                 "hb": _hb_summary(ver.get("hb_check")), "dataset": fit.get("dataset_sha", ""),
@@ -4150,6 +4223,34 @@ def _log_candidates(pr: Project, run) -> list[pathlib.Path]:
     return out
 
 
+#: One live-log answer reads at most this many bytes; the window asks again for the rest.
+LIVE_CHUNK = 256 * 1024
+#: `dpeek` shows the job's whole stdout; the window keeps its tail.
+LIVE_PEEK_LINES = 400
+_LIVE_GLOBS = ("*.log", "logFile", "*.out", "*.err", "*.warn")
+
+
+def _live_source(pr: Project, run) -> pathlib.Path | None:
+    """The log the engine is writing for this run: the known names first (the simulator log in
+    the run directory), else the freshest log-like file in the run directory or its result
+    directory -- ALPS names its log after the deck and may put it in the `-o` directory."""
+    for cand in _log_candidates(pr, run):
+        if cand.is_file():
+            return cand
+    wd = paths.runs_dir(pr.name) / run.run_id
+    found = []
+    for d in (wd, wd / "raw", wd / "psf"):
+        if d.is_dir():
+            for pat in _LIVE_GLOBS:
+                found.extend(f for f in d.glob(pat) if f.is_file())
+    if not found:
+        return None
+    try:
+        return max(found, key=lambda f: f.stat().st_mtime)
+    except OSError:                                                    # pragma: no cover - fs
+        return found[0]
+
+
 def _read_log(pr: Project, run, offset: int, limit: int) -> tuple[list[str], int, bool]:
     for cand in _log_candidates(pr, run):
         try:
@@ -4414,6 +4515,18 @@ def _headline(items: list, port: str, port_type, ls_on: list) -> dict:
                 "off_by_default": []}
 
 
+def _gap_line(g: dict) -> dict:
+    """A Not-run line of the Model screen: the block, and in the note where it is missing and
+    why -- the reason once when every cell gives the same one."""
+    cells, notes = g["cells"], g["notes"]
+    why = notes[0] if len(notes) == 1 else ("%d different reasons; the first: %s"
+                                            % (len(notes), notes[0]) if notes else "")
+    where = ("%d cell%s: " % (len(cells), "" if len(cells) == 1 else "s")
+             + " | ".join(cells[:3]) + (" ..." if len(cells) > 3 else "")) if cells else ""
+    return {"item": g["item"], "note": " -- ".join(x for x in (why, where) if x),
+            "cells": len(cells)}
+
+
 def _grade_grid(fit: dict, ver: dict, stale: str = "") -> dict:
     """The grade grid: the worst block per port and (corner, temperature) cell.
 
@@ -4499,8 +4612,13 @@ def _grade_grid(fit: dict, ver: dict, stale: str = "") -> dict:
             head = _headline(items, port, types.get(port), ls_on) if items else \
                 {"grade": "not_run", "block": "", "held": False, "held_by": [],
                  "off_by_default": []}
+            # what the cell HAS next to its worst block: a cell with its DC fitted and its AC
+            # never run reads N/R like one with nothing -- "1/5" and the names tell them apart
+            have = sorted({i["block"] for i in items if i["grade"] != "not_run"})
+            lack = sorted({i["block"] for i in items if i["grade"] == "not_run"})
             out_cells.append({"corner": cells[k]["corner"], "temp_c": cells[k]["temp_c"],
                               "grade": head["grade"], "block": head.get("block", ""),
+                              "have": have, "lack": lack,
                               "held": bool(head.get("held")),
                               "held_by": head.get("held_by") or [],
                               "off": [{"block": o["block"], "grade": o["grade"],
@@ -5176,6 +5294,14 @@ def _r_ledger(api, h, a, q, b):
 @route("GET", r"/api/p/<project>/runs/<run>")
 def _r_run(api, h, a, q, b):
     return api.run_detail(a["project"], _safe_name(a["run"], RUNID_RE, "run id", "run detail"))
+
+
+@route("GET", r"/api/p/<project>/runs/<run>/live")
+def _r_run_live(api, h, a, q, b):
+    run_id = _safe_name(a["run"], RUNID_RE, "run id", "live log")
+    off = _one(q, "offset", 0) or 0
+    return api.live_log(a["project"], run_id, int(off) if _isnum(str(off)) else 0,
+                        str(_one(q, "src", "") or ""))
 
 
 @route("GET", r"/api/p/<project>/runs/<run>/log")

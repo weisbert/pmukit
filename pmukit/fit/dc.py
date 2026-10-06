@@ -40,7 +40,7 @@ def _vout_vs_load(dataset, port: str, cell: dict, temp_c: float):
     var = f"dc_load.{port}"
     layout = var_layout(dataset, var)
     if layout is None:
-        raise NoData(f"{var} was never declared in this dataset")
+        raise NoData(f"{var}: never run -- no result of it in the dataset yet")
     cells, coord = layout
     sub = {k: v for k, v in cell.items() if k in cells}
     if "temp_c" in cells:

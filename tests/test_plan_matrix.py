@@ -254,3 +254,31 @@ def test_history_is_never_dropped(tmp_path):
     assert led.get("aaaaaaaaaaa1") is None and not led.consumers("aaaaaaaaaaa1")
     for rid in ("aaaaaaaaaaa2", "aaaaaaaaaaa3", "aaaaaaaaaaa4", "aaaaaaaaaaa5"):
         assert led.get(rid) is not None
+
+
+# ------------------------------------------------------------------- the Model screen after it
+def test_a_dc_only_fit_says_what_it_has_and_lists_each_gap_once(api, monkeypatch):
+    """Only the DC load groups run, then fit: the grid's N/R cells say the DC is there ("have")
+    and what is not ("lack"), and Not run is one line per port.block -- not a cell-by-cell list
+    whose first thirty lines, sorted by name, were all bias blocks."""
+    for v in ("PMUKIT_SIM_ROOT", "WORK_ROOT"):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv("PMUKIT_DATA", str(api.root))     # where the runner writes the dataset
+    groups = [g["id"] for g in api.plan("p")["groups"]]
+    api.set_plan_groups("p", {"ticks": {g: g.startswith("dc_load:") for g in groups}})
+    job = wait(api.submit("p", {"engine": "fake"}))
+    assert job.status == "done", job.error
+    job = wait(api.fit("p", {}))
+    assert job.status == "done", job.error
+    rails = [r for r in api.model_grades("p")["rows"] if r["port"].startswith("VDD")]
+    assert rails
+    for r in rails:
+        for c in r["cells"]:
+            assert c["grade"] == "not_run"
+            assert "dc" in c["have"] and "zout" in c["lack"]
+    gaps = api.model_summary("p")["not_run"]
+    items = [g["item"] for g in gaps]
+    assert len(items) == len(set(items))
+    assert any(i.endswith(".zout") for i in items) and any(i.startswith("VDD") for i in items)
+    assert all("never declared" not in g["note"] for g in gaps)
+    assert all(g["cells"] >= 1 for g in gaps)
