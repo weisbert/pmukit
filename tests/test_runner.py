@@ -190,6 +190,28 @@ def test_run_directory_holds_the_deck_and_the_recipe(workshop):
     assert "[submit]" in (wd / "recipe.txt").read_text(encoding="utf-8")
 
 
+def test_a_plan_with_decks_on_disk_runs_end_to_end(tmp_path):
+    """The plan refers to deck files: each run directory gets a copy, the jobs hold none, and
+    the fake engine still takes the whole pipeline to the dataset."""
+    nl = Netlist(DEMO, "tb/input.scs")
+    cfg = ProjectConfig.from_dict(CFG)
+    pins = nl.scan("PMU_TOP", ports=cfg.ports)
+    site = SiteConfig(engine="fake")
+    plan = compile_plan(cfg, derive(cfg, pins, site), nl, pins, site=site,
+                        deck_dir=tmp_path / "decks")
+    ledger = Ledger(tmp_path / "runs.sqlite")
+    ds = importer.open_or_create(tmp_path / "dataset", plan, project=cfg.project,
+                                 config_sha=cfg.sha())
+    r = Runner(cfg, plan, ledger, site, dataset=ds, root=tmp_path / "runs")
+    summary = r.run_all()
+    assert summary["failed"] == 0 and summary["done"] == len(plan.runs())
+    assert summary["stored"] > 0
+    for pr in plan.runs():
+        assert pr.deck_text is None
+        assert (r.workdir(pr.run_id) / "input.scs").read_bytes() == pr.deck_path.read_bytes()
+    assert all(j.netlist_text is None for j in r._jobs.values())
+
+
 def test_run_directory_is_written_with_lf(workshop):
     """The VM and the box are Linux; a CRLF deck is a parse error there."""
     r, _cfg, plan, _ledger, _ds = workshop

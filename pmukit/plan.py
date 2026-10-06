@@ -39,8 +39,11 @@ from __future__ import annotations
 
 import math
 import os
+import pathlib
 import re
 import shlex
+import tempfile
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Sequence
 
@@ -204,16 +207,27 @@ def measured_cost(ledger: Ledger, fallback: CostFn = default_cost) -> CostFn:
 # ------------------------------------------------------------------------------- plan objects
 @dataclass
 class PlannedRun:
-    """One simulation, with the netlist it would run and the parameters it feeds."""
+    """One simulation, with the netlist it would run and the parameters it feeds.
+
+    The deck is either held (`deck_text`) or, when the plan was compiled with a `deck_dir`, a
+    file there (`deck_path`) read back only when asked for: a real bench is a few MB, and 160
+    runs held in memory were ~900 MB -- in the Plan cache and again in the runner."""
 
     run: Run
-    netlist_text: str
     feeds: tuple[tuple[str, str, str], ...]        # (port, block, param)
     group_id: str
     cost_s: float = 0.0
     check: str = ""
     """`CODE_CHECK` for a run of the output-code check: its results go to the code-check dataset,
     never to the one the fitter reads.  Empty for every run that feeds a parameter."""
+    deck_text: str | None = field(default=None, repr=False)
+    deck_path: pathlib.Path | None = None
+
+    @property
+    def netlist_text(self) -> str:
+        if self.deck_text is not None:
+            return self.deck_text
+        return read_deck(self.deck_path)
 
     @property
     def run_id(self) -> str:
@@ -454,6 +468,28 @@ def _base_variant(base: Netlist, cfg: ProjectConfig, derived: DerivedConfig, cor
     return nl
 
 
+#: A compiled deck's file in the plan's `deck_dir`: `<netlist_sha>.scs`.
+DECK_SUFFIX = ".scs"
+#: How long a deck no compile refers to is kept (a runner of an older plan may still need it).
+DECK_KEEP_S = 3 * 24 * 3600.0
+
+
+def read_deck(path: pathlib.Path | None) -> str:
+    """A deck `_Variants.keep` wrote, exactly as compiled (no newline translation)."""
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            return fh.read()
+    except (OSError, TypeError) as e:
+        raise PmuError(what=f"the compiled run deck {path} is gone.",
+                       why="A plan keeps its run decks as files and reads one back when the run "
+                           f"is submitted; this one was deleted ({e.__class__.__name__}) -- by "
+                           "hand, or pruned after "
+                           f"{DECK_KEEP_S / 86400:.0f} days without a compile using it.",
+                       do=["Build the plan again (Plan screen, or `pmukit plan`): the decks are "
+                           "rewritten, and finished runs keep their results."],
+                       where=str(path)) from None
+
+
 class _Variants:
     """The base variant of each cell, built once per plan and copied for every run of the cell.
 
@@ -461,9 +497,12 @@ class _Variants:
     cell, and building the variant again for each re-did the same corner/code/temperature/load
     rewrites. Also holds, per variant, which convention sources carry a `mag=` (`says_mag`)."""
 
-    def __init__(self, cfg: ProjectConfig, derived: DerivedConfig, base: Netlist, site):
+    def __init__(self, cfg: ProjectConfig, derived: DerivedConfig, base: Netlist, site,
+                 deck_dir: pathlib.Path | None = None):
         self.cfg, self.derived, self.base = cfg, derived, base
         self.absolute = absolute_includes(site)
+        self.deck_dir = pathlib.Path(deck_dir) if deck_dir else None
+        self.kept: set[str] = set()              # deck file names this plan refers to
         self._cells: dict[tuple, Netlist] = {}
         self._texts: dict[tuple, str] = {}
         self._mags: dict[tuple, dict[str, bool]] = {}
@@ -482,6 +521,49 @@ class _Variants:
             self._cells[k] = nl
             self._texts[k] = nl.text             # joined once; every copy shares it
         return nl.copy()
+
+    def keep(self, netlist_sha: str, text: str) -> pathlib.Path | None:
+        """The deck's file in `deck_dir`, written unless it is already there -- None without a
+        `deck_dir` (the deck stays in memory). Named by the deck's own sha, so an unchanged run
+        finds its file from the last compile and a re-plan rewrites only the decks that moved."""
+        if self.deck_dir is None:
+            return None
+        path = self.deck_dir / f"{netlist_sha}{DECK_SUFFIX}"
+        if path.name not in self.kept:
+            self.kept.add(path.name)
+            if path.is_file():
+                try:
+                    os.utime(path)               # still in use: not pruned as stale
+                except OSError:                                        # pragma: no cover - fs
+                    pass
+            else:
+                self.deck_dir.mkdir(parents=True, exist_ok=True)
+                fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp",
+                                           dir=self.deck_dir)
+                with open(fd, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(text)
+                try:
+                    os.replace(tmp, path)        # never a half-written deck under the real name
+                except OSError:
+                    os.unlink(tmp)               # another compile wrote the same deck first
+                    if not path.is_file():
+                        raise
+        return path
+
+    def prune(self) -> None:
+        """Drop the decks no compile has used for `DECK_KEEP_S`: older plans' decks, which a
+        runner started from one of them would still copy into its run directories."""
+        if self.deck_dir is None or not self.deck_dir.is_dir():
+            return
+        cutoff = time.time() - DECK_KEEP_S
+        for f in self.deck_dir.iterdir():
+            if f.name in self.kept or not f.name.endswith((DECK_SUFFIX, ".tmp")):
+                continue
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except OSError:                                            # pragma: no cover - fs
+                pass
 
     def says_mag(self, b: dict, src: str) -> bool:
         """`_says_mag` of the cell's variant -- what a run's deck says before it rewrites any."""
@@ -578,8 +660,12 @@ def _submit_line(site, corner: str, run_id: str) -> str:
 def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
                  pins: PinTable | None = None, *, site=None,
                  cost: CostFn = default_cost,
-                 tiers: tuple[str, ...] = ("hb", "ls", "en")) -> Plan:
-    """Compile the measurement plan. Pure text and arithmetic -- no simulator is touched."""
+                 tiers: tuple[str, ...] = ("hb", "ls", "en"),
+                 deck_dir: pathlib.Path | None = None) -> Plan:
+    """Compile the measurement plan. Pure text and arithmetic -- no simulator is touched.
+
+    With `deck_dir` each run deck is written there (`<netlist_sha>.scs`) instead of being held
+    by the plan; decks no compile has used for `DECK_KEEP_S` are pruned from it."""
     if not derived.rails and not derived.biases:
         raise PmuError(
             what="the derived config has no rails and no biases to characterize.",
@@ -681,7 +767,7 @@ def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
     #    A cell no member is designated for is not run at all -- it would measure nothing the
     #    dataset can hold.
     groups: dict[str, Group] = {}
-    variants = _Variants(cfg, derived, netlist, site)
+    variants = _Variants(cfg, derived, netlist, site, deck_dir)
     code0 = (list((derived.vset or {}).get("codes", [])) or [0])[0]
     temp0 = (list((derived.temps_c or {}).get("points", [])) or [25.0])[0]
     for key in family_order:
@@ -716,6 +802,7 @@ def compile_plan(cfg: ProjectConfig, derived: DerivedConfig, netlist: Netlist,
     # 4) the output-code check: report-only, never fitted.
     _code_check(plan, cfg, derived, netlist, families, family_order, nominal,
                 site=site, pins=pins, cost=cost, variants=variants)
+    variants.prune()
     return plan
 
 
@@ -1026,4 +1113,6 @@ def _build_run(cfg: ProjectConfig, derived: DerivedConfig, base: Netlist, b: dic
               recipe=recipe.text(),
               engine=getattr(site, "engine", "") if site is not None else "")
     feeds = tuple(dict.fromkeys(b["feeds"]))
-    return PlannedRun(run=run, netlist_text=netlist_text, feeds=feeds, group_id=_group_id(b))
+    path = variants.keep(netlist_sha, netlist_text)
+    return PlannedRun(run=run, feeds=feeds, group_id=_group_id(b),
+                      deck_text=None if path else netlist_text, deck_path=path)

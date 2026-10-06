@@ -236,7 +236,7 @@ class FakeBackend:
         wd = pathlib.Path(job.workdir)
         raw = wd / "raw"
         raw.mkdir(parents=True, exist_ok=True)
-        deck = parse_deck(job.netlist_text)
+        deck = parse_deck(job.deck())
         if not deck["analyses"]:
             job.state = "failed"
             job.detail = ("the deck carries no analysis statement, so there is nothing to "

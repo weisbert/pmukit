@@ -1153,6 +1153,7 @@ class Project:
             except Exception:                                          # pragma: no cover - no db
                 cost = None
             plan = compile_plan(cfg, der, nl, pins, site=self.site(),
+                                deck_dir=paths.decks_dir(self.name, self.dir),
                                 **({"cost": cost} if cost else {}))
             with _CACHE_LOCK:
                 _PLAN_CACHE[self.name] = (key, plan)

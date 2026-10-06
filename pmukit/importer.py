@@ -1044,15 +1044,15 @@ def import_external(dirs, plan, ledger: Ledger, dataset: Dataset, *,
     # (`CODE_CHECK_DIR`), and written into this one they would land on the nominal code's cell.
     planned = [p for p in plan.runs(enabled_only=False) if not getattr(p, "check", "")]
     wanted = {p.run_id: p for p in planned}
-    cache: dict[str, Deck] = {}
+    cache: dict[tuple, tuple] = {}
     sigs: dict[str, dict] = {}
     keys: dict[str, tuple | None] = {}
-    for pr in planned:                     # one Deck per DISTINCT netlist, not per run
-        ckey = pr.run.netlist_sha or pr.netlist_text
+    for pr in planned:                     # one parse per DISTINCT netlist, not per run;
+        ckey = (pr.run.netlist_sha or pr.run_id, pr.run.analysis)   # only its answers are kept
         if ckey not in cache:
-            cache[ckey] = Deck(pr.netlist_text, pmu_inst=pmu_inst, vset_param=vset_param)
-        sigs[pr.run_id] = cache[ckey].signature()
-        keys[pr.run_id] = cache[ckey].analysis_key_for(pr.run.analysis)
+            deck = Deck(pr.netlist_text, pmu_inst=pmu_inst, vset_param=vset_param)
+            cache[ckey] = (deck.signature(), deck.analysis_key_for(pr.run.analysis))
+        sigs[pr.run_id], keys[pr.run_id] = cache[ckey]
     matched: set[str] = set()
 
     for raw in list(dirs or []):

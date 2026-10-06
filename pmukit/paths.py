@@ -40,6 +40,13 @@ def runs_dir(project: str) -> pathlib.Path:
     return sim_dir(project) / "runs"
 
 
+def decks_dir(project: str, fallback: pathlib.Path | None = None) -> pathlib.Path:
+    """`<sim_dir>/decks` -- the compiled run decks, `<netlist_sha>.scs`, that a plan refers to
+    instead of holding them (plan.compile_plan `deck_dir`); the runner copies one per run.
+    `fallback` as for `sim_dir`: the project's own folder when there is no simulation area."""
+    return sim_dir(project, fallback) / "decks"
+
+
 def ensure_project(project: str) -> pathlib.Path:
     p = project_dir(project)
     for sub in ("", "dataset", "deliver", "digest", "netlists", "logs"):   # runs: runs_dir()

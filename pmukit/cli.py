@@ -89,7 +89,8 @@ def _plan_of(cfg, der, d: pathlib.Path, *, site=None):
     planmod = _need("plan", "plan")
     nl = _netlist_of(cfg, d)
     pins = nl.scan(cfg.pmu_inst, ports=cfg.ports)
-    return planmod.compile_plan(cfg, der, nl, pins, site=site), nl, pins
+    return planmod.compile_plan(cfg, der, nl, pins, site=site,
+                                deck_dir=paths.decks_dir(cfg.project, d)), nl, pins
 
 
 def _site():

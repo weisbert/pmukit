@@ -335,6 +335,94 @@ def test_a_padded_bench_compiles_in_seconds():
     assert dt < 10.0, f"compiling {n} runs on a 20k-line bench took {dt:.1f} s"
 
 
+# ------------------------------------------------------------------------------ decks on disk
+def test_decks_on_disk_are_the_held_decks_and_the_plan_holds_none(tmp_path):
+    """With a `deck_dir` the plan refers to `<netlist_sha>.scs` files instead of holding the
+    decks -- byte for byte the decks a plan without one holds, run_ids unchanged."""
+    cfg, der, nl, pins, site = build("padded")
+    held = compile_plan(cfg, der, nl, pins, site=site)
+    disk = compile_plan(cfg, der, nl, pins, site=site, deck_dir=tmp_path / "decks")
+    a, b = held.runs(enabled_only=False), disk.runs(enabled_only=False)
+    assert [r.run_id for r in a] == [r.run_id for r in b]
+    for h, d in zip(a, b):
+        assert d.deck_text is None and h.deck_path is None
+        assert d.deck_path == tmp_path / "decks" / f"{d.run.netlist_sha}.scs"
+        assert d.deck_path.read_bytes() == h.netlist_text.encode("utf-8")
+        assert d.netlist_text == h.netlist_text
+    assert {f.name for f in (tmp_path / "decks").iterdir()} == \
+        {f"{r.run.netlist_sha}.scs" for r in b}
+
+
+def test_a_replan_rewrites_no_unchanged_deck(tmp_path, monkeypatch):
+    cfg, der, nl, pins, site = build("demo")
+    compile_plan(cfg, der, nl, pins, site=site, deck_dir=tmp_path)
+    import builtins
+    real_open, writes = builtins.open, []
+
+    def spy(file, mode="r", *a, **k):
+        if "w" in mode:
+            writes.append(file)
+        return real_open(file, mode, *a, **k)
+    monkeypatch.setattr(builtins, "open", spy)
+    again = compile_plan(cfg, der, nl, pins, site=site, deck_dir=tmp_path)
+    monkeypatch.undo()
+    assert writes == []
+    assert all(r.deck_path.is_file() for r in again.runs(enabled_only=False))
+
+
+def test_stale_decks_are_pruned_and_live_ones_kept(tmp_path):
+    from pmukit import plan as plan_mod
+    cfg, der, nl, pins, site = build("demo")
+    old = time.time() - plan_mod.DECK_KEEP_S - 60
+    stale, fresh = tmp_path / "0123456789ab.scs", tmp_path / "ba9876543210.scs"
+    other = tmp_path / "notes.txt"
+    for f in (stale, fresh, other):
+        f.write_text("x", encoding="utf-8")
+    os.utime(stale, (old, old))
+    os.utime(other, (old, old))
+    plan = compile_plan(cfg, der, nl, pins, site=site, deck_dir=tmp_path)
+    live = plan.runs(enabled_only=False)[0].deck_path
+    os.utime(live, (old, old))                  # an old file of THIS plan: touched, not pruned
+    compile_plan(cfg, der, nl, pins, site=site, deck_dir=tmp_path)
+    assert not stale.exists()
+    assert fresh.exists() and other.exists() and live.exists()
+    assert live.stat().st_mtime > old + 60
+
+
+def test_a_deck_gone_from_disk_says_build_the_plan_again(tmp_path):
+    cfg, der, nl, pins, site = build("demo")
+    pr = compile_plan(cfg, der, nl, pins, site=site, deck_dir=tmp_path).runs()[0]
+    pr.deck_path.unlink()
+    with pytest.raises(PmuError) as e:
+        pr.netlist_text
+    assert "Build the plan again" in " ".join(e.value.do)
+
+
+@pytest.mark.timing
+@timing
+def test_a_multi_mb_plan_holds_megabytes_not_the_decks(tmp_path):
+    """163 runs on a ~5 MB bench were ~900 MB of decks held by the plan (in the Plan cache, and
+    again in the runner). On disk, what the plan keeps is the runs' metadata."""
+    import tracemalloc
+    text = pad(DEMO_TEXT, 120000)
+    site = SiteConfig(engine="spectre_ssh")
+    nl = Netlist(text, FIX / "padded120k.scs")
+    cfg = ProjectConfig.from_dict(_cfg())
+    pins = nl.scan(cfg.pmu_inst, ports=cfg.ports)
+    der = derive(cfg, pins, site)
+    del text
+    tracemalloc.start()
+    try:
+        plan = compile_plan(cfg, der, nl, pins, site=site, deck_dir=tmp_path)
+        held, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    n = len(plan.runs(enabled_only=False))
+    assert n > 100
+    assert held < 60e6, f"{n} runs: the plan holds {held / 1e6:.0f} MB"
+    assert peak < 300e6, f"{n} runs: compiling peaked at {peak / 1e6:.0f} MB"
+
+
 if __name__ == "__main__" and "--regen" in sys.argv:
     out = {}
     for n in sorted(scenarios()):

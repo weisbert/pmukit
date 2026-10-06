@@ -113,13 +113,24 @@ class Job:
 
     run: Run
     workdir: pathlib.Path
-    netlist_text: str
+    netlist_text: str | None          # None: the deck is `workdir/input.scs`, read by `deck()`
     site: object                      # SiteConfig; duck-typed so tests can pass a stub
     job_id: str = ""
     log_path: pathlib.Path | None = None
     state: str = ""                   # backend scratch: the last known BACKEND_STATE
     detail: str = ""                  # backend scratch: ONE readable line about that state
     console: str = ""                 # backend scratch: the engine's console tail, if any
+
+    def deck(self) -> str:
+        """The deck this job runs. The runner keeps it on disk only (`netlist_text` None): it
+        holds every job it submitted, and a few-MB deck each was hundreds of MB by the end."""
+        if self.netlist_text is not None:
+            return self.netlist_text
+        p = self.workdir / NETLIST_NAME
+        if not p.is_file():
+            return ""
+        with open(p, encoding="utf-8", newline="") as fh:
+            return fh.read()
 
     @property
     def run_id(self) -> str:
@@ -309,10 +320,14 @@ class Runner:
                 shutil.copytree(src, dst, dirs_exist_ok=True)
             else:
                 shutil.copyfile(src, dst)
-        (wd / NETLIST_NAME).write_text(planned.netlist_text, encoding="utf-8", newline="\n")
+        deck = getattr(planned, "deck_path", None)
+        if deck is not None and deck.is_file():          # the plan's deck file: copied, not read
+            shutil.copyfile(deck, wd / NETLIST_NAME)
+        else:                                             # held, or gone (netlist_text says so)
+            (wd / NETLIST_NAME).write_text(planned.netlist_text, encoding="utf-8", newline="\n")
         (wd / RECIPE_NAME).write_text((run.recipe or "").rstrip("\n") + "\n",
                                       encoding="utf-8", newline="\n")
-        job = Job(run=run, workdir=wd, netlist_text=planned.netlist_text, site=self.site)
+        job = Job(run=run, workdir=wd, netlist_text=None, site=self.site)
         with self._lock:
             self._jobs[run.run_id] = job
         return job
@@ -519,7 +534,7 @@ class Runner:
             with self._lock:
                 ds, per_code = self._target_locked(job.run_id)
                 importer.mark_run_missing(job.run, ds, f"run failed: {what}", plan=self.plan,
-                                          netlist_text=job.netlist_text, pmu_inst=self.pmu_inst,
+                                          netlist_text=job.deck(), pmu_inst=self.pmu_inst,
                                           per_code=per_code)
         return self._get(job.run_id) or job.run
 
