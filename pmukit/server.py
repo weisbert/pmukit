@@ -1437,6 +1437,140 @@ def _group_what(g, labels: dict) -> dict:
             "loads": distinct(labels.get(r.load_key, r.load_key) for r in runs if r.load_key)}
 
 
+def _amps(a) -> str:
+    a = float(a)
+    if a == 0:
+        return "0 A"
+    for unit, k in (("A", 1.0), ("mA", 1e-3), ("uA", 1e-6), ("nA", 1e-9)):
+        if abs(a) >= k or unit == "nA":
+            return f"{a / k:g} {unit}"
+    return f"{a:g} A"                                                  # pragma: no cover
+
+
+def _secs(t) -> str:
+    t = float(t)
+    for unit, k in (("s", 1.0), ("ms", 1e-3), ("us", 1e-6), ("ns", 1e-9), ("ps", 1e-12)):
+        if abs(t) >= k or unit == "ps":
+            return f"{t / k:g} {unit}"
+    return f"{t:g} s"                                                  # pragma: no cover
+
+
+def _hz(f) -> str:
+    f = float(f)
+    for unit, k in (("GHz", 1e9), ("MHz", 1e6), ("kHz", 1e3), ("Hz", 1.0)):
+        if abs(f) >= k or unit == "Hz":
+            return f"{f / k:g} {unit}"
+    return f"{f:g} Hz"                                                 # pragma: no cover
+
+
+#: The load levels' names: state k puts every rail on the k-th point of [off, 0.2 on, on, 2 on].
+_LEVEL_NAMES = ("everything off", "0.2 x on", "on", "2 x on")
+
+
+def _plain_what(g, der, states) -> dict:
+    """What a Plan block simulates, in words, with this project's own numbers -- the panel's
+    first lines, above the netlist statements. "load" is the DC current YOUR circuit draws from a
+    rail (New, question 2: its on and off current); a load LEVEL sets every rail at once."""
+    an, port = g.analysis, g.port
+    first = g.runs[0].run if g.runs else None
+    src = first.stimulus if first is not None else ""
+    f = der.freq or {}
+    band = f"{_hz(f.get('start_hz', 10))} to {_hz(f.get('stop_hz', 1e9))}"
+    nz = der.noise or {}
+    nband = f"{_hz(nz.get('start_hz', 10))} to {_hz(nz.get('stop_hz', 1e8))}"
+    says = []
+    if an == "dc_load":
+        sw = (der.loads.get(port) or {}).get("sweep") or {}
+        says.append(f"Slowly turns up the current your circuit draws from {port}, from "
+                    f"{_amps(sw.get('start_a', 0))} to {_amps(sw.get('stop_a', 0))} in "
+                    f"{int(sw.get('n_points', 9))} steps, and reads the {port} voltage at each "
+                    "step.")
+        says.append("Tells you: how much the rail sags as your circuit draws more (load "
+                    "regulation), and where it stops regulating.")
+    elif an == "ac" and g.kind == "rail":
+        says.append(f"Adds a tiny AC wiggle to the current your circuit draws from {port} "
+                    f"({src}), from {band}, and reads the {port} voltage.")
+        says.append("Tells you: the rail's output impedance (voltage / current) -- how much "
+                    "rail ripple your circuit's current pulses cause, at every frequency.")
+    elif an == "ac" and g.kind == "bias":
+        says.append(f"Adds a tiny AC wiggle to the voltage on the {port} pin ({src}), from "
+                    f"{band}, and reads the bias current.")
+        says.append("Tells you: how much the bias current moves when the pin voltage moves.")
+    elif an == "ac":
+        says.append(f"Puts a tiny AC ripple on the supply {src}, from {band}, and reads every "
+                    "rail and every bias current at the same time.")
+        says.append("Tells you: how much supply ripple leaks through to each output (PSRR).")
+    elif an == "noise" and g.kind == "rail":
+        says.append(f"Noise simulation: the noise voltage on {port}, from {nband}.")
+        says.append("Tells you: the rail noise your VCO / PLL sees -- it turns into phase noise.")
+    elif an == "noise":
+        says.append(f"Noise simulation: the noise current out of the {port} pin, from {nband}.")
+        says.append("Tells you: the bias current noise -- it up-converts into phase noise.")
+    elif an in ("tran_load_on", "tran_load_off"):
+        ev = next((e for e in (der.loads.get(port) or {}).get("events", [])
+                   if e["event"] == an), {}) or {}
+        tw = der.transient.get(port) or {}
+        tstop = float(tw.get("tstop_s", 2e-5))
+        on = an == "tran_load_on"
+        says.append(f"Your circuit switching {'ON' if on else 'OFF'}: at {_secs(tstop * 0.1)} the "
+                    f"current it draws from {port} jumps from {_amps(ev.get('from_a', 0))} to "
+                    f"{_amps(ev.get('to_a', 0))} (in {_secs(ev.get('edge_s', 1e-9))}); the run "
+                    f"lasts {_secs(tstop)} and records the {port} voltage.")
+        says.append("Tells you: " + ("how deep the rail dips when your circuit turns on, and "
+                                     "how long it takes to come back." if on else
+                                     "how high the rail overshoots when your circuit turns "
+                                     "off, and how long it takes to settle."))
+        says.append("The on and off currents are the ones on New, question 2"
+                    + ("; the switching edge is a default, not measured."
+                       if "edge = default" in str(tw.get("provenance", "")) else "."))
+    elif an == "dc_iv":
+        sw = (der.biases.get(port) or {}).get("iv_sweep") or {}
+        says.append(f"Slowly sweeps the voltage on the {port} pin from "
+                    f"{float(sw.get('start_v', 0)):g} V to {float(sw.get('stop_v') or 0):g} V in "
+                    "21 steps and reads the bias current.")
+        says.append("Tells you: down to what pin voltage the current holds, and how much it "
+                    "changes with the voltage.")
+    elif an == "dc_temp":
+        sw = der.dc_temp_sweep or {}
+        says.append(f"Sweeps the temperature from {float(sw.get('start_c', -40)):g} C to "
+                    f"{float(sw.get('stop_c', 125)):g} C inside ONE run and reads every rail "
+                    "voltage and every bias current.")
+        says.append("Tells you: how each output drifts with temperature. The rails' DC model "
+                    "needs it -- without it their dc block is NOT RUN.")
+    elif an == "tran_en":
+        says.append("Switches EN on and records how every rail and bias current comes up.")
+        says.append("Tells you: the start-up shape. Usable, not for sign-off.")
+    if g.id == "code_check":
+        says = ["Repeats the output-impedance and supply-ripple runs at the lowest and highest "
+                "output code.",
+                "Tells you: whether the model (built at the nominal code) still holds there. Not "
+                "fitted; it is a check in the report."]
+    # the load levels this block's runs use, every rail named
+    used = {r.run.load_key for r in g.runs if r.run.load_key}
+    levels = []
+    for i, st in enumerate(states):
+        if used and st.key not in used:
+            continue
+        levels.append({"key": st.key,
+                       "name": _LEVEL_NAMES[i] if len(states) == len(_LEVEL_NAMES) else st.key,
+                       "rails": [{"rail": r, "amps": _amps(a)}
+                                 for r, a in (st.currents or {}).items()]})
+    note = ""
+    if used:
+        note = ("Load = the DC current your circuit draws from each rail (New, question 2). "
+                "Every run sets all rails at once to one of these levels"
+                + (f" ({port} itself is swept instead):" if an == "dc_load" else ":"))
+    elif levels:
+        # no load axis: every run holds the rails at the testbench's own (nominal) level
+        from .plan import nominal_state
+        nom = nominal_state(states, der).key
+        levels = [lv for lv in levels if lv["key"] == nom]
+        note = ("While it runs the rails draw this -- the level nearest your testbench's own "
+                "load" + (f"; {port} itself switches as described above:"
+                          if an in ("tran_load_on", "tran_load_off") else ":"))
+    return {"says": says, "levels": levels, "levels_note": note}
+
+
 def _demo_groups() -> list[dict]:
     raw = [
         ("dc_load:IL_VDD0P8_A", "DC load sweep -- VDD0P8_A", "dc_load", 18, 3.1,
@@ -2892,8 +3026,12 @@ class Api:
                          "reads": run.reads, "why": r.why(), "cost_s": r.cost_s,
                          "cell_text": run.cell_text(), "in_batch": plan.in_batch(r),
                          "cached": run.run_id in have})
-        return {"group": group, "title": g.title, "why": g.why, "runs": rows,
-                "what": _group_what(g, labels)}
+        what = _group_what(g, labels)
+        try:
+            what.update(_plain_what(g, pr.derived(), plan.states))
+        except PmuError:                                               # pragma: no cover - cfg
+            pass
+        return {"group": group, "title": g.title, "why": g.why, "runs": rows, "what": what}
 
     def recipe(self, project: str, run_id: str) -> dict:
         if self.demo:
@@ -2907,7 +3045,10 @@ class Api:
         cell = analysis = ""
         with pr.ledger() as led:
             run = led.get(run_id)
-        if run is not None:
+        # A run that went somewhere keeps the recipe it went with; one never submitted shows
+        # what Submit would do NOW -- the ledger's copy may be from another engine (a row a
+        # dry-run submit left showed "[dry_run]" under a footer that said Donau).
+        if run is not None and (run.job_id or run.status != "planned"):
             text, cell, analysis = run.recipe, run.cell_text(), run.analysis
         if not text:
             for r in pr.plan(apply_ticks=False).runs(enabled_only=False):
@@ -2915,6 +3056,8 @@ class Api:
                     text = r.run.recipe
                     cell, analysis = r.run.cell_text(), r.run.analysis
                     break
+        if not text and run is not None:                  # planned once, not in this plan
+            text, cell, analysis = run.recipe, run.cell_text(), run.analysis
         if not text:
             raise _err(f"no recipe for run {run_id!r}.",
                        "A recipe is written when the run is planned; this id is in neither the "

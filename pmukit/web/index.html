@@ -2596,6 +2596,9 @@ SCREENS.plan = {
   foot: function(){
     var pl = S.data["plan"] || {};
     var n = (pl.cost || {}).runs || 0;
+    /* what Submit really starts: the batch's ticked runs minus those already done (skipped) */
+    var done = (pl.groups || []).reduce(function(a, g){ return a + (g.enabled ? (g.batch_cached || 0) : 0); }, 0);
+    var fresh = Math.max(0, n - done);
     var sid = regAction(function(){ doSubmit(); });
     var block = submitBlocker(S.data["site"]);
     /* a plan on screen that is being recomputed (after a Ctrl Z) is not the one Submit sends */
@@ -2613,7 +2616,8 @@ SCREENS.plan = {
          + (block ? '<span class="hint" style="color:var(--warn)">' + ICON.warn + " " + esc(block) + "</span>" : "")
          + '<button class="btn pri" data-act="' + sid + '"' + (n && !block ? "" : " disabled")
          + (block ? ' title="' + esc(block) + '"' : "") + ">"
-         + ICON.play + " Submit " + n + " runs</button></div>";
+         + ICON.play + " Submit " + fresh + " new run" + (fresh === 1 ? "" : "s")
+         + (done ? " (" + done + " done, skipped)" : "") + "</button></div>";
   }
 };
 function planCsv(){
@@ -2771,19 +2775,28 @@ function planWhat(w, runs){
   if (!w) return "";
   var n = runs.length, inb = runs.filter(function(r){ return r.in_batch !== false; }).length;
   var done = runs.filter(function(r){ return r.cached; }).length;
-  var temps = (w.temps || []).map(function(t){ return t === "swept" ? "swept inside each run" : num(t, 0) + " C"; });
-  var kv = function(k, v){ return v ? '<span class="k">' + k + '</span><span class="mono">'
-                                     + esc(v).replace(/\n/g, "<br>") + "</span>" : ""; };
-  return '<div class="lbl" style="margin-bottom:6px">What every run of this block adds to your netlist</div>'
-    + '<div class="code" style="max-height:120px;margin-bottom:10px">'
-    + esc((w.analyses || []).concat(w.saves || []).join("\n") || "(no analysis line)") + "</div>"
-    + '<div class="kv" style="margin-bottom:12px">'
-    + kv("Drives", w.stimulus) + kv("Reads", (w.reads || []).join(", "))
-    + kv("Corners", (w.corners || []).join(", ")) + kv("Temps", temps.join(", "))
-    + kv("Codes", (w.codes || []).join(", ")) + kv("Loads", (w.loads || []).join("\n"))
-    + kv("Runs", n + " in all" + (inb !== n ? ", " + inb + " in this batch" : "")
-         + (done ? ", " + done + " already done" : ""))
-    + "</div>";
+  var temps = (w.temps || []).map(function(t){ return t === "swept" ? "swept inside the run" : num(t, 0) + " C"; });
+  var says = (w.says || []).map(function(t, k){
+    return '<div style="line-height:1.55;margin-bottom:6px' + (k ? ";color:var(--ink2)" : "") + '">' + esc(t) + "</div>";
+  }).join("");
+  /* the load levels as a table: one row per level, one column per rail */
+  var lv = w.levels || [], table = "";
+  if (lv.length){
+    var rails = (lv[0].rails || []).map(function(x){ return x.rail; });
+    table = '<div class="hint" style="margin:8px 0 4px">' + esc(w.levels_note || "") + "</div>"
+      + '<table class="t" style="margin-bottom:10px"><thead><tr><th>Level</th>'
+      + rails.map(function(r){ return '<th class="num">' + esc(r) + "</th>"; }).join("") + "</tr></thead><tbody>"
+      + lv.map(function(l){
+          return "<tr><td>" + esc(l.name) + "</td>" + (l.rails || []).map(function(x){
+            return '<td class="num mono">' + esc(x.amps) + "</td>"; }).join("") + "</tr>";
+        }).join("") + "</tbody></table>";
+  }
+  var at = [(w.corners || []).join(", "), temps.join(", "),
+            (w.codes || []).length ? "code " + w.codes.join(", ") : ""].filter(function(x){ return x; }).join(" &middot; ");
+  return says + table
+    + '<div class="hint" style="margin-bottom:10px">' + n + " run" + (n === 1 ? "" : "s") + " in all"
+    + (inb !== n ? ", <b>" + inb + " in this batch</b>" : "") + (done ? ", " + done + " already done" : "")
+    + " &middot; " + at + "</div>";
 }
 function planDetail(g){
   var tab = S.sel.planTab || "runs";
@@ -2811,6 +2824,8 @@ function planDetail(g){
   var list = runs.runs.filter(function(r){ return r.in_batch !== false; })
     .concat(runs.runs.filter(function(r){ return r.in_batch === false; }));
   var sel = S.sel.planRun || (list[0] || {}).run_id;
+  var levelName = {};
+  ((runs.what || {}).levels || []).forEach(function(l){ levelName[l.key] = l.name; });
   var rows = list.map(function(r){
     var ctx = regCtx({ row: r });
     var id = regAction(function(){ S.sel.planRun = r.run_id; forget("recipe:"); render(); });
@@ -2823,23 +2838,32 @@ function planDetail(g){
       + '<td class="mono">' + esc(r.process) + "</td>"
       + '<td class="num">' + (r.temp_c === null ? "T swept" : num(r.temp_c, 0)) + "</td>"
       + '<td class="num">' + esc(r.vset) + "</td>"
-      + '<td class="mono">' + esc(r.load_label || r.load_key || "-") + "</td>"
+      + "<td>" + esc(levelName[r.load_key] || (r.load_key ? r.load_key : "-")) + "</td>"
       + "<td>" + state + "</td></tr>";
   }).join("");
-  var rec = sel ? need("recipe:" + sel, "/api/p/" + P() + "/runs/" + encodeURIComponent(sel) + "/recipe", "plan") : undefined;
+  var raw = !!S.sel.planRaw;
+  var rec = raw && sel ? need("recipe:" + sel, "/api/p/" + P() + "/runs/" + encodeURIComponent(sel) + "/recipe", "plan") : undefined;
+  var w = runs.what || {};
+  var toggle = '<button class="btn sm" data-act="' + regAction(function(){ S.sel.planRaw = !S.sel.planRaw; render(); })
+    + '" aria-expanded="' + raw + '">' + (raw ? "&#9662; Hide" : "&#9656; Show") + " the exact netlist changes</button>";
   return panel('<span class="mono">' + esc(g.id) + "</span>", "",
-    '<div style="margin-bottom:8px;line-height:1.5">' + esc(g.title) + "</div>"
-    + planWhat(runs.what, runs.runs)
-    + '<div style="max-height:230px;overflow:auto;border:1px solid var(--line2);margin:0 0 10px;padding:0">'
+    '<div style="font-weight:600;margin-bottom:6px">' + esc(g.title) + "</div>"
+    + planWhat(w, runs.runs)
+    + '<div style="max-height:200px;overflow:auto;border:1px solid var(--line2);margin:0 0 10px;padding:0">'
     + '<table class="t"><thead><tr><th>Run</th><th>Corner</th><th class="num">T C</th>'
-    + '<th class="num">VSET</th><th>Load</th><th></th></tr></thead><tbody>' + rows + "</tbody></table></div>"
-    + '<div class="lbl" style="margin-bottom:6px">How run <span class="mono" style="text-transform:none">'
-    + esc((sel || "").slice(0, 10)) + "</span> is built and submitted</div>"
-    + (!sel ? '<div class="hint">This block has no run.</div>'
-       : rec === undefined ? skeleton(5, "reading the recipe") : recipeCode(rec))
-    + '<div class="hint" style="margin-top:6px">Lines marked <span class="mono">+</span> are added '
-    + 'by pmukit, <span class="mono">~</span> edited in place (the original is in the comment), '
-    + '<span class="mono">-</span> stripped. Everything else is your netlist, untouched.</div>',
+    + '<th class="num">Code</th><th>Load level</th><th></th></tr></thead><tbody>' + rows + "</tbody></table></div>"
+    + toggle
+    + (raw ? '<div style="margin-top:10px">'
+        + '<div class="lbl" style="margin-bottom:6px">Lines every run of this block adds</div>'
+        + '<div class="code" style="max-height:110px;margin-bottom:8px">'
+        + esc((w.analyses || []).concat(w.saves || []).join("\n") || "(no analysis line)") + "</div>"
+        + '<div class="lbl" style="margin-bottom:6px">Run <span class="mono" style="text-transform:none">'
+        + esc((sel || "").slice(0, 10)) + "</span>: every change to your netlist, and how it is submitted</div>"
+        + (!sel ? '<div class="hint">This block has no run.</div>'
+           : rec === undefined ? skeleton(5, "reading the recipe") : recipeCode(rec))
+        + '<div class="hint" style="margin-top:6px">Lines marked <span class="mono">+</span> are added '
+        + 'by pmukit, <span class="mono">~</span> edited in place (the original is in the comment), '
+        + '<span class="mono">-</span> stripped. Everything else is your netlist, untouched.</div></div>' : ""),
     { right: right });
 }
 function recipeCode(rec){

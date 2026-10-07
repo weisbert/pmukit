@@ -282,3 +282,45 @@ def test_a_dc_only_fit_says_what_it_has_and_lists_each_gap_once(api, monkeypatch
     assert any(i.endswith(".zout") for i in items) and any(i.startswith("VDD") for i in items)
     assert all("never declared" not in g["note"] for g in gaps)
     assert all(g["cells"] >= 1 for g in gaps)
+
+
+# ------------------------------------------------------------------ the panel, in plain words
+def test_a_block_says_in_words_what_it_runs_with_this_projects_numbers(api):
+    gs = {g["id"]: g for g in api.plan("p")["groups"]}
+    on = next(g for g in gs if g.startswith("tran_load_on:"))
+    w = api.plan_runs("p", on)["what"]
+    assert w["says"][0].startswith("Your circuit switching ON: at ")
+    assert " jumps from " in w["says"][0] and "records the" in w["says"][0]
+    assert "how deep the rail dips" in w["says"][1]
+    assert len(w["levels"]) == 1 and w["levels"][0]["name"] == "on"
+    zout = next(g for g, row in gs.items() if row["kind"] == "rail" and row["column"] == "ac")
+    w = api.plan_runs("p", zout)["what"]
+    assert "output impedance" in w["says"][1]
+    assert [lv["name"] for lv in w["levels"]] == ["everything off", "0.2 x on", "on", "2 x on"]
+    assert all(x["amps"].endswith("A") and " " in x["amps"] for lv in w["levels"]
+               for x in lv["rails"])
+    assert w["levels_note"].startswith("Load = the DC current your circuit draws")
+
+
+def test_what_is_lost_names_the_block_to_tick(api):
+    groups = api.plan("p")["groups"]
+    rail = next(g["port"] for g in groups if g["kind"] == "rail")
+    d = api.set_plan_groups("p", {"ticks": {g["id"]: g["port"] == rail for g in groups}})
+    lost = {(c["port"], c["block"]): c for c in d["consequences"]}
+    assert "tick DC temperature sweep (dc_temp)" in lost[(rail, "dc")]["effect"]
+    assert lost[(rail, "dc")]["needs"] == ["dc_temp"]
+    assert "-- to get it, tick AC" in lost[(rail, "psrr")]["effect"]
+
+
+def test_a_run_never_submitted_shows_the_recipe_submit_would_use_now(api):
+    """A row a dry-run submit left keeps its "[dry_run]" recipe in the ledger; until it goes
+    somewhere, the Plan screen shows the one the current engine would submit."""
+    from pmukit.ledger import Ledger
+    job = wait(api.submit("p", {"commit_only": True}))
+    assert job.status == "done", job.error
+    rid = api.ledger("p")["rows"][0]["run_id"]
+    led = Ledger(api.root / "p" / "runs.sqlite")
+    run = led.get(rid)
+    led.upsert(type(run)(**{**run.to_dict(), "recipe": "[edits]\n[submit]\n[stale] old"}))
+    led.close()
+    assert "[stale]" not in api.recipe("p", rid)["recipe"]

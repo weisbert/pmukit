@@ -386,9 +386,11 @@ class Plan:
                     continue
                 port, block, param = feed
                 e = lost.setdefault((port, block), {"port": port, "block": block, "params": [],
-                                                    "observables": []})
+                                                    "observables": [], "needs": []})
                 if param not in e["params"]:
                     e["params"].append(param)
+                if r.group_id not in e["needs"]:      # the block(s) to tick to get it back
+                    e["needs"].append(r.group_id)
                 for v in r.run.reads:
                     obs = v.split(".", 1)[0]
                     if v.endswith("." + port) and obs not in e["observables"]:
@@ -396,8 +398,16 @@ class Plan:
         out = []
         for (port, block), e in sorted(lost.items()):
             e["params"].sort()
+            # Say what to tick: "PLL dc NOT RUN" with the PLL's DC load ticked was a riddle
+            # until you knew the DC model also needs the shared temperature sweep.
+            off = [g for g in e["needs"] if not self.group(g).enabled]
+            later = [g for g in e["needs"] if self.group(g).enabled]
+            names = [f"{self.group(g).title} ({g})" for g in (off or later)]
+            how = (f"tick {' or '.join(names)}" if off
+                   else f"{' or '.join(names)} runs it in a later batch" if later else "")
             e["effect"] = (f"{port} {block} will be reported NOT RUN; anything the model says "
-                           f"about it is outside the validity envelope")
+                           f"about it is outside the validity envelope"
+                           + (f" -- to get it, {how}" if how else ""))
             out.append(e)
         return out
 
