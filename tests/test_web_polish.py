@@ -30,11 +30,15 @@ const clicks = [], blobs = [], calls = [], clip = [], timers = [];
 function node(id){ return { id, innerHTML:'', textContent:'', style:{}, value:'', files:null,
   classList:{add(){},remove(){}}, setAttribute(){}, getAttribute(){return null;},
   querySelector(){return null;}, querySelectorAll(){return [];}, closest(){return null;},
-  focus(){}, click(){ clicks.push(this); }, appendChild(){}, removeChild(){} }; }
+  focus(){}, select(){}, setSelectionRange(){}, click(){ clicks.push(this); }, appendChild(){},
+  removeChild(){} }; }
+let lastTa = null;      // the page copies through a selected textarea first (copy() / execCopy)
 const nodes = {}; for (const id of ['nav','main','cli','foot','overlays']) nodes[id] = node(id);
 const document = { getElementById:(id)=>nodes[id]||null, querySelector:()=>null,
-  querySelectorAll:()=>[], createElement:(t)=>node(t), addEventListener:()=>{},
-  body:{appendChild(){},removeChild(){}}, execCommand:()=>true };
+  querySelectorAll:()=>[], addEventListener:()=>{},
+  createElement:(t)=>{ const n = node(t); if (t === 'textarea') lastTa = n; return n; },
+  body:{appendChild(){},removeChild(){}},
+  execCommand:(c)=>{ if (c === 'copy' && lastTa) clip.push(lastTa.value); return true; } };
 let ROUTES = {};
 function fetch(path, init){
   const method = (init && init.method) || 'GET';
@@ -171,6 +175,26 @@ const S = sandbox.S;
   out.bundle.download = clicks.length ? clicks[clicks.length - 1].download : null;
   out.bundle.gets = calls.filter(c => c.path === '/api/p/p/runs/r1/bundle').length;
 
+  // ---- a browser that will not let the page copy: the text opens selected in a box, and the
+  // page never says "copied" over an empty clipboard
+  document.execCommand = () => false; sandbox.navigator.clipboard = undefined;
+  S.toast = ''; S.copyBox = null;
+  sandbox.copy('BOX TEXT');
+  sandbox.render();
+  out.copyfail = { box: S.copyBox && S.copyBox.text, toast: S.toast,
+                   overlay: nodes.overlays.innerHTML.indexOf('id="copybox"') >= 0 };
+  S.copyBox = null;
+
+  // ---- a change of screen is a new history entry (the browser's Back returns to it); a
+  // change inside a screen replaces it
+  const pushed = [], replaced = [];
+  sandbox.window.history = { pushState:(a, b, u)=>pushed.push(u), replaceState:(a, b, u)=>replaced.push(u) };
+  S.project = 'p'; S.screen = 'model';
+  sandbox.go('digest');
+  out.nav = { pushed: pushed.slice(), prev: S.prevScreen };
+  sandbox.syncUrl();
+  out.nav.replaced = replaced.length;
+
   console.log(JSON.stringify(out));
 })().catch(e => { console.error(e && e.stack || e); process.exit(1); });
 """
@@ -304,6 +328,19 @@ def test_a_finished_job_strip_stays_on_its_screen_and_clears_itself(page_run):
 
 
 # --------------------------------------------------------------------------- failure bundle
+def test_a_browser_that_will_not_copy_gets_the_text_in_a_box(page_run):
+    c = page_run["copyfail"]
+    assert c["box"] == "BOX TEXT" and c["overlay"]
+    assert c["toast"] != "copied", "never 'copied' over an empty clipboard"
+
+
+def test_the_browser_back_button_steps_back_through_screens(page_run):
+    n = page_run["nav"]
+    assert n["pushed"] and "screen=digest" in n["pushed"][-1]
+    assert n["prev"] == "model", "Copy for desk must know where Back goes"
+    assert n["replaced"] == 1, "a change inside a screen replaces the entry, never piles up"
+
+
 def test_copy_failure_bundle_copies_and_offers_the_file(page_run):
     b = page_run["bundle"]
     assert "Copy failure bundle for the desk" in b["before"]

@@ -318,25 +318,43 @@ function ago(iso){
   if (s < 172800) return Math.round(s/3600) + " h ago";
   return Math.round(s/86400) + " days ago";
 }
+/* Copy to the clipboard. The in-page copy runs FIRST, inside the click: the promise clipboard
+   is missing on a page served from another host over http (the red-zone case), and when it fails
+   its fallback runs after the click, where the browser no longer lets a page copy -- that said
+   "copied" over an empty clipboard. When neither works, the text opens in a box, selected, for
+   Ctrl C: never a "copied" that did not happen. */
 function copy(text, label, then){
   var ok = function(){
     S.toast = label || "copied"; if (then) then(true); render();
     setTimeout(function(){ S.toast=""; render(); }, 1400);
   };
+  if (execCopy(text)){ ok(); return; }
   try {
-    if (navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(ok, fallback); return; }
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(ok, function(){ copyBox(text, then); });
+      return;
+    }
   } catch(e){ /* fall through */ }
-  fallback();
-  function fallback(){
-    var ta = document.createElement("textarea");
-    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
-    document.body.appendChild(ta); if (ta.select) ta.select();
-    var done = false;
-    try { done = document.execCommand("copy") !== false; } catch(e2){ done = false; }
-    document.body.removeChild(ta);
-    if (done) ok();
-    else { S.toast = "press Ctrl C"; if (then) then(false); render(); }
-  }
+  copyBox(text, then);
+}
+function execCopy(text){
+  var ta = document.createElement("textarea");
+  ta.value = text; ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;top:0;left:0;width:2px;height:2px;opacity:0";
+  document.body.appendChild(ta);
+  var done = false;
+  try {
+    ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
+    done = document.execCommand("copy") === true;
+  } catch(e){ done = false; }
+  document.body.removeChild(ta);
+  return done;
+}
+function copyBox(text, then){
+  S.copyBox = { text: String(text) };
+  if (then) then(false);
+  render();
+  setTimeout(function(){ var b = el("copybox"); if (b){ b.focus(); b.select(); } }, 0);
 }
 /* A file the browser saves (Downloads), built in the page: no round trip, no clipboard. */
 function download(name, text, mime){
@@ -826,13 +844,15 @@ function go(screen){
      anywhere else closes it. */
   if (screen === "settings") return openSettings();
   S.settings = false;
+  var moved = S.screen !== screen;
+  if (moved) S.prevScreen = S.screen;
   S.screen = screen;
   delete S.errs[screen];
   unfail();                 /* going somewhere is asking again, once */
   if (S.project && !S.demo){
     api("/api/state/" + P(), { method:"PUT", body:{ screen: screen } }).then(function(){}, function(){});
   }
-  syncUrl();
+  syncUrl(moved);
   render();
   refreshCli();
 }
@@ -871,13 +891,26 @@ function urlQuery(){
   }
   return q;
 }
-function syncUrl(){
+/* The address follows the screen. A change of screen is a NEW history entry, so the browser's
+   Back returns to the screen before (it used to leave pmukit: every change replaced the one
+   entry); a change inside a screen (a cell, a block) replaces it. */
+function syncUrl(push){
   try {
     if (S.project && window.history && window.history.replaceState){
-      window.history.replaceState(null, "", urlQuery());
+      if (push && window.history.pushState) window.history.pushState(null, "", urlQuery());
+      else window.history.replaceState(null, "", urlQuery());
     }
   } catch(e){ /* a sandboxed page: the server-side state still remembers */ }
 }
+window.addEventListener("popstate", function(){
+  var q = new URLSearchParams(window.location.search);
+  if (q.get("livelog")) return;
+  S.settings = false; S.menu = null; S.copyBox = null;
+  if (q.get("project")) S.project = q.get("project");
+  S.screen = q.get("screen") || "home";
+  if (q.get("cell")) restoreCell(q.get("cell"), q.get("block"));
+  render(); refreshCli();
+});
 /* ?cell= / ?block= back into the Model selection (the inverse of urlQuery). */
 function restoreCell(cell, block){
   var i = String(cell || "").indexOf("|");
@@ -1076,6 +1109,15 @@ function renderOverlays(){
         + "Every error carries four parts: what happened, why, what to do, where to look.</div>"
         + "</div></div>";
   }
+  if (S.copyBox){
+    out += '<div class="veil" data-close="copybox"></div><div class="help" role="dialog" aria-label="Copy">'
+        + '<div class="ph"><span>This browser did not let the page copy: press Ctrl C now</span>'
+        + '<button class="btn sm" data-close="copybox">Close &middot; Esc</button></div>'
+        + '<div class="pb"><textarea id="copybox" class="inp" readonly style="width:100%;height:60vh;'
+        + 'font-family:var(--mono);font-size:11.5px;padding:6px">' + esc(S.copyBox.text) + "</textarea>"
+        + '<div class="hint" style="margin-top:6px">The whole text is selected. Ctrl C copies it; '
+        + "click in the box and Ctrl A selects it again.</div></div></div>";
+  }
   if (S.note){
     /* an explanation in the page, not a browser dialog: nothing blocks, Esc or Close shuts it */
     out += '<div class="help" role="dialog" aria-label="' + esc(S.note.title) + '"><div class="ph"><span>'
@@ -1158,6 +1200,7 @@ function wire(){
       if (w === "menu") S.menu = null;
       if (w === "help") S.help = null;
       if (w === "note") S.note = null;
+      if (w === "copybox") S.copyBox = null;
       if (w === "palette"){ S.palette = false; S.paletteQ = ""; }
       if (w === "settings") S.settings = false;
       render();
@@ -3351,6 +3394,24 @@ function gridCellTitle(c){
   offWorse(c).forEach(function(o){ t.push(o.note || ("off by default: " + o.block)); });
   return t.join(" · ");
 }
+/* Nothing picked yet: open the cell with the most fitted (a rail with its Zout first), so the
+   verdict and the charts are on screen the moment the Model screen opens. */
+function autoCell(){
+  var gr = S.data["model:grades"], best = null;
+  ((gr && gr.rows) || []).forEach(function(r){
+    (r.cells || []).forEach(function(c){
+      var have = c.have || [];
+      var sc = have.length + (have.indexOf("zout") >= 0 ? 10 : 0);
+      if (sc > 0 && (!best || sc > best.sc)) best = { sc: sc, port: r.port, corner: c.corner, temp: c.temp_c };
+    });
+  });
+  if (!best) return;
+  S.sel.port = best.port; S.sel.corner = best.corner;
+  S.sel.temp = (best.temp === null || best.temp === undefined) ? "" : best.temp;
+  S.sel.cell = best.corner + (S.sel.temp === "" ? "" : "/" + S.sel.temp + "C");
+  S.sel.block = null; S.sel.blockCell = null;
+  syncUrl();
+}
 function pickCell(port, corner, temp){
   S.sel.port = port; S.sel.corner = corner;
   S.sel.temp = (temp === null || temp === undefined) ? "" : temp;
@@ -3361,9 +3422,11 @@ function pickCell(port, corner, temp){
   render(); refreshCli();
 }
 function cellDetail(){
+  if (!S.sel.port) autoCell();
   if (!S.sel.port) return panel("Pick a cell", "",
-    '<div class="hint">Click a grade cell to see every block and the model-versus-measurement '
-    + "curve. Right-click it for the runs behind it.</div>", { style: "flex:1" });
+    '<div style="line-height:1.6">Click a cell in the <b>Grade per port and cell</b> grid '
+    + "(lower left): this panel then says whether that output can be used and draws the model "
+    + "against the simulation. Right-click a cell for the runs behind it.</div>", { style: "flex:1" });
   var key = "cell:" + S.sel.port + S.sel.corner + S.sel.temp;
   var temp = (S.sel.temp === null || S.sel.temp === undefined) ? "" : S.sel.temp;
   var d = need(key, "/api/p/" + P() + "/model/cell?port=" + encodeURIComponent(S.sel.port)
@@ -4129,6 +4192,8 @@ SCREENS.digest = {
           + '<button class="btn" style="margin-top:6px" data-act="' + gen + '">Render the digest</button></div>',
       { right: txt ? '<div class="rowflex"><button class="btn sm" data-act="'
           + regAction(function(){ copy(txt.text); }) + '">' + ICON.copy + " Copy</button>"
+          + '<button class="btn sm" data-act="' + regAction(function(){ copyBox(txt.text); })
+          + '" title="open the text selected, for Ctrl C">Show to copy by hand</button>'
           + '<button class="btn sm" data-act="' + gen + '">Re-render</button></div>' : "" });
     var imp = panel("On the desk", "the other half of this feature",
       '<div class="code wrap">' + esc(
@@ -4151,7 +4216,11 @@ SCREENS.digest = {
          + panel("Copy for desk", "",
              '<div class="hint">The box has no agent and no network. This packs what a desk debugger '
              + "needs into <b>plain text you paste through the relay</b>. Numbers are lossless; "
-             + "curves are resampled and say so. Nothing crosses git.</div>", { style: "flex:none" })
+             + "curves are resampled and say so. Nothing crosses git.</div>",
+             { style: "flex:none", right: '<button class="btn sm" data-act="' + regAction(function(){
+                 go(S.prevScreen && S.prevScreen !== "digest" ? S.prevScreen : "model"); })
+               + '">&larr; Back to ' + esc(screenName(S.prevScreen && S.prevScreen !== "digest"
+                 ? S.prevScreen : "model")) + "</button>" })
          + left + "</div>"
          + '<div class="col grow">' + right + imp + "</div>";
   },
@@ -4415,8 +4484,11 @@ document.addEventListener("keydown", function(e){
     if (S.menu){ S.menu = null; render(); return; }
     if (S.help){ S.help = null; render(); return; }
     if (S.note){ S.note = null; render(); return; }
+    if (S.copyBox){ S.copyBox = null; render(); return; }
     if (S.settings){ closeSettings(); return; }       /* even from a field in it: Esc is "back" */
     if (S.errs[S.screen]){ delete S.errs[S.screen]; render(); return; }
+    if ((S.screen === "digest" || S.screen === "states") && !typing){
+      go(S.prevScreen && S.prevScreen !== S.screen ? S.prevScreen : "model"); return; }
     return;
   }
   if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")){
