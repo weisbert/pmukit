@@ -3636,7 +3636,11 @@ class Api:
                 runs = [r.run_id for r in led.all(port=port, process=corner or None, limit=40)]
         except PmuError:                                               # pragma: no cover - no db
             pass
-        return {"port": port, "corner": corner, "temp_c": temp,
+        try:
+            verdict = _cell_verdict(pr, fit, port, port_type, temp, blocks)
+        except Exception as exc:                                       # noqa: BLE001
+            verdict = {"level": "", "text": f"no verdict ({exc})", "checks": []}
+        return {"port": port, "corner": corner, "temp_c": temp, "verdict": verdict,
                 "grade": head.get("grade", "not_run") if blocks else "not_run",
                 "held": bool(head.get("held")), "held_by": head.get("held_by") or [],
                 "off_by_default": head.get("off_by_default") or [],
@@ -4977,6 +4981,7 @@ def _dc_curves(pr, fit, port: str, bf: dict, temp) -> dict:
         return vout + ra * i_typ + vtc * (t_c - tnom) - ra * i_a
 
     t_sel = float(temp) if _isnum(temp) else tnom
+    worst: list = []                                   # (gap V, sim V there, where)
     load_c = cell.get("load_a", dcell.get("load_a"))
     lcell = {"process": corner, "vset": code}
     if load_c is not None:
@@ -4994,6 +4999,7 @@ def _dc_curves(pr, fit, port: str, bf: dict, temp) -> dict:
         md = np.asarray([model(i, t_sel) for i in loads], float)
         gap = np.abs(md - sim)
         k = int(np.argmax(gap))
+        worst.append((float(gap[k]), float(sim[k]), f"{_eng(loads[k], 'A')}, {_numstr(t_sel)} C"))
         curves.append(dict(base, label=f"{port} voltage vs the current your circuit draws",
                            cell_label=f"{corner}, {_numstr(t_sel)} C, code {code}",
                            x=_clean(loads), x_label="load current [A]", x_unit="A",
@@ -5022,6 +5028,7 @@ def _dc_curves(pr, fit, port: str, bf: dict, temp) -> dict:
         md = np.asarray([model(i_at, t) for t in T], float)
         gap = np.abs(md - V)
         k = int(np.argmax(gap))
+        worst.append((float(gap[k]), float(V[k]), f"{_eng(i_at, 'A')}, {_numstr(T[k])} C"))
         if T.size >= 2:
             curves.append(dict(base, label=f"{port} voltage vs temperature",
                                cell_label=f"{corner}, load {_eng(i_at, 'A')}, code {code}",
@@ -5036,13 +5043,133 @@ def _dc_curves(pr, fit, port: str, bf: dict, temp) -> dict:
                     f"{vtc * 1e6:+.1f} uV/C.")
     except Exception as exc:                                           # noqa: BLE001
         says.append(f"No temperature points to compare against ({getattr(exc, 'reason', exc)}).")
+    w = max(worst) if worst else None
+    gaps = {"has_zout": has_zout,
+            "worst_v": None if w is None else w[0],
+            "worst_pct": None if w is None or not w[1] else 100.0 * w[0] / abs(w[1]),
+            "worst_at": "" if w is None else w[2]}
     if not curves:
         return dict(base, cell=_cell_key_of(cell), cell_label=_cell_label(cell), empty=True,
                     why=" ".join(says) or "nothing measured to compare against", says=says,
-                    label=f"{port} DC", source=f"dc_load.{port}")
+                    label=f"{port} DC", source=f"dc_load.{port}", **gaps)
     out = dict(curves[0])
-    out.update(cell=_cell_key_of(cell), says=says, extra=curves[1:])
+    out.update(cell=_cell_key_of(cell), says=says, extra=curves[1:], **gaps)
     return out
+
+
+#: What each block gives the consumer's OWN simulation, in words: (block, name, what it gives,
+#: required). A required block missing means the port is left out of the .va (emit/va.py:
+#: a rail needs dc + zout, a bias needs idc).
+_CHECKS = {
+    "rail": (("dc", "Rail voltage", "the DC voltage your circuit gets, at every load and "
+                                    "temperature", True),
+             ("zout", "Rail ripple from your circuit", "how much the rail moves when your "
+                                                       "circuit's current changes", True),
+             ("psrr", "Supply ripple leaking through", "how much ripple on the supply reaches "
+                                                       "the rail (PSRR)", False),
+             ("noise", "Rail noise", "the noise your VCO / PLL turns into phase noise", False)),
+    "bias": (("idc", "Bias current", "the DC current and its drift with temperature", True),
+             ("yout", "Current vs pin voltage", "how much the current moves when the pin "
+                                                "voltage moves", False),
+             ("psrr", "Supply ripple leaking through", "how much supply ripple reaches the "
+                                                       "current", False),
+             ("noise", "Current noise", "the noise that up-converts into phase noise", False)),
+}
+
+
+def _band(metric: str, score):
+    """(green / yellow / red, the limit) for one score, from verify's own threshold table."""
+    from .verify.grades import limit_for
+    lim, _exact = limit_for(metric)
+    if lim is None or score is None or score != score:
+        return "yellow", None
+    return lim.band(float(score)), lim
+
+
+def _sentence(t: str) -> str:
+    return t[:1].upper() + t[1:] + "."
+
+
+def _cell_verdict(pr, fit, port: str, port_type: str, temp, blocks: list) -> dict:
+    """Can this port, at this cell, be used in a simulation? One answer and the reason.
+
+    Each check is graded against verify's threshold table (`verify.grades.LIMITS`). The rail
+    voltage is graded on the model the .va really gives against every simulated point (load
+    sweep + temperature), not on the fitter's own residual.
+    """
+    checks = []
+    for block, name, gives, required in _CHECKS.get(port_type, ()):
+        rows = [b for b in blocks if b["name"] == block]
+        have = [b for b in rows if not b["missing"]]
+        c = {"block": block, "name": name, "gives": gives, "required": required}
+        if not have:
+            c.update(state="missing",
+                     result=("not simulated yet -- without it this " + port_type
+                             + " is left out of the model file" if required else
+                             "not simulated yet -- the model gives your simulation none of "
+                             "this"))
+            checks.append(c)
+            continue
+        if port_type == "rail" and block == "dc":
+            pick = min(have, key=lambda b: abs(float(b.get("load_a") or 0.0) - float(
+                ((pr.derived().rails or {}).get(port) or {}).get("i_typ_a") or 0.0)))
+            try:
+                bf = _pick_fit(fit, port, "dc", _parse_cell(pick["cell_key"]))
+                d = _dc_curves(pr, fit, port, bf, temp)
+            except PmuError:
+                d = {}
+            pct = d.get("worst_pct")
+            if pct is None:
+                c.update(state="yellow", result="fitted, but nothing simulated to compare "
+                                                "the model against")
+            else:
+                band, lim = _band("vout % RMS", pct)
+                c.update(state=band, score=pct,
+                         result=(f"off by up to {_mv(d['worst_v'])} ({pct:.2f} %), worst at "
+                                 f"{d['worst_at']}"
+                                 + (f"; good is under {_numstr(lim.green, 3)} %, usable under "
+                                    f"{_numstr(lim.yellow, 3)} %" if lim else "")))
+                if not d.get("has_zout"):
+                    c["result"] += ("; the model voltage does not change with load until "
+                                    "the output impedance is simulated")
+            checks.append(c)
+            continue
+        worst = max(have, key=lambda b: (b.get("score") if b.get("score") is not None
+                                         else float("inf")))
+        band, lim = _band(worst.get("metric", ""), worst.get("score"))
+        unit = lim.unit if lim else ""
+        sc = worst.get("score")
+        c.update(state=band, score=sc,
+                 result=((f"matches the simulation to {_numstr(sc, 2)} {unit} on average over "
+                          f"frequency" + (f" (load {worst['load']})" if worst.get("load") else "")
+                          + (f"; good is under {_numstr(lim.green, 3)} {unit}, usable under "
+                             f"{_numstr(lim.yellow, 3)} {unit}" if lim else ""))
+                         if sc is not None else "fitted, no score"))
+        checks.append(c)
+    bad_req = [c for c in checks if c["required"] and c["state"] in ("missing", "red")]
+    red = [c for c in checks if c["state"] == "red"]
+    gaps = [c for c in checks if c["state"] == "missing"]
+    yellow = [c for c in checks if c["state"] == "yellow"]
+    low = lambda cs: ", ".join(c["name"].lower() for c in cs)              # noqa: E731
+    if bad_req:
+        level = "no"
+        text = _sentence("; ".join(
+            c["name"].lower() + (" is not simulated yet" if c["state"] == "missing"
+                                 else " does not match the simulation") for c in bad_req))
+    elif red:
+        level = "partly"
+        text = _sentence(f"{low(red)} does not match the simulation")
+    elif gaps:
+        level = "partly"
+        text = (f"Usable for {low([c for c in checks if c['state'] != 'missing'])}. "
+                f"Not in the model yet: {low(gaps)}.")
+    elif yellow:
+        level = "partly"
+        text = _sentence(f"{low(yellow)} is close to its limit")
+    else:
+        level = "yes"
+        text = "Everything matches the simulation within its limit."
+    return {"level": level, "text": text, "checks": checks}
 
 
 def _observable_for(block: str, port_type: str):

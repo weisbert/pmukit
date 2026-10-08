@@ -405,6 +405,13 @@ def test_16_a_cell_lists_its_blocks_with_the_metric_each_one_scores(api):
         if not b["missing"]:
             assert b["metric"], "a score without its unit is not a number anyone can use"
     assert d["runs"], "a cell must be able to name the runs behind it"
+    # the one answer the cell exists for: can this port be used, and why
+    v = d["verdict"]
+    assert v["level"] in ("yes", "partly", "no") and v["text"], v
+    assert v["checks"] and all(c["state"] in ("green", "yellow", "red", "missing")
+                               and c["result"] and c["gives"] for c in v["checks"]), v
+    if any(c["required"] and c["state"] == "missing" for c in v["checks"]):
+        assert v["level"] == "no", "a port the .va leaves out cannot be called usable"
     STATE["cell"] = {"port": port, "blocks": d["blocks"]}
 
 

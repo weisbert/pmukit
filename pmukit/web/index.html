@@ -3421,8 +3421,36 @@ function cellDetail(){
         + offs.length + " off by default</span>" : "") + "</span>";
   return panel('<span class="mono">' + esc(S.sel.port) + "</span> &middot; " + esc(S.sel.corner)
     + " / " + esc(S.sel.temp) + " C",
-    "", '<div class="cellchart">' + curveBlock(blockRow) + "</div>" + offBox + table,
+    "", verdictBox(d.verdict, blocks) + '<div class="cellchart">' + curveBlock(blockRow) + "</div>"
+      + offBox + table,
     { style: "flex:1", bodyStyle: "overflow-x:hidden", right: right });
+}
+/* Can this port be used at this cell? One answer in big type, then one line per thing the
+   consumer's own simulation gets from the model (graded against verify's limits). A line is a
+   button: it opens that block's chart below. */
+function verdictBox(v, blocks){
+  if (!v || !v.level) return "";
+  var tone = { yes: "ok", partly: "warn", no: "bad" }[v.level] || "mute";
+  var word = { yes: "Usable", partly: "Partly usable", no: "Not usable yet" }[v.level];
+  var mark = { green: ["&#10003;", "ok"], yellow: ["!", "warn"], red: ["&#10007;", "bad"],
+               missing: ["&ndash;", "mute"] };
+  var lines = (v.checks || []).map(function(c){
+    var m = mark[c.state] || mark.missing;
+    var row = (blocks || []).filter(function(b){ return b.name === c.block && !b.missing; })[0];
+    var act = row ? ' class="click" data-act="' + regAction(function(){
+      S.sel.block = row.name; S.sel.blockCell = row.cell_key; forget("curve:"); syncUrl(); render(); })
+      + '" title="show the chart"' : "";
+    return '<div' + act + ' style="display:flex;gap:10px;padding:6px 0;border-top:1px solid var(--line2)">'
+      + '<span class="badge b-' + m[1] + '" style="min-width:22px;justify-content:center;align-self:flex-start">'
+      + m[0] + "</span><div style=\"min-width:0\"><b>" + esc(c.name) + "</b>"
+      + (c.required ? "" : ' <span class="hint">(optional)</span>')
+      + '<div style="line-height:1.45">' + esc(c.result) + "</div>"
+      + '<div class="hint" style="line-height:1.4">' + esc(c.gives) + "</div></div></div>";
+  }).join("");
+  return '<div class="callout" style="margin-top:4px;padding:12px 14px">'
+    + '<div style="font-size:17px;font-weight:700;margin-bottom:4px">'
+    + '<span class="badge b-' + tone + '" style="font-size:13px;margin-right:8px">' + word + "</span></div>"
+    + '<div style="line-height:1.5;margin-bottom:8px">' + esc(v.text) + "</div>" + lines + "</div>";
 }
 /* the server's note starts "off by default: ..."; beside the badge that says so, drop it */
 function offText(note){ return String(note || "").replace(/^off by default: /, ""); }
@@ -3478,9 +3506,7 @@ function curveBlock(row){
          + "</b>: " + esc(c.why || "no curve to draw for this block") + "</div>";
   }
   /* what the comparison says, in words, above the charts (the DC block: worst gap in mV) */
-  var says = (c.says || []).length ? '<div class="callout" style="margin-top:12px;line-height:1.55">'
-    + c.says.map(function(t){ return "<div>" + esc(t) + "</div>"; }).join("") + "</div>" : "";
-  return says + [c].concat(c.extra || []).map(oneCurve).join("");
+  return [c].concat(c.extra || []).map(oneCurve).join("");
 }
 function oneCurve(c){
   var ctx = regCtx({ curve: c });
