@@ -3464,8 +3464,10 @@ function curveBlock(row){
   }
   var cell = row.cell_key || S.sel.cell || "";
   var key = "curve:" + S.sel.port + cell + block;
+  if (block === "dc") key += "@" + (S.sel.temp || "");
   var c = need(key, "/api/p/" + P() + "/model/curve?port=" + encodeURIComponent(S.sel.port)
-    + "&cell=" + encodeURIComponent(cell) + "&block=" + encodeURIComponent(block), "model");
+    + "&cell=" + encodeURIComponent(cell) + "&block=" + encodeURIComponent(block)
+    + (block === "dc" ? "&temp=" + encodeURIComponent(S.sel.temp || "") : ""), "model");
   if (S.errs.model && c === undefined && S.errs.model.key === key){
     return '<div style="margin-top:12px">' + errBlock("model") + "</div>";
   }
@@ -3475,6 +3477,12 @@ function curveBlock(row){
     return '<div class="callout" style="margin-top:12px">' + ICON.warn + " <b>" + esc(block)
          + "</b>: " + esc(c.why || "no curve to draw for this block") + "</div>";
   }
+  /* what the comparison says, in words, above the charts (the DC block: worst gap in mV) */
+  var says = (c.says || []).length ? '<div class="callout" style="margin-top:12px;line-height:1.55">'
+    + c.says.map(function(t){ return "<div>" + esc(t) + "</div>"; }).join("") + "</div>" : "";
+  return says + [c].concat(c.extra || []).map(oneCurve).join("");
+}
+function oneCurve(c){
   var ctx = regCtx({ curve: c });
   var head = '<div class="rowflex" style="margin-top:14px;justify-content:space-between">'
     + '<b style="min-width:0;overflow-wrap:anywhere">' + esc(c.label) + " &middot; " + esc(c.unit) + "</b>"
@@ -3487,8 +3495,7 @@ function curveBlock(row){
     var rows = "";
     for (var i = 0; i < n; i += step){
       var g = c.gt.mag[i], m = c.model.mag[i];
-      rows += "<tr><td class=\"mono\">"
-            + (c.x_log === false ? num(c.x[i], 1) : eng(c.x[i], "Hz")) + '</td><td class="num">'
+      rows += "<tr><td class=\"mono\">" + xText(c, c.x[i]) + '</td><td class="num">'
             + (g === null ? "-" : g.toPrecision(4)) + '</td><td class="num">'
             + (m === null ? "-" : m.toPrecision(4)) + '</td><td class="num">' + curveDelta(c, g, m) + "</td></tr>";
     }
@@ -3501,10 +3508,15 @@ function curveBlock(row){
   return head + '<div class="rc" data-chart="' + ctx + '"' + rc("chart", "chart " + c.label, ctx)
      + ' style="position:relative;margin-top:8px">' + chartSvg(c) + "</div>"
     + '<div class="legend" style="margin-top:8px">'
-    + '<span><span class="sw" style="background:var(--gt)"></span>ground truth (transistor PMU)</span>'
+    + '<span><span class="sw" style="background:var(--gt)"></span>simulation (your transistor circuit)</span>'
     + '<span><span class="sw" style="background:var(--acc)"></span>model (.va)</span>'
     + '<span class="hint">' + c.points + " points, the same ones on both sides"
     + (c.source ? " &middot; " + esc(c.source) : "") + " &middot; hover for values</span></div>";
+}
+/* an x value in its own unit: Hz on a log axis, degrees C or amps on a linear one */
+function xText(c, x){
+  var u = c.x_unit || (c.x_log === false ? "C" : "Hz");
+  return u === "C" ? num(x, 1) + " C" : eng(x, u);
 }
 /* Model minus measurement at one point: dB for a spectrum, the plain difference in the curve's
    own unit for a temperature law (a few mV on 0.8 V is not a dB quantity). */
@@ -3579,7 +3591,7 @@ function chartSvg(c){
   } else {
     for (var k2 = 0; k2 <= 5; k2++){
       var v2 = fx0 + (fx1 - fx0) * k2 / 5;
-      ticks.push([v2, num(v2, 0)]);
+      ticks.push([v2, c.x_unit && c.x_unit !== "C" ? eng(v2, "") : num(v2, 0)]);
     }
   }
   /* A label centred on a tick at the right edge ran past the viewBox ("10 G" drawn as "10 (").
@@ -3674,7 +3686,7 @@ function hoverChart(node){
     var yu = c.y_db ? " dB" : "";
     box.style.display = "block";
     box.style.left = Math.min(Math.max(8, e.clientX - r.left + 10), r.width - 230) + "px";
-    box.textContent = (lg ? eng(c.x[i], "Hz") : num(c.x[i], 1) + " C")
+    box.textContent = xText(c, c.x[i])
       + "   GT " + (g === null ? "-" : g.toPrecision(4) + yu)
       + "   model " + (m === null ? "-" : m.toPrecision(4) + yu) + "   " + db;
     var xv = X0 + (X1 - X0) * ((lg ? Math.log10(c.x[i]) : c.x[i]) - f0) / (f1 - f0);

@@ -3647,7 +3647,8 @@ class Api:
                 "verify_stale": bool(stale),
                 "why": "" if blocks else "no fitted block for this port at this cell"}
 
-    def model_curve(self, project: str, port: str, cell: str, block: str) -> dict:
+    def model_curve(self, project: str, port: str, cell: str, block: str,
+                    temp: str = "") -> dict:
         """The measurement and the model on the SAME points.
 
         The model side is the fitter's analytic `predict()`. No simulator is started here, ever:
@@ -3688,6 +3689,8 @@ class Api:
                        ["Retry the run behind it on the Run screen",
                         "Or accept it: the report and every .va header name it"],
                        str(pr.fit_path))
+        if port_type == "rail" and block == "dc":
+            return _dc_curves(pr, fit, port, bf, temp)
         obs = _observable_for(block, port_type)
         if obs is None:
             raise _err("the curve view does not draw %r." % block,
@@ -4930,6 +4933,118 @@ CURVE_AXES = {
 CURVE_UNITS = {obs: (u, lab) for (_pt, obs), (u, lab, _s) in CURVE_AXES.items()}
 
 
+def _mv(v) -> str:
+    return f"{float(v) * 1e3:.2f} mV"
+
+
+def _dc_curves(pr, fit, port: str, bf: dict, temp) -> dict:
+    """The rail DC block as the simulation and the delivered .va see it, on the same points.
+
+    The .va's DC output is ONE formula per corner (emit/va.py `_rail_block`):
+
+        V(I, T) = vout + Ra * i_typ + vout_tc * (T - tnom) - Ra * I
+
+    with `vout` / `vout_tc` from the DC cell nearest the typical load at the nominal temperature
+    and `Ra` the Zout block's DC resistance. So the load-regulation curve of the model is Ra's
+    straight line, and the temperature curve is vout_tc's -- both are drawn against the
+    simulation's own points, and the worst gap is said in millivolts.
+    """
+    import numpy as np
+    from .emit.va import _f, _pick_vset, blocks_by_port, normalize_fits, select_cell
+    from .fit import dc as fdc
+    der = pr.derived()
+    ds = pr.dataset()
+    cell = dict(bf.get("cell") or {})
+    corner, code = cell.get("process"), cell.get("vset")
+    temps = [float(t) for t in ((der.temps_c or {}).get("points") or [25.0])]
+    tnom = min(temps, key=lambda t: abs(t - 25.0))
+    i_typ = float(((der.rails or {}).get(port) or {}).get("i_typ_a") or 0.0)
+    fits = normalize_fits(_fit_blocks(fit))
+    chosen = select_cell(fits.get((port, "dc")) or [], corner, temp_c=tnom, load_a=i_typ,
+                         vset=code)
+    if not chosen or not chosen[1]:
+        raise _err(f"{port} has no fitted DC block at {corner}.",
+                   "The model's DC output is read from the DC cell nearest the typical load.",
+                   ["Re-run the fit"], "fit.json")
+    dcell, dpar = chosen
+    vout = float(_pick_vset(dpar, "vout", code, 0.0) or 0.0)
+    vtc = float(_pick_vset(dpar, "vout_tc", code, 0.0) or 0.0)
+    zb, _cells = blocks_by_port(fits, port, corner, temp_c=tnom, load_a=i_typ, vset=code)
+    ra = float(_f(zb.get("zout") or {}, "Ra", 0.0) or 0.0)
+    has_zout = bool(zb.get("zout"))
+
+    def model(i_a, t_c):
+        return vout + ra * i_typ + vtc * (t_c - tnom) - ra * i_a
+
+    t_sel = float(temp) if _isnum(temp) else tnom
+    load_c = cell.get("load_a", dcell.get("load_a"))
+    lcell = {"process": corner, "vset": code}
+    if load_c is not None:
+        lcell["load_a"] = float(load_c)
+    says, curves = [], []
+    base = {"port": port, "block": "dc", "complex": False, "y_log": False, "y_db": False,
+            "y_scale": "linear", "unit": "V", "score": None, "metric": ""}
+    # 1. output voltage against the current your circuit draws, at the selected temperature
+    try:
+        loads, sim = fdc._vout_vs_load(ds, port, dict(lcell), t_sel)
+        loads = np.asarray(loads, float)
+        sim = np.asarray([float(np.asarray(v).reshape(-1)[0]) for v in sim], float)
+        order = np.argsort(loads)
+        loads, sim = loads[order], sim[order]
+        md = np.asarray([model(i, t_sel) for i in loads], float)
+        gap = np.abs(md - sim)
+        k = int(np.argmax(gap))
+        curves.append(dict(base, label=f"{port} voltage vs the current your circuit draws",
+                           cell_label=f"{corner}, {_numstr(t_sel)} C, code {code}",
+                           x=_clean(loads), x_label="load current [A]", x_unit="A",
+                           x_log=False, gt=_split_complex(sim), model=_split_complex(md),
+                           points=int(loads.size), source=f"dc_load.{port}"))
+        says.append(f"Load: from {_eng(loads[0], 'A')} to {_eng(loads[-1], 'A')} at "
+                    f"{_numstr(t_sel)} C the model differs from the simulation by up to "
+                    f"{_mv(gap.max())} (worst at {_eng(loads[k], 'A')}).")
+        if not has_zout:
+            sag = float(sim.max() - sim.min())
+            says.append(f"The model line is FLAT: how much the rail sags with load ({_mv(sag)} "
+                        "over this range in the simulation) comes from the Zout block, and "
+                        f"{port} has no Zout fit yet. Until the Zout runs are done this rail is "
+                        "also left out of the delivered model.")
+    except Exception as exc:                                           # noqa: BLE001
+        says.append(f"No load sweep at {_numstr(t_sel)} C to compare against "
+                    f"({getattr(exc, 'reason', exc)}).")
+    # 2. output voltage against temperature, at the load of the row the user clicked
+    try:
+        notes: list = []
+        _v, _tc, T, V, src = fdc._temp_law(ds, port, dict(lcell), notes)
+        T, V = np.asarray(T, float), np.asarray(V, float)
+        order = np.argsort(T)
+        T, V = T[order], V[order]
+        i_at = float(load_c) if load_c is not None else i_typ
+        md = np.asarray([model(i_at, t) for t in T], float)
+        gap = np.abs(md - V)
+        k = int(np.argmax(gap))
+        if T.size >= 2:
+            curves.append(dict(base, label=f"{port} voltage vs temperature",
+                               cell_label=f"{corner}, load {_eng(i_at, 'A')}, code {code}",
+                               x=_clean(T), x_label="temperature [C]", x_unit="C", x_log=False,
+                               gt=_split_complex(V), model=_split_complex(md),
+                               points=int(T.size), source=src))
+        says.append(f"Temperature: at {_eng(i_at, 'A')}, over "
+                    + (f"{_numstr(T[0])} to {_numstr(T[-1])} C" if T.size > 1
+                       else f"the one temperature {_numstr(T[0])} C")
+                    + f" the model differs from the simulation by up to {_mv(gap.max())} "
+                    f"(worst at {_numstr(T[k])} C). The model uses one straight line, "
+                    f"{vtc * 1e6:+.1f} uV/C.")
+    except Exception as exc:                                           # noqa: BLE001
+        says.append(f"No temperature points to compare against ({getattr(exc, 'reason', exc)}).")
+    if not curves:
+        return dict(base, cell=_cell_key_of(cell), cell_label=_cell_label(cell), empty=True,
+                    why=" ".join(says) or "nothing measured to compare against", says=says,
+                    label=f"{port} DC", source=f"dc_load.{port}")
+    out = dict(curves[0])
+    out.update(cell=_cell_key_of(cell), says=says, extra=curves[1:])
+    return out
+
+
 def _observable_for(block: str, port_type: str):
     return CURVE_OBSERVABLE.get((port_type, block))
 
@@ -5495,7 +5610,7 @@ def _r_model_cell(api, h, a, q, b):
 @route("GET", r"/api/p/<project>/model/curve")
 def _r_model_curve(api, h, a, q, b):
     return api.model_curve(a["project"], _one(q, "port", ""), _one(q, "cell", ""),
-                           _one(q, "block", "zout"))
+                           _one(q, "block", "zout"), _one(q, "temp", ""))
 
 
 @route("POST", r"/api/p/<project>/verify")

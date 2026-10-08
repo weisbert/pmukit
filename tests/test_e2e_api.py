@@ -447,6 +447,14 @@ def test_17_the_curve_is_ground_truth_and_model_on_the_same_points(api):
             pairs = [m / g for g, m in zip(c["gt"]["mag"], c["model"]["mag"]) if g and m]
             pairs.sort()
             assert pairs and 0.1 < pairs[len(pairs) // 2] < 10, "GT and model on one scale"
+        if b["name"] == "dc":
+            # the rail DC block: the worst gap said in mV, voltage against load current, then
+            # voltage against temperature -- the .va's own formula on the simulation's points
+            assert c["says"] and any("mV" in t for t in c["says"]), c.get("says")
+            assert c["x_unit"] == "A" and c["x_log"] is False
+            for e in c.get("extra", []):
+                assert e["x_unit"] == "C"
+                assert len(e["x"]) == len(e["gt"]["mag"]) == len(e["model"]["mag"]) > 1
         drawn += 1
     assert drawn, "not one block of this cell could be drawn"
 
